@@ -1952,6 +1952,67 @@ class TestRecording(FakeGameCase):
         self.assertIn("can't join", job["item"].toolTip(2))
         self.assertFalse(os.path.exists(self.videos) and os.listdir(self.videos))
 
+    def record_failing(self, names, numbers=False):
+        """Records t-'s frags in demos, one video for all: the job, and the
+        commands the games were sent."""
+        sent, send = [], mohreplay.Game.send
+        window = self.window()
+        TestLibrary.indexed(self, window, names)
+        self.choose(window, killer="t-")
+        for name in names:
+            window.demo_items[name].setSelected(True)
+
+        def setup(dialog):
+            dialog.choices["kills"].setChecked(True)
+            dialog.join.setChecked(True)
+            dialog.numbers.setChecked(numbers)
+            dialog.pattern.setText("failing")
+        with mock.patch.object(mohreplay.Game, "send", lambda game, *commands: (sent.extend(commands),
+                                                                                send(game, *commands))):
+            self.record(window, setup, window.record_demos)
+            job, = self.done(window, timeout=60)
+        return job, sent
+
+    def test_clips_left_out(self):
+        """A clip that doesn't record is tried again in a new game, then
+        left out, and the video is made without it."""
+        # the game quits in the middle of the first try
+        self.add_demo("crashing", dict(DEMO, crashAt=7000, crashOnce=True))
+        # its map is missing
+        self.add_demo("unloadable", dict(DEMO, loadFails=True))
+        job, sent = self.record_failing(("first", "crashing", "unloadable"), numbers=True)
+        self.assertEqual(job["status"], "done", job["item"].toolTip(2))
+        self.assertEqual(job["item"].text(2), "Done, 1 clip left out")
+        self.assertEqual(job["item"].toolTip(2), "unloadable: The recorder didn't load unloadable. "
+                                                 "ERROR: Couldn't load maps/obj/missing.bsp")
+        self.assertEqual(len(self.video("failing.mp4")["joined"]), 2)
+        with open(os.path.join(self.videos, "failing.csv"), encoding="utf-8") as f:
+            self.assertEqual({row.split(",")[2] for row in f.read().splitlines()[1:]}, {"first", "crashing"})
+        # each tried twice
+        demos = [c for c in sent if c.startswith("demo ")]
+        self.assertEqual(sorted(set(demos)), ['demo "crashing"', 'demo "first"', 'demo "unloadable"'])
+        self.assertEqual((demos.count('demo "crashing"'), demos.count('demo "unloadable"')), (2, 2))
+
+    def test_clip_quitting_the_game(self):
+        """A clip the game quits in each time is left out, with its last
+        lines."""
+        self.add_demo("crashing", dict(DEMO, crashAt=7000))
+        job, _ = self.record_failing(("first", "crashing"))
+        self.assertEqual(job["item"].text(2), "Done, 1 clip left out")
+        tip = job["item"].toolTip(2)
+        self.assertTrue(tip.startswith("crashing: The recorder quit. Its last lines: "), tip)
+        self.assertTrue(tip.endswith(" / Received signal 11, exiting..."), tip)
+
+    def test_clips_left_out_in_a_row(self):
+        """Three clips in a row that don't record stop the video."""
+        for name in ("a", "b", "c"):
+            self.add_demo(name, dict(DEMO, loadFails=True))
+        job, _ = self.record_failing(("first", "a", "b", "c"))
+        self.assertEqual(job["status"], "failed")
+        self.assertTrue(job["item"].toolTip(2).startswith("3 clips in a row didn't record. The recorder didn't load"),
+                        job["item"].toolTip(2))
+        self.assertFalse(os.path.exists(self.videos) and os.listdir(self.videos))
+
     def test_player_in_several_demos(self):
         other = json.loads(json.dumps(DEMO))
         other["recorder"]["name"] = other["watched"][0]["name"] = "^2T-"

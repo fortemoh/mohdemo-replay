@@ -11,6 +11,7 @@ do is a console command, so it all works with key binds too.
 
 import argparse
 import bisect
+import collections
 import csv
 import errno
 import functools
@@ -1494,9 +1495,11 @@ def clip_rows(clips):
     start in the video and demo, and the time, fragger, victim and weapon of
     each of its frags, a row each (one without frags for a clip with none).
     The start in the video is the planned one, unknown after a demo not
-    indexed."""
+    indexed. The clips left out of it (skipped) aren't."""
     rows, video = [], 0
     for clip in clips:
+        if clip.get("skipped"):
+            continue
         spans = clip["spans"] or [(clip["start"], None)]
         frags = clip.get("frags") or [[] for _ in spans]
         for i, ((start, end), kills) in enumerate(zip(spans, frags)):
@@ -1808,8 +1811,13 @@ class RecordDialog(QDialog):
 class Recorder(QObject):
     """Records a job in a second game, offscreen, rendering the sound: its
     clips one after the other, loading their demos, then FFmpeg joins them
-    when there are several. on_progress(job, text) tells how it goes, and
-    on_done(job, error, video) when it's over."""
+    when there are several. A clip the game doesn't record, as its demo
+    doesn't load, an error stops it or the game quits, is tried again once
+    in a new game, then left out, its "skipped" telling why, unless
+    LEFT_OUT clips in a row are. on_progress(job, text) tells how it goes,
+    and on_done(job, error, video) when it's over."""
+
+    LEFT_OUT = 3
 
     def __init__(self, window, job, on_progress, on_done):
         super().__init__(window)
@@ -1820,6 +1828,9 @@ class Recorder(QObject):
         self.phase = "loading"
         self.error = ""
         self.clip = -1
+        self.retried = False  # this clip
+        self.left_out = 0  # clips in a row
+        self.last_lines = collections.deque(maxlen=3)  # of the game, for why it quit
         self.loaded = None  # the demo the recorder plays
         self.parts = []
         self.joiner = None
@@ -1833,6 +1844,7 @@ class Recorder(QObject):
     def start_game(self):
         settings = self.window.settings
         job = self.job
+        self.last_lines.clear()
         extra = ["+set", "s_loopback", "1" if job["sound"] else "0", "+set", "s_khz", "44",
                  "+set", "s_volume", "1", "+set", "cl_aviFrameRate", job["fps"],
                  "+set", "cl_aviFFmpeg", job["ffmpeg"], "+set", "cl_aviPipeFormat", job["options"],
@@ -1867,6 +1879,13 @@ class Recorder(QObject):
     def output(self, line):
         if line.startswith("ERROR:") or "Couldn't write" in line or "Couldn't run" in line:
             self.error = line.replace("^1", "")
+        if line.strip():
+            self.last_lines.append(line.strip())
+
+    def game_error(self):
+        """Whether the error is the game's, as a demo it can't play, not
+        FFmpeg's, which no clip would get past."""
+        return self.error.startswith("ERROR:")
 
     def part(self):
         """The name of the video of this clip."""
@@ -1908,14 +1927,16 @@ class Recorder(QObject):
         if self.phase == "loading":
             if state.get("demo") == self.loaded and state.get("time", 0) > 0 and not state.get("seeking"):
                 self.send_clip()
-            elif self.clock.elapsed() > 120000:
-                self.finish(f"The recorder didn't load {self.loaded}. {self.error}")
+            elif self.clock.elapsed() > 120000 or self.game_error():
+                self.clip_failed(f"The recorder didn't load {self.loaded}. {self.error}")
         elif self.phase == "starting":
             if state.get("recording"):
                 self.phase = "recording"
             elif made:
                 self.clip_done()  # over between two polls
-            elif self.clock.elapsed() > 180000 or self.error:
+            elif self.game_error() or self.clock.elapsed() > 180000 and not self.error:
+                self.clip_failed("The recording didn't start. " + self.error)
+            elif self.error:
                 self.finish("The recording didn't start. " + self.error)
         elif self.phase == "recording":
             text = "Recording " + self.how_far(state.get("time", 0))
@@ -1951,7 +1972,9 @@ class Recorder(QObject):
             except OSError:
                 pass
 
-        if self.error:
+        if self.game_error():
+            self.clip_failed("The recording stopped. " + self.error)
+        elif self.error:
             # FFmpeg quit midway: what it wrote isn't the whole video
             self.finish("The recording stopped. " + self.error)
         elif not os.path.isfile(self.made()) or os.path.getsize(self.made()) == 0:
@@ -1963,7 +1986,31 @@ class Recorder(QObject):
             self.finish("FFmpeg ran out of disk space while writing the clip.\n" + log_content[-1500:])
         else:
             self.parts.append(self.made())
+            self.retried, self.left_out = False, 0
             self.next_clip()
+
+    def clip_failed(self, why):
+        """The clip didn't record: once more in a new game, then without it."""
+        if self.retried:
+            self.left_out += 1
+            if self.left_out >= self.LEFT_OUT:
+                self.finish(f"{self.left_out} clips in a row didn't record. {why}")
+                return
+            self.job["clips"][self.clip]["skipped"] = why.strip()
+        self.game.stop()
+        for path in (self.made(), self.made() + ".log"):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        if not self.retried:
+            self.clip -= 1
+        self.retried = not self.retried
+        self.error = ""
+        self.phase = "restarting"
+        self.start_game()
+        self.loaded = None
+        self.next_clip()
 
     def join(self):
         self.phase = "joining"
@@ -2037,8 +2084,10 @@ class Recorder(QObject):
             self.on_done(self.job, "canceled", None)
 
     def exited(self):
+        if self.phase == "joining":
+            return  # the clips are made
         if self.phase != "done":
-            self.finish("The recorder quit. " + self.error)
+            self.clip_failed("The recorder quit. " + (self.error or "Its last lines: " + " / ".join(self.last_lines)))
 
 
 class Window(QMainWindow):
@@ -3067,7 +3116,11 @@ class Window(QMainWindow):
         if video:
             job["status"], job["output"] = "done", video
             item.setText(0, os.path.basename(video))
-            item.setText(2, "Done")
+            # the clips that didn't record, and why
+            skipped = [clip for clip in job["clips"] if clip.get("skipped")]
+            several = "s" if len(skipped) > 1 else ""
+            item.setText(2, f"Done, {len(skipped)} clip{several} left out" if skipped else "Done")
+            item.setToolTip(2, "\n".join(f"{clip['demo']}: {clip['skipped']}" for clip in skipped))
             item.setToolTip(0, video)
             self.statusBar().showMessage("Recorded " + video)
             if job.get("numbers"):

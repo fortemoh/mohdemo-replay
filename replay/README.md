@@ -89,7 +89,11 @@ than a part, as all of a long demo, is cut in it), the clip numbers going on
 from one part to the next, each with its list. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
 Linux and faster than real time, while you keep watching; FFmpeg joins the
-clips of a video without encoding them again. The Videos panel lists them,
+clips of a video without encoding them again. A clip the game doesn't
+record, as its demo's map isn't installed or the game quits in it, is tried
+again once in a new game, then left out, the video going on without it
+("Done, 1 clip left out", its tip which and why); three in a row stop the
+video. The Videos panel lists them,
 with how far the one recording is and how long it has left
 (Cancel, Open folder, double-click to watch one), and each lands in the
 folder chosen, named from a pattern (`{demo}`, the demo's file name,

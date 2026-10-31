@@ -4,7 +4,9 @@
 It takes the same command line, reads commands from its com_pipefile and
 writes demostate.json and demoindex.json like the game (cl_demoFiles 1).
 Demos are JSON files with a .dm3 extension holding the index the game would
-make (duration, kills, rounds…). Every command read is appended to
+make (duration, kills, rounds…), and maybe how it fails: loadFails, as if
+its map were missing, or crashAt, the time it quits at while recording
+(crashOnce: only the first time, as a file next to it then tells). Every command read is appended to
 main/commands.log in its home folder, and demovideo writes
 main/videos/<name>.mp4 holding what would have been recorded, as JSON,
 with what demoonly plays and demofilter keeps.
@@ -191,6 +193,11 @@ class FakeGame:
         except (OSError, ValueError):
             print(f"ERROR: Couldn't load demos/{name}.dm3", flush=True)
             return
+        if self.index.get("loadFails"):
+            print("ERROR: Couldn't load maps/obj/missing.bsp", flush=True)
+            self.finish_video()
+            self.state.update(demo="", time=0, duration=0)
+            return
         self.index["demo"] = name
         write_json(os.path.join(self.main, "demoindex.json"), self.index)
         self.finish_video()
@@ -206,6 +213,13 @@ class FakeGame:
         self.carry -= whole
         state["time"] = min(state["duration"], state["time"] + whole)
         video = self.video
+        crash = self.index.get("crashAt")
+        if video and crash is not None and state["time"] >= crash:
+            marker = os.path.join(self.main, "demos", state["demo"] + ".crashed")
+            if not (self.index.get("crashOnce") and os.path.exists(marker)):
+                open(marker, "w").close()
+                print("Received signal 11, exiting...", flush=True)
+                os._exit(1)
         if video:
             # demoonly's stretches are taken as 2 seconds in all
             end = video["end"] or (video["start"] + 2000 if video["only"] else None)
