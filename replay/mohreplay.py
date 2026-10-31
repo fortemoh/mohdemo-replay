@@ -2302,10 +2302,11 @@ class Window(QMainWindow):
         toolbar.addAction(videos_action)
         settings_action = toolbar.addAction(theme_icon("configure", QStyle.SP_FileDialogDetailedView), "Settings…")
         settings_action.triggered.connect(lambda: self.edit_settings())
+        # how many demos there are and how many are listed, or how far
+        # indexing them is
+        self.demo_count = QLabel()
+        self.statusBar().addPermanentWidget(self.demo_count)
         self.show_folder()
-
-        self.indexing = QLabel()
-        self.statusBar().addPermanentWidget(self.indexing)
 
         self.filter.setFocus()
 
@@ -2591,6 +2592,28 @@ class Window(QMainWindow):
                 item.setExpanded(True)
         self.demos.setColumnHidden(COL_PLAYER, not found_any)
         self.fit_columns(self.demos)
+        self.show_demo_count()
+
+    def show_demo_count(self):
+        progress = self.library.progress()
+        if progress:
+            self.demo_count.setText(f"Indexing demos: {progress[0]:,} of {progress[1]:,}")
+            self.demo_count.setToolTip("")
+            return
+        found = len(self.demo_items)
+        listed = sum(not item.isHidden() for item in self.demo_items.values())
+        summaries = [self.library.demos.get(name) for name in self.demo_items]
+        indexed = sum(summary is not None for summary in summaries)
+        short = sum(summary is not None and summary["duration"] < MIN_LENGTH for summary in summaries)
+        self.demo_count.setText(f"{found:,} demos" if listed == found else f"{listed:,} of {found:,} demos listed")
+        tip = [f"{found:,} demos in the folder, {indexed:,} of them indexed"]
+        if found > indexed:
+            tip.append(f"{found - indexed:,} couldn't be indexed")
+        if short:
+            tip.append(f"{short:,} shorter than {MIN_LENGTH // 60000} minutes aren't listed")
+        if found - short - listed > 0:
+            tip.append(f"{found - short - listed:,} left out by the search and the filters")
+        self.demo_count.setToolTip("; ".join(tip))
 
     def library_changed(self):
         # those who recorded the most first
@@ -2602,8 +2625,6 @@ class Window(QMainWindow):
         self.recorded_by.players = [name for name, _ in ranked]
         self.recorded_by.labels = {name: f"{name} ({count})" for name, count in ranked}
         self.fill_demos()
-        progress = self.library.progress()
-        self.indexing.setText(f"Indexing demos: {progress[0]} of {progress[1]}" if progress else "")
 
     def play_demo(self, name):
         self.pending_demo = name

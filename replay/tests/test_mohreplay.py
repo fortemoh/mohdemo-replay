@@ -1151,6 +1151,13 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["other"].text(mohreplay.COL_LENGTH), "6:01")
         self.assertEqual(window.demo_items["broken"].text(mohreplay.COL_LENGTH), "")
         self.assertIn("broken", window.library.failed)
+        # how many there are, and how many are listed
+        self.assertEqual(window.demo_count.text(), "3 demos")
+        self.assertEqual(window.demo_count.toolTip(), "3 demos in the folder, 2 of them indexed; 1 couldn't be indexed")
+        window.filter.setText("mohdm6")
+        self.assertEqual(window.demo_count.text(), "1 of 3 demos listed")
+        self.assertIn("2 left out by the search and the filters", window.demo_count.toolTip())
+        window.filter.clear()
         summary = window.library.demos["first"]
         self.assertEqual(summary["maps"], ["obj/obj_team1"])
         # the kills made while they're shown
@@ -1163,7 +1170,6 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_RECORDER), "t-")
         self.assertEqual(window.demo_items["broken"].text(mohreplay.COL_RECORDER), "")
         self.assertIn("6:01, realism", window.demo_items["other"].toolTip(mohreplay.COL_DEMO))
-        self.assertEqual(window.indexing.text(), "")
         cache = window.library.cache
         self.assertTrue(cache.startswith(os.path.join(self.tmp, "cache")))
         self.assertTrue(os.path.isfile(os.path.join(cache, "first.json")))

@@ -24,7 +24,9 @@ searches (`pstn v2, tommeh` finds pstN's demos on v2 and tommeh's demos):
 for a player, it shows their frags in each demo. For that, `mohdemoindex`, built next to the
 game, indexes the demos in the background the first time (about two minutes
 for 700, and again once after it changes), and the indexes are kept in
-`~/.cache/mohdemo-replay`.
+`~/.cache/mohdemo-replay`. The bottom right tells how far indexing is, then
+how many demos there are and how many are listed ("53 of 5,139 demos
+listed"), its tip why the others aren't.
 
 Fragger, Victim and Weapon, under the filter, choose the frags, those of
 the demos listed and of the demo playing, each on its own or together:
