@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -430,6 +431,22 @@ class TestFunctions(unittest.TestCase):
             del watch["followed"]
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(demo), specced)[0], 0)
 
+    def test_player_models(self):
+        """The player models of the game files, in pk3s or on their own,
+        but the first-person arms."""
+        game = tempfile.mkdtemp(prefix="mohreplay-test-")
+        self.addCleanup(shutil.rmtree, game, True)
+        os.makedirs(os.path.join(game, "main", "models", "player"))
+        with zipfile.ZipFile(os.path.join(game, "main", "pak0.pk3"), "w") as pk3:
+            for name in ("models/player/German_Winter_1.tik", "models/player/german_winter_1_fps.tik",
+                         "models/player/allied_airborne.tik", "models/weapons/kar98.tik"):
+                pk3.writestr(name, "")
+        with open(os.path.join(game, "main", "broken.pk3"), "w") as f:
+            f.write("not a zip")
+        open(os.path.join(game, "main", "models", "player", "my_skin.tik"), "w").close()
+        self.assertEqual(mohreplay.player_models(game), ["allied_airborne", "german_winter_1", "my_skin"])
+        self.assertEqual(mohreplay.player_models(os.path.join(game, "nothing")), [])
+
     def test_weapons(self):
         self.assertEqual([mohreplay.weapon_of(kill) for kill in DEMO["kills"]],
                          ["rifle", "rifle", "other", "mg", "other", "rifle"])
@@ -781,6 +798,36 @@ class TestWindow(FakeGameCase):
         self.assertEqual(self.settings.value("viewmodel"), "1")
         # kept
         self.assertFalse(self.window().forcemodel_action.isChecked())
+
+    def menu_texts(self, menu):
+        return [(a.text(), a.isChecked()) for a in menu.actions()]
+
+    def test_followed_models(self):
+        """The models of the player followed, when allies and axis, from
+        the game files, set in the game at once and kept."""
+        os.makedirs(os.path.join(self.game_dir, "main"))
+        with zipfile.ZipFile(os.path.join(self.game_dir, "main", "pak0.pk3"), "w") as pk3:
+            pk3.writestr("models/player/allied_pilot.tik", "")
+            pk3.writestr("models/player/german_scientist.tik", "")
+        window = self.window()
+        self.playing(window)
+        window.fill_followed_menu()
+        allies, axis = window.followed_button.menu().actions()
+        self.assertEqual((allies.text(), axis.text()), ("Allies", "Axis"))
+        self.assertEqual(self.menu_texts(axis.menu()), [("As in the demo", True), ("allied_pilot", False),
+                                                        ("german_scientist", False)])
+        axis.menu().actions()[1].trigger()
+        self.assertEqual(self.settings.value("followed_axis"), "allied_pilot")
+        self.assertTrue(wait_until(lambda: 'set cg_followedGermanModel "allied_pilot"' in self.commands(window.game)))
+        self.assertIn('set cg_followedModel ""', self.commands(window.game))
+        self.assertIn("now theirs / allied_pilot", window.followed_button.toolTip())
+        # kept, one of the game files no more still shown
+        self.settings.setValue("followed_allies", "my_own")
+        window.fill_followed_menu()
+        allies = window.followed_button.menu().actions()[0]
+        self.assertEqual(self.menu_texts(allies.menu())[-1], ("my_own", True))
+        self.assertEqual(mohreplay.video_summary(self.settings).split(", ")[-1],
+                         "the player followed as my_own / allied_pilot")
 
     def test_choose_folder(self):
         window = self.window()
@@ -2217,6 +2264,22 @@ class TestRecording(FakeGameCase):
 
     def labels(self, window):
         return [window.queue.topLevelItem(i).text(0) for i in range(window.queue.topLevelItemCount())]
+
+    def test_followed_models_recorded(self):
+        """A video has the models of the player followed chosen when it was
+        queued."""
+        self.settings.setValue("followed_axis", "german_scientist")
+        window = self.window()
+        self.playing(window)
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
+            self.stretch(window, "1:00", "a")
+            self.stretch(window, "1:10", "b")
+            window.choose_followed("followed_axis", "")
+            self.done(window, 2)
+        for name in ("a.mp4", "b.mp4"):
+            cvars = self.video(name)["cvars"]
+            self.assertEqual(cvars["cg_followedGermanModel"], "german_scientist")
+            self.assertNotIn("cg_followedModel", cvars)
 
     def test_pause_and_move(self):
         """A video paused waits till it's resumed; the order of the list is

@@ -67,6 +67,11 @@ Settings also sets how long
 each frag plays before and after it (4 and 2 seconds), and Viewmodel and
 Force models, in the toolbar, show the gun in the player's hands and show
 everyone as an airborne soldier or a winter German, whatever they wore.
+Followed player, next to them, chooses the model of the player the demo
+spectates, and only them (the camera that follows them is behind them),
+one when they're Allies and one when they're Axis, from the player models of
+the game files, or as in the demo; videos have them too
+(`cg_followedModel`, `cg_followedGermanModel`).
 The time slider marks the frags listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.

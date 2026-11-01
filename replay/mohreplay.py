@@ -22,6 +22,7 @@ import os
 import posixpath
 import shutil
 import sys
+import zipfile
 import tempfile
 from time import monotonic
 
@@ -29,7 +30,7 @@ from PySide6.QtCore import (
     QDateTime, QElapsedTimer, QEvent, QFileSystemWatcher, QObject, QProcess, QProcessEnvironment,
     QSettings, QStandardPaths, Qt, QTimer, QUrl, Signal,
 )
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
@@ -153,6 +154,39 @@ def find_ffmpeg():
         if path and os.path.isfile(path):
             return path
     return "ffmpeg"
+
+
+def player_models(game):
+    """The player models in the game files, by name in lower case as the
+    game takes any, sorted: the models/player/*.tik in its main folder's
+    pk3s or on their own, but the first-person arms (_fps)."""
+    main = os.path.join(game or "", "main")
+    names = []
+    try:
+        files = sorted(os.listdir(main))
+    except OSError:
+        return []
+    for file in files:
+        if file.lower().endswith(".pk3"):
+            try:
+                with zipfile.ZipFile(os.path.join(main, file)) as pk3:
+                    names += pk3.namelist()
+            except (OSError, zipfile.BadZipFile):
+                pass
+    for root, _, found in os.walk(os.path.join(main, "models", "player")):
+        names += ["models/player/" + name for name in found]
+    models = set()
+    for name in names:
+        folder, _, file = name.lower().rpartition("/")
+        if folder == "models/player" and file.endswith(".tik") and not file.endswith("_fps.tik"):
+            models.add(file[:-4])
+    return sorted(models)
+
+
+def followed_models(settings):
+    """The models chosen for the player followed when they're allies, and
+    axis: "" for theirs."""
+    return [settings.value("followed_allies", "") or "", settings.value("followed_axis", "") or ""]
 
 
 def without_colors(name):
@@ -758,8 +792,10 @@ class Game:
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
     def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None,
-              kill_before=None, kill_after=None, videos=None):
-        """videos: the folder its videos go to, instead of its home."""
+              kill_before=None, kill_after=None, videos=None, followed=("", "")):
+        """videos: the folder its videos go to, instead of its home; followed:
+        the models of the player followed when allies and axis, "" for
+        theirs."""
         self.cleanup()
         self.game = game
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
@@ -794,6 +830,8 @@ class Game:
                      "+set", "cg_forceModel", fm,
                      "+set", "dm_playermodel", "allied_airborne",
                      "+set", "dm_playergermanmodel", "german_winter_1",
+                     *(arg for cvar, model in zip(("cg_followedModel", "cg_followedGermanModel"), followed) if model
+                       for arg in ("+set", cvar, model)),
                      "+set", "cl_demoKillBefore", kb,
                      "+set", "cl_demoKillAfter", ka,
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "0",
@@ -1205,6 +1243,7 @@ def video_settings(settings):
             "sound": sound, "blur": settings.value("rec/blur", "false") == "true",
             "viewmodel": "1" if is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))) else "0",
             "forcemodel": "1" if is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))) else "0",
+            "followed": followed_models(settings),
             "ffmpeg": settings.value("rec/ffmpeg", "").strip() or find_ffmpeg()}
 
 
@@ -1223,6 +1262,9 @@ def video_summary(settings):
         parts.append("no viewmodel")
     if is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))):
         parts.append("models forced")
+    allies, axis = followed_models(settings)
+    if allies or axis:
+        parts.append(f"the player followed as {allies or 'theirs'} / {axis or 'theirs'}")
     return ", ".join(parts)
 
 
@@ -1863,7 +1905,8 @@ class Recorder(QObject):
         self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
                         job["width"], job["height"], extra, driver,
                         viewmodel=viewmodel, forcemodel=forcemodel,
-                        kill_before=kill_before, kill_after=kill_after, videos=self.parts_dir)
+                        kill_before=kill_before, kill_after=kill_after, videos=self.parts_dir,
+                        followed=job.get("followed", followed_models(settings)))
 
     def start(self):
         job = self.job
@@ -2404,6 +2447,13 @@ class Window(QMainWindow):
         self.forcemodel_action.setCheckable(True)
         self.forcemodel_action.setChecked(is_on(settings.value("forcemodel", "1")))
         self.forcemodel_action.toggled.connect(self.toggle_forcemodel)
+        self.followed_button = QToolButton()
+        self.followed_button.setText("Followed player")
+        self.followed_button.setPopupMode(QToolButton.InstantPopup)
+        self.followed_button.setMenu(QMenu(self.followed_button))
+        self.followed_button.menu().aboutToShow.connect(self.fill_followed_menu)
+        self.show_followed()
+        toolbar.addWidget(self.followed_button)
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         toolbar.addWidget(spacer)
@@ -2501,6 +2551,36 @@ class Window(QMainWindow):
             self.game.send(f"set cg_forceModel {val}")
         self.statusBar().showMessage(f"Force models: {'ON' if checked else 'OFF'} (Airborne / Winter 1)", 2000)
 
+    def fill_followed_menu(self):
+        """The models of the game files for the player followed, allies and
+        axis, the one chosen checked."""
+        menu = self.followed_button.menu()
+        menu.clear()
+        models = player_models(self.settings.value("game", ""))
+        for team, (key, chosen) in zip(("Allies", "Axis"), zip(("followed_allies", "followed_axis"),
+                                                               followed_models(self.settings))):
+            sub = menu.addMenu(team)
+            group = QActionGroup(sub)
+            for model in ["", *models, *([chosen] if chosen and chosen not in models else [])]:
+                action = sub.addAction(model or "As in the demo")
+                action.setCheckable(True)
+                action.setChecked(model == chosen)
+                group.addAction(action)
+                action.triggered.connect(lambda _=False, key=key, model=model: self.choose_followed(key, model))
+
+    def choose_followed(self, key, model):
+        self.settings.setValue(key, model)
+        allies, axis = followed_models(self.settings)
+        if self.game.running():
+            self.game.send(f'set cg_followedModel "{allies}"', f'set cg_followedGermanModel "{axis}"')
+        self.show_followed()
+        self.statusBar().showMessage(f"The player followed: {allies or 'theirs'} / {axis or 'theirs'}", 3000)
+
+    def show_followed(self):
+        allies, axis = followed_models(self.settings)
+        self.followed_button.setToolTip("The models of the player you spectate, and only them, when they're allies "
+                                        f"and axis, in videos too: now {allies or 'theirs'} / {axis or 'theirs'}")
+
     def get_kill_times(self):
         """Pre-kill and post-kill times in msec from settings for playback."""
         try:
@@ -2552,7 +2632,8 @@ class Window(QMainWindow):
         kb = self.settings.value("kill_before", "4.0")
         ka = self.settings.value("kill_after", "2.0")
         self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height,
-                        viewmodel=vm, forcemodel=fm, kill_before=kb, kill_after=ka)
+                        viewmodel=vm, forcemodel=fm, kill_before=kb, kill_after=ka,
+                        followed=followed_models(self.settings))
         self.statusBar().showMessage("Starting the game…")
         if self.pending_demo:
             self.game.send("demo " + quoted(self.pending_demo))
