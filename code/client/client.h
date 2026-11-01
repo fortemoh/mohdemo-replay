@@ -31,6 +31,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "snd_public.h"
 #include "../cgame/cg_public.h"
 #include "../fgame/bg_public.h"
+// Added in OPM
+#include "cl_censor.h"
 
 #ifdef USE_CURL
 #include "cl_curl.h"

@@ -2,6 +2,7 @@ enable_testing()
 
 include(tests/lz77)
 include(tests/demoindex)
+include(tests/censor)
 include(tests/replay)
 include(tests/serverlist_scheduler)
 include(tests/pm_cmdscale)

@@ -322,6 +322,12 @@ void CL_ConfigstringModified(int index, char* s) {
 		Com_Error( ERR_DROP, "configstring > MAX_CONFIGSTRINGS" );
 	}
 
+	// Added in OPM
+	//  The words of cl_censor starred out of the players' names
+	if ( index >= CS_PLAYERS && index < CS_PLAYERS + MAX_CLIENTS ) {
+		CL_CensorPlayerName( s );
+	}
+
 	old = cl.gameState.stringData + cl.gameState.stringOffsets[ index ];
 	if ( !strcmp( old, s ) ) {
 		return;		// unchanged
@@ -536,6 +542,14 @@ qboolean CL_GetServerCommand( int serverCommandNumber, qboolean differentServer 
 	// Added in OPM
 	if ( clc.demoplaying && CL_DemoHidesCommand( serverCommandNumber, cmd ) ) {
 		return qfalse;
+	}
+
+	// Added in OPM
+	//  The words of cl_censor starred out of the messages
+	if ( ( !strcmp( cmd, "print" ) || !strcmp( cmd, "hudprint" ) || !strcmp( cmd, "printdeathmsg" ) )
+		&& CL_Censor( s + strlen( cmd ) ) ) {
+		Cmd_TokenizeString( s );
+		cmd = Cmd_Argv( 0 );
 	}
 
 	// Readded in OPM (from ioquake)

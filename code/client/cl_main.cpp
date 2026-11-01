@@ -68,6 +68,7 @@ cvar_t	*cl_demoKillBefore;
 cvar_t	*cl_demoKillAfter;
 cvar_t	*cl_demoMultiKill;
 cvar_t	*cl_demoClipNumbers;
+cvar_t	*cl_censor;
 cvar_t	*cl_csAppend;
 
 cvar_t	*cl_shownet;
@@ -5022,6 +5023,9 @@ void CL_Init( void ) {
 	//  The number drawn on the first clip demoonly plays, the next ones
 	//  counting on, or on all of the demo without demoonly; 0 for none
 	cl_demoClipNumbers = Cvar_Get ("cl_demoClipNumbers", "0", CVAR_TEMP );
+	//  Words starred out of the players' names and the messages, separated
+	//  by spaces or commas, however they're spelled (cl_censor.cpp)
+	cl_censor = Cvar_Get ("cl_censor", "", CVAR_TEMP );
 	// changed configstrings appended to the gamestate (CL_ConfigstringModified)
 	cl_csAppend = Cvar_Get ("cl_csAppend", "1", 0 );
 	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP );

@@ -652,6 +652,14 @@ void CL_ParseGamestate( msg_t *msg ) {
 	clc.checksumFeed = MSG_ReadLong( msg );
 	cls.serverFrameTime = MSG_ReadServerFrameTime(msg, &cl.gameState);
 
+	// Added in OPM
+	//  The words of cl_censor starred out of the players' names
+	for ( i = CS_PLAYERS; i < CS_PLAYERS + MAX_CLIENTS; i++ ) {
+		if ( cl.gameState.stringOffsets[ i ] ) {
+			CL_CensorPlayerName( cl.gameState.stringData + cl.gameState.stringOffsets[ i ] );
+		}
+	}
+
 	// parse serverId and other cvars
 	CL_SystemInfoChanged();
 
