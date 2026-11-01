@@ -2300,6 +2300,39 @@ class TestRecording(FakeGameCase):
         self.assertEqual(self.video("on.mp4")["cvars"]["cl_censor"], "gay jew")
         self.assertNotIn("cl_censor", self.video("off.mp4")["cvars"])
 
+    def test_queue_kept_by_one_window(self):
+        """The first window open keeps the videos to record; another one
+        doesn't write over its list, and asks before closing with videos
+        left, which aren't kept."""
+        first = self.window()
+        self.playing(first)
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "0.01"}):
+            self.stretch(first, "1:00", "first")
+            second = self.window()
+            self.assertFalse(second.keeps_queue)
+            self.assertIn("Another window keeps", second.statusBar().currentMessage())
+            self.playing(second)
+            self.stretch(second, "2:00", "second")
+            with open(first.queue_file()) as f:
+                self.assertEqual([j["output"] for j in json.load(f)], [os.path.join(self.videos, "first.mp4")])
+            asked = []
+            with mock.patch.object(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.No):
+                second.close()
+            self.assertEqual(asked, ["1 video is still to record, and won't be kept: another window keeps the "
+                                     "videos to record. Quit anyway?"])
+            self.assertTrue(second.recorder.game.running())
+            recorder = second.recorder
+            second.close()
+            self.assertFalse(recorder.game.running())
+            first.close()
+        with open(first.queue_file()) as f:
+            self.assertEqual([(j["output"], j["status"]) for j in json.load(f)],
+                             [(os.path.join(self.videos, "first.mp4"), "waiting")])
+        # once it's closed, the next window keeps them
+        third = self.window()
+        self.assertTrue(third.keeps_queue)
+        self.assertEqual(self.labels(third), ["first.mp4"])
+
     def test_followed_models_recorded(self):
         """A video has the models of the player followed chosen when it was
         queued."""

@@ -28,7 +28,7 @@ import tempfile
 from time import monotonic
 
 from PySide6.QtCore import (
-    QDateTime, QElapsedTimer, QEvent, QFileSystemWatcher, QObject, QProcess, QProcessEnvironment,
+    QDateTime, QElapsedTimer, QEvent, QFileSystemWatcher, QLockFile, QObject, QProcess, QProcessEnvironment,
     QSettings, QStandardPaths, Qt, QTimer, QUrl, Signal,
 )
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPen, QPixmap
@@ -2518,9 +2518,19 @@ class Window(QMainWindow):
         self.library_opener = QTimer(self, singleShot=True, interval=0, timeout=lambda: self.library.open(
             settings.value("demos", ""), settings.value("exe", "")))
         self.library_opener.start()
-        # the videos left when it last closed, which go on
+        # the videos left when it last closed, which go on; only the first
+        # window open keeps them, as another would write over its list
         self.closing = False
-        self.load_queue()
+        os.makedirs(os.path.dirname(self.queue_file()), exist_ok=True)
+        self.queue_lock = QLockFile(self.queue_file() + ".lock")
+        # left by a window that crashed: its process is gone
+        self.queue_lock.setStaleLockTime(0)
+        self.keeps_queue = self.queue_lock.tryLock(0)
+        if self.keeps_queue:
+            self.load_queue()
+        else:
+            self.statusBar().showMessage("Another window keeps the videos to record: this one's aren't kept when "
+                                         "it closes")
 
     def make_list(self, columns, fit=True):
         """fit: columns fit their contents, which costs a look at every row
@@ -3316,6 +3326,8 @@ class Window(QMainWindow):
         return os.path.join(os.path.dirname(self.settings.fileName()), "queue.json")
 
     def save_queue(self):
+        if not self.keeps_queue:
+            return
         path = self.queue_file()
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -3442,16 +3454,31 @@ class Window(QMainWindow):
 
     def closeEvent(self, event):
         """The videos left are kept, the one recording with its clips made,
-        to go on when it opens again."""
+        to go on when it opens again; not when another window keeps them,
+        which asks first."""
+        if self.closing:
+            super().closeEvent(event)
+            return
+        left = sum(1 for j in self.jobs if j["status"] in ("waiting", "recording", "paused"))
+        if not self.keeps_queue and left and QMessageBox.question(
+                self, "Quit", f"{left} video{'s are' if left > 1 else ' is'} still to record, and won't be kept: "
+                "another window keeps the videos to record. Quit anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            event.ignore()
+            return
         self.closing = True
         self.poller.stop()
         self.library_opener.stop()
         self.library.stop()
-        if self.recorder:
+        if self.recorder and self.keeps_queue:
             job = self.recorder.job
             self.recorder.pause()
             job["status"] = "waiting"
+        elif self.recorder:
+            self.recorder.cancel()
         self.save_queue()
+        if self.keeps_queue:
+            self.queue_lock.unlock()
         self.game.stop()
         super().closeEvent(event)
 
