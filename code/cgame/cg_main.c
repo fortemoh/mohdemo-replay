@@ -124,6 +124,8 @@ cvar_t *cg_fov;
 cvar_t *cg_cheats;
 cvar_t *cg_followplayer;
 cvar_t *cg_followcamera;
+cvar_t *cg_followedModel;
+cvar_t *cg_followedGermanModel;
 cvar_t *cg_precache;
 cvar_t *cg_csAppend;
 cvar_t *cg_tauntsounds;
@@ -229,6 +231,9 @@ void CG_RegisterCvars(void)
     cg_cheats = cgi.Cvar_Get("cheats", "0", CVAR_USERINFO | CVAR_SERVERINFO | CVAR_LATCH);
     cg_followplayer = cgi.Cvar_Get("cg_followplayer", "", CVAR_ARCHIVE);
     cg_followcamera = cgi.Cvar_Get("cg_followcamera", "1", CVAR_ARCHIVE);
+    // the models of the player followed, by their team, theirs when empty
+    cg_followedModel = cgi.Cvar_Get("cg_followedModel", "", 0);
+    cg_followedGermanModel = cgi.Cvar_Get("cg_followedGermanModel", "", 0);
     cg_precache = cgi.Cvar_Get("cg_precache", "7", CVAR_ARCHIVE);
     // changed configstrings copied one by one (CG_ConfigStringModified)
     cg_csAppend = cgi.Cvar_Get("cg_csAppend", "1", 0);

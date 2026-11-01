@@ -534,6 +534,8 @@ extern "C" {
     extern cvar_t *cg_cheats;
     extern cvar_t *cg_followplayer;
     extern cvar_t *cg_followcamera;
+    extern cvar_t *cg_followedModel;
+    extern cvar_t *cg_followedGermanModel;
     extern cvar_t *cg_precache;
     extern cvar_t *cg_tauntsounds;
     extern cvar_t *cg_csAppend;

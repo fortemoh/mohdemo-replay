@@ -1007,6 +1007,40 @@ void CG_ProcessPlayerModel()
 
 /*
 ===============
+CG_FollowedPlayerModel
+
+Added in OPM
+  The model cg_followedModel or cg_followedGermanModel gives the player the
+  camera follows, by their team, 0 to keep theirs
+===============
+*/
+static qhandle_t CG_FollowedPlayerModel(const entityState_t *s1)
+{
+    static char   missing[MAX_QPATH];
+    const cvar_t *model;
+    qhandle_t     handle;
+
+    if (!(cg.snap->ps.pm_flags & PMF_CAMERA_VIEW) || s1->number != cg.snap->ps.stats[STAT_INFOCLIENT]) {
+        return 0;
+    }
+
+    model = (s1->eFlags & EF_AXIS) ? cg_followedGermanModel : cg_followedModel;
+    if (!model->string[0] || !Q_stricmp(model->string, missing)) {
+        return 0;
+    }
+
+    handle = cgi.R_RegisterModel(CG_GetPlayerModelTiki(model->string));
+    if (!handle || !cgi.R_Model_GetHandle(handle)) {
+        // said once
+        cgi.Printf("No player model %s for the player followed\n", model->string);
+        Q_strncpyz(missing, model->string, sizeof(missing));
+        return 0;
+    }
+    return handle;
+}
+
+/*
+===============
 CG_ModelAnim
 ===============
 */
@@ -1021,6 +1055,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     int            iAnimFlags;
     qboolean       bThirdPerson = qfalse;
     qboolean       bJumped;
+    qhandle_t      hFollowed;
 
     s1 = &cent->currentState;
 
@@ -1187,6 +1222,15 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
                 model.hModel = cgi.R_RegisterModel(CG_GetPlayerModelTiki(dm_playermodel->resetString));
             }
             model.tiki      = cgi.R_Model_GetHandle(model.hModel);
+            model.hOldModel = cgs.model_draw[s1->modelindex];
+        }
+
+        // Added in OPM
+        //  The player followed in the model chosen for them
+        hFollowed = CG_FollowedPlayerModel(s1);
+        if (hFollowed) {
+            model.hModel    = hFollowed;
+            model.tiki      = cgi.R_Model_GetHandle(hFollowed);
             model.hOldModel = cgs.model_draw[s1->modelindex];
         }
     } else {
