@@ -1952,9 +1952,9 @@ class TestRecording(FakeGameCase):
         self.assertIn("can't join", job["item"].toolTip(2))
         self.assertFalse(os.path.exists(self.videos) and os.listdir(self.videos))
 
-    def record_failing(self, names, numbers=False):
+    def record_failing(self, names, numbers=False, wait=True):
         """Records t-'s frags in demos, one video for all: the job, and the
-        commands the games were sent."""
+        commands the games were sent, till it's done if wait."""
         sent, send = [], mohreplay.Game.send
         window = self.window()
         TestLibrary.indexed(self, window, names)
@@ -1967,10 +1967,14 @@ class TestRecording(FakeGameCase):
             dialog.join.setChecked(True)
             dialog.numbers.setChecked(numbers)
             dialog.pattern.setText("failing")
-        with mock.patch.object(mohreplay.Game, "send", lambda game, *commands: (sent.extend(commands),
-                                                                                send(game, *commands))):
-            self.record(window, setup, window.record_demos)
-            job, = self.done(window, timeout=60)
+        spy = mock.patch.object(mohreplay.Game, "send", lambda game, *commands: (sent.extend(commands),
+                                                                                send(game, *commands)))
+        spy.start()
+        self.addCleanup(spy.stop)
+        self.record(window, setup, window.record_demos)
+        if not wait:
+            return window.jobs[0], sent
+        job, = self.done(window, timeout=60)
         return job, sent
 
     def test_clips_left_out(self):
@@ -2201,22 +2205,103 @@ class TestRecording(FakeGameCase):
         self.assertEqual((video["start"], video["only"]), (0, ""))
         self.assertEqual(video["stop"], 30000)
 
-    def test_quit_while_recording(self):
+    def stretch(self, window, start, name):
+        """Records 3 seconds of the demo playing from start, a video named
+        name."""
+        def setup(dialog):
+            dialog.range.setChecked(True)
+            dialog.start.setText(start)
+            dialog.end.setText(start[:-1] + "3")
+            dialog.pattern.setText(name)
+        self.record(window, setup)
+
+    def labels(self, window):
+        return [window.queue.topLevelItem(i).text(0) for i in range(window.queue.topLevelItemCount())]
+
+    def test_pause_and_move(self):
+        """A video paused waits till it's resumed; the order of the list is
+        the order they're recorded in."""
         window = self.window()
         self.playing(window)
-        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "0.01"}):
-            self.record(window)
-            self.record(window)
-            asked = []
-            with mock.patch.object(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.No):
-                window.close()
-            self.assertEqual(asked, ["2 videos are still to record. Quit anyway?"])
-            self.assertTrue(window.recorder.game.running())
-            with mock.patch.object(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes):
-                recorder = window.recorder
-                window.close()
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
+            for start, name in (("1:00", "a"), ("1:10", "b"), ("1:20", "c")):
+                self.stretch(window, start, name)
+            a, b, c = window.jobs
+            b["item"].setSelected(True)
+            window.pause_jobs()
+            self.assertEqual((b["status"], b["item"].text(2)), ("paused", "Paused"))
+            b["item"].setSelected(False)
+            c["item"].setSelected(True)
+            window.move_jobs(-1)
+            self.assertEqual(self.labels(window), ["a.mp4", "c.mp4", "b.mp4"])
+            self.assertEqual(window.jobs, [a, c, b])
+            self.assertTrue(c["item"].isSelected())
+            # a and c, not b
+            self.assertTrue(wait_until(lambda: c["status"] == "done", 30))
+            self.assertEqual(a["status"], "done")
+            wait_until(lambda: False, 0.5)
+            self.assertEqual(b["status"], "paused")
+            self.assertIsNone(window.recorder)
+            c["item"].setSelected(False)
+            b["item"].setSelected(True)
+            window.resume_jobs()
+            self.assertTrue(wait_until(lambda: b["status"] == "done", 30))
+        self.assertEqual(self.video("b.mp4")["start"], 70000)
+        # down, past the end
+        b["item"].setSelected(True)
+        window.move_jobs(1)
+        window.move_jobs(1)
+        self.assertEqual(self.labels(window), ["a.mp4", "c.mp4", "b.mp4"])
+
+    def test_pause_recording(self):
+        """A video paused while it records keeps its clips made, and goes on
+        from the next one when it's resumed."""
+        self.add_demo("second", DEMO)
+        self.add_demo("third", DEMO)
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
+            job, sent = self.record_failing(("first", "second", "third"), wait=False)
+            window = self.windows[-1]
+            self.assertTrue(wait_until(lambda: job.get("next_clip") == 1, 30))
+            job["item"].setSelected(True)
+            window.pause_jobs()
+            self.assertEqual((job["status"], job["item"].text(2)), ("paused", "Paused after clip 1 of 3"))
+            self.assertFalse(window.recorder)
+            demos = [c for c in sent if c.startswith("demo ")]
+            window.resume_jobs()
+            self.assertTrue(wait_until(lambda: job["status"] == "done", 60), job["item"].text(2))
+        self.assertEqual(len(self.video("failing.mp4")["joined"]), 3)
+        # the first clip wasn't made again
+        again = [c for c in sent[len(demos):] if c.startswith("demo ")]
+        self.assertNotIn(demos[0], again)
+        self.assertFalse([name for name in os.listdir(self.videos) if name.startswith(".mohreplay-parts")])
+
+    def test_queue_kept_when_closing(self):
+        """Closing keeps the videos left, the one recording with its clips
+        made: they go on when it opens again."""
+        self.add_demo("second", DEMO)
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
+            job, sent = self.record_failing(("first", "second"), wait=False)
+            window = self.windows[-1]
+            self.playing(window)
+            self.stretch(window, "1:00", "later")
+            self.stretch(window, "2:00", "held")
+            window.jobs[2]["item"].setSelected(True)
+            window.pause_jobs()
+            self.assertTrue(wait_until(lambda: job.get("next_clip") == 1, 30))
+            recorder = window.recorder
+            window.close()
             self.assertFalse(recorder.game.running())
-            self.assertEqual([j["status"] for j in window.jobs], ["canceled", "canceled"])
+            self.assertEqual([j["status"] for j in window.jobs], ["waiting", "waiting", "paused"])
+            again = self.window()
+            self.assertEqual(self.labels(again), ["failing.mp4", "later.mp4", "held.mp4"])
+            self.assertEqual(again.jobs[2]["item"].text(2), "Paused")
+            first = len(sent)
+            self.assertTrue(wait_until(lambda: [j["status"] for j in again.jobs] == ["done", "done", "paused"], 60),
+                            [j["item"].text(2) for j in again.jobs])
+        self.assertEqual(len(self.video("failing.mp4")["joined"]), 2)
+        self.assertEqual(self.video("later.mp4")["start"], 60000)
+        # it went on from the second clip
+        self.assertEqual(next(c for c in sent[first:] if c.startswith("demo ")), 'demo "second"')
 
 
 REAL_GAME = os.environ.get("MOHREPLAY_TEST_GAME")

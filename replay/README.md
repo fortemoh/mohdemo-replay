@@ -94,8 +94,13 @@ record, as its demo's map isn't installed or the game quits in it, is tried
 again once in a new game, then left out, the video going on without it
 ("Done, 1 clip left out", its tip which and why); three in a row stop the
 video. The Videos panel lists them,
-with how far the one recording is and how long it has left
-(Cancel, Open folder, double-click to watch one), and each lands in the
+with how far the one recording is and how long it has left, in the order
+they're recorded in: Up and Down move those selected, Pause holds them (the
+one recording stops, keeping its clips made, and goes on from the next one),
+Resume records them again, also when they failed or were canceled, Cancel,
+Remove finished, Open folder, and double-click to watch one. Closing the app
+keeps them, the one recording with its clips made, and they go on when it
+opens again (in `queue.json`, next to its settings). Each lands in the
 folder chosen, named from a pattern (`{demo}`, the demo's file name,
 `{start}`, `{player}`, `{date}`), with each frag played from how long before
 it to how long after. The size, frames per second, quality, codec (H.264,

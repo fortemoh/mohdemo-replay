@@ -1814,8 +1814,11 @@ class Recorder(QObject):
     when there are several. A clip the game doesn't record, as its demo
     doesn't load, an error stops it or the game quits, is tried again once
     in a new game, then left out, its "skipped" telling why, unless
-    LEFT_OUT clips in a row are. on_progress(job, text) tells how it goes,
-    and on_done(job, error, video) when it's over."""
+    LEFT_OUT clips in a row are. The job keeps the clips made so far
+    (parts_dir, made, next_clip), so that a recorder paused, or stopped as
+    the app closes, goes on from the next clip. on_progress(job, text) tells
+    how it goes, and on_done(job, error, video) when it's over, error being
+    "paused" or "canceled" then."""
 
     LEFT_OUT = 3
 
@@ -1835,6 +1838,7 @@ class Recorder(QObject):
         self.parts = []
         self.joiner = None
         self.parts_dir = None
+        self.started_at = None  # how much of the video was made before
         # with the settings of the game watched, but changing none
         self.game = Game(self.output, self.exited, keep_config=False)
         self.clock = QElapsedTimer()
@@ -1862,14 +1866,25 @@ class Recorder(QObject):
                         kill_before=kill_before, kill_after=kill_after, videos=self.parts_dir)
 
     def start(self):
-        # the clips are written next to the video, as the game's home may be
-        # in memory (/tmp), and the video then only moves
-        try:
-            folder = os.path.dirname(self.job["output"]) or "."
-            os.makedirs(folder, exist_ok=True)
-            self.parts_dir = tempfile.mkdtemp(prefix=".mohreplay-parts-", dir=folder)
-        except OSError:
-            self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
+        job = self.job
+        made = job.get("made", [])
+        if job.get("parts_dir") and os.path.isdir(job["parts_dir"]) and all(os.path.isfile(p) for p in made):
+            # going on after the clips made before
+            self.parts_dir, self.parts = job["parts_dir"], list(made)
+            self.clip = job.get("next_clip", 0) - 1
+        else:
+            self.forget()
+            for clip in job["clips"]:
+                clip.pop("skipped", None)
+            # the clips are written next to the video, as the game's home may
+            # be in memory (/tmp), and the video then only moves
+            try:
+                folder = os.path.dirname(job["output"]) or "."
+                os.makedirs(folder, exist_ok=True)
+                self.parts_dir = tempfile.mkdtemp(prefix=".mohreplay-parts-", dir=folder)
+            except OSError:
+                self.parts_dir = tempfile.mkdtemp(prefix="mohreplay-parts-")
+        self.started_at = sum(length(clip["spans"] or []) for clip in job["clips"][:self.clip + 1])
         self.start_game()
         self.elapsed.start()
         self.on_progress(self.job, "Starting the recorder…")
@@ -1946,20 +1961,30 @@ class Recorder(QObject):
             if not state.get("recording"):
                 self.clip_done()
 
+    def recorded(self, time=None):
+        """How much of the video the clips before this one play, and this one
+        up to time in its demo, if given; None when not known."""
+        clips = self.job["clips"]
+        if any(clip["spans"] is None for clip in clips):
+            return None
+        done = sum(length(clip["spans"]) for clip in clips[:max(0, self.clip)])
+        if time is not None:
+            done += sum(max(0, min(end, time) - start) for start, end in clips[self.clip]["spans"])
+        return done
+
     def how_far(self, time):
         """How much of the video is done, and how long the rest will take,
         from what the clips play, else the time in the demo."""
-        clips = self.job["clips"]
-        total = sum(length(clip["spans"] or []) for clip in clips)
-        if not total or any(clip["spans"] is None for clip in clips):
+        total = sum(length(clip["spans"] or []) for clip in self.job["clips"])
+        done = self.recorded(time)
+        if not total or done is None:
             return clock(time)
-        done = sum(length(clip["spans"]) for clip in clips[:self.clip])
-        done += sum(max(0, min(end, time) - start) for start, end in clips[self.clip]["spans"])
         share = min(0.99, done / total)
         text = f"{int(share * 100)}%"
-        # once it's going
-        if share >= 0.02:
-            text += ", " + about(self.elapsed.elapsed() * (1 - share) / share) + " left"
+        # once it's going, at the pace since this recorder started
+        since = done - (self.started_at or 0)
+        if share >= 0.02 and since > 0.01 * total:
+            text += ", " + about(self.elapsed.elapsed() * (total - done) / since) + " left"
         return text
 
     def clip_done(self):
@@ -1987,7 +2012,17 @@ class Recorder(QObject):
         else:
             self.parts.append(self.made())
             self.retried, self.left_out = False, 0
+            self.keep()
             self.next_clip()
+
+    def keep(self):
+        """The clips made so far, in the job, to go on from the next one."""
+        self.job.update(parts_dir=self.parts_dir, made=list(self.parts), next_clip=self.clip + 1)
+        self.window.save_queue()
+
+    def forget(self):
+        for key in ("parts_dir", "made", "next_clip"):
+            self.job.pop(key, None)
 
     def clip_failed(self, why):
         """The clip didn't record: once more in a new game, then without it."""
@@ -1997,6 +2032,7 @@ class Recorder(QObject):
                 self.finish(f"{self.left_out} clips in a row didn't record. {why}")
                 return
             self.job["clips"][self.clip]["skipped"] = why.strip()
+            self.keep()
         self.game.stop()
         for path in (self.made(), self.made() + ".log"):
             try:
@@ -2069,19 +2105,36 @@ class Recorder(QObject):
         self.game.stop()
         if self.parts_dir:
             shutil.rmtree(self.parts_dir, ignore_errors=True)
+        self.forget()
         self.on_done(self.job, error.strip(), output if video else None)
+
+    def stop(self):
+        self.phase = "done"
+        self.timer.stop()
+        if self.joiner:
+            self.joiner.kill()
+            self.joiner.waitForFinished(1000)
+        self.game.stop()
 
     def cancel(self):
         if self.phase != "done":
-            self.phase = "done"
-            self.timer.stop()
-            if self.joiner:
-                self.joiner.kill()
-                self.joiner.waitForFinished(1000)
-            self.game.stop()
+            self.stop()
             if self.parts_dir:
                 shutil.rmtree(self.parts_dir, ignore_errors=True)
+            self.forget()
             self.on_done(self.job, "canceled", None)
+
+    def pause(self):
+        """Stops, keeping the clips made: the one recording is made again."""
+        if self.phase != "done":
+            self.stop()
+            if self.made() not in self.parts:
+                for path in (self.made(), self.made() + ".log"):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+            self.on_done(self.job, "paused", None)
 
     def exited(self):
         if self.phase == "joining":
@@ -2305,9 +2358,17 @@ class Window(QMainWindow):
         self.queue.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.queue.itemActivated.connect(self.open_video)
         buttons = QHBoxLayout()
-        for text, action in (("Cancel", self.cancel_jobs), ("Remove finished", self.remove_finished),
-                             ("Open folder", self.open_folder)):
+        for text, action, tip in (
+                ("Pause", self.pause_jobs, "Holds the videos selected; the one recording stops and keeps its "
+                                           "clips made, to go on from there"),
+                ("Resume", self.resume_jobs, "Records the videos selected that are paused, failed or canceled "
+                                             "again, in their turn"),
+                ("Up", lambda: self.move_jobs(-1), "Records the videos selected sooner"),
+                ("Down", lambda: self.move_jobs(1), "Records the videos selected later"),
+                ("Cancel", self.cancel_jobs, ""), ("Remove finished", self.remove_finished, ""),
+                ("Open folder", self.open_folder, "")):
             button = QPushButton(text)
+            button.setToolTip(tip)
             button.clicked.connect(action)
             buttons.addWidget(button)
         buttons.addStretch(1)
@@ -2366,6 +2427,9 @@ class Window(QMainWindow):
         self.library_opener = QTimer(self, singleShot=True, interval=0, timeout=lambda: self.library.open(
             settings.value("demos", ""), settings.value("exe", "")))
         self.library_opener.start()
+        # the videos left when it last closed, which go on
+        self.closing = False
+        self.load_queue()
 
     def make_list(self, columns, fit=True):
         """fit: columns fit their contents, which costs a look at every row
@@ -3088,22 +3152,78 @@ class Window(QMainWindow):
         for job in jobs:
             self.add_job(job)
 
-    def add_job(self, job):
+    def add_job(self, job, start=True):
         """Records it after the ones before it."""
-        job["item"] = item = QTreeWidgetItem([os.path.basename(job["output"]), job["label"], "Waiting"])
+        job["item"] = QTreeWidgetItem(["", "", ""])
         self.jobs.append(job)
-        self.queue.addTopLevelItem(item)
+        self.queue.addTopLevelItem(job["item"])
+        self.show_job(job)
         if self.queue_dock.isHidden():
             self.queue_dock.show()
             self.resizeDocks([self.queue_dock], [160], Qt.Vertical)
-        self.next_job()
+        if start:
+            self.save_queue()
+            self.next_job()
+
+    def show_job(self, job):
+        """Its line in the Videos panel."""
+        item, status = job["item"], job["status"]
+        item.setText(0, os.path.basename(job["output"]))
+        item.setText(1, job["label"])
+        # the clips that didn't record, and why
+        skipped = [clip for clip in job["clips"] if clip.get("skipped")]
+        tip = "\n".join(f"{clip['demo']}: {clip['skipped']}" for clip in skipped)
+        if status == "done":
+            several = "s" if len(skipped) > 1 else ""
+            text = f"Done, {len(skipped)} clip{several} left out" if skipped else "Done"
+        elif status == "failed":
+            tip = job.get("error") or "It didn't record."
+            text = "Failed: " + tip.splitlines()[0]
+        elif status == "paused" and job.get("next_clip"):
+            text = f"Paused after clip {job['next_clip']} of {len(job['clips'])}"
+        else:
+            text = {"waiting": "Waiting", "recording": "Recording…", "paused": "Paused"}.get(status, "Canceled")
+        item.setText(2, text)
+        item.setToolTip(2, tip)
+        item.setToolTip(0, job["output"] if status == "done" else "")
+        item.setForeground(2, QColor(Qt.red) if status == "failed" else self.queue.palette().text())
+
+    def queue_file(self):
+        """Where the videos are kept when the app closes: next to the
+        settings."""
+        return os.path.join(os.path.dirname(self.settings.fileName()), "queue.json")
+
+    def save_queue(self):
+        path = self.queue_file()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".new", "w", encoding="utf-8") as f:
+                json.dump([{key: value for key, value in job.items() if key != "item"} for job in self.jobs], f)
+            os.replace(path + ".new", path)
+        except OSError as e:
+            self.statusBar().showMessage(f"Couldn't keep the videos to record: {e}")
+
+    def load_queue(self):
+        """The videos kept: the one recording goes on, in its turn."""
+        try:
+            with open(self.queue_file(), encoding="utf-8") as f:
+                jobs = json.load(f)
+        except (OSError, ValueError):
+            return
+        for job in jobs:
+            if job.get("status") == "recording":
+                job["status"] = "waiting"
+            self.add_job(job, start=False)
+        QTimer.singleShot(0, self.next_job)
 
     def next_job(self):
-        if self.recorder:
+        if self.recorder or self.closing:
             return
         job = next((j for j in self.jobs if j["status"] == "waiting"), None)
         if job:
             job["status"] = "recording"
+            self.show_job(job)
+            self.save_queue()
             self.recorder = Recorder(self, job, self.job_progress, self.job_done)
             self.recorder.start()
 
@@ -3112,45 +3232,80 @@ class Window(QMainWindow):
 
     def job_done(self, job, error, video):
         self.recorder = None
-        item = job["item"]
         if video:
             job["status"], job["output"] = "done", video
-            item.setText(0, os.path.basename(video))
-            # the clips that didn't record, and why
-            skipped = [clip for clip in job["clips"] if clip.get("skipped")]
-            several = "s" if len(skipped) > 1 else ""
-            item.setText(2, f"Done, {len(skipped)} clip{several} left out" if skipped else "Done")
-            item.setToolTip(2, "\n".join(f"{clip['demo']}: {clip['skipped']}" for clip in skipped))
-            item.setToolTip(0, video)
             self.statusBar().showMessage("Recorded " + video)
             if job.get("numbers"):
                 try:
                     write_clip_list(job["clips"], video)
                 except OSError as e:
                     self.statusBar().showMessage(f"Recorded {video}, but couldn't write its list of clips: {e}")
-        elif error == "canceled":
-            job["status"] = "canceled"
-            item.setText(2, "Canceled")
+        elif error in ("paused", "canceled"):
+            job["status"] = error
         else:
-            job["status"] = "failed"
-            item.setText(2, "Failed: " + error.splitlines()[0])
-            item.setToolTip(2, error)
-            item.setForeground(2, QColor(Qt.red))
-            self.statusBar().showMessage(f"Couldn't record {item.text(0)}: {error.splitlines()[0]}")
+            job["status"], job["error"] = "failed", error
+            self.statusBar().showMessage(f"Couldn't record {os.path.basename(job['output'])}: {error.splitlines()[0]}")
+        self.show_job(job)
+        self.save_queue()
         self.next_job()
 
-    def cancel_jobs(self):
-        for job in [j for j in self.jobs if j["item"].isSelected()]:
+    def selected_jobs(self):
+        return [j for j in self.jobs if j["item"].isSelected()]
+
+    def pause_jobs(self):
+        for job in self.selected_jobs():
             if job["status"] == "waiting":
+                job["status"] = "paused"
+                self.show_job(job)
+            elif job["status"] == "recording" and self.recorder:
+                self.recorder.pause()
+        self.save_queue()
+
+    def resume_jobs(self):
+        for job in self.selected_jobs():
+            if job["status"] in ("paused", "failed", "canceled"):
+                job["status"] = "waiting"
+                job.pop("error", None)
+                self.show_job(job)
+        self.save_queue()
+        self.next_job()
+
+    def move_jobs(self, step):
+        """The videos selected one place up (-1) or down (1) the list, which
+        is the order they're recorded in."""
+        chosen = {id(job) for job in self.selected_jobs()}
+        order = list(self.jobs)
+        places = range(len(order)) if step < 0 else range(len(order) - 1, -1, -1)
+        for i in places:
+            j = i + step
+            if id(order[i]) in chosen and 0 <= j < len(order) and id(order[j]) not in chosen:
+                order[i], order[j] = order[j], order[i]
+        self.jobs = order
+        for job in order:
+            self.queue.takeTopLevelItem(self.queue.indexOfTopLevelItem(job["item"]))
+        for job in order:
+            self.queue.addTopLevelItem(job["item"])
+            job["item"].setSelected(id(job) in chosen)
+        self.save_queue()
+
+    def cancel_jobs(self):
+        for job in self.selected_jobs():
+            if job["status"] in ("waiting", "paused"):
+                if job.get("parts_dir"):
+                    shutil.rmtree(job["parts_dir"], ignore_errors=True)
+                for key in ("parts_dir", "made", "next_clip"):
+                    job.pop(key, None)
                 job["status"] = "canceled"
-                job["item"].setText(2, "Canceled")
+                self.show_job(job)
             elif job["status"] == "recording" and self.recorder:
                 self.recorder.cancel()
+        self.save_queue()
 
     def remove_finished(self):
         for job in [j for j in self.jobs if j["status"] in ("done", "failed", "canceled")]:
             self.jobs.remove(job)
             self.queue.takeTopLevelItem(self.queue.indexOfTopLevelItem(job["item"]))
+        self.save_queue()
 
     def open_video(self, item):
         job = next((j for j in self.jobs if j["item"] is item), None)
@@ -3164,20 +3319,17 @@ class Window(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def closeEvent(self, event):
-        left = sum(1 for j in self.jobs if j["status"] in ("waiting", "recording"))
-        if left and QMessageBox.question(
-                self, "Quit", f"{left} video{'s are' if left > 1 else ' is'} still to record. Quit anyway?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
-            event.ignore()
-            return
+        """The videos left are kept, the one recording with its clips made,
+        to go on when it opens again."""
+        self.closing = True
         self.poller.stop()
         self.library_opener.stop()
         self.library.stop()
-        for job in self.jobs:
-            if job["status"] == "waiting":
-                job["status"] = "canceled"
         if self.recorder:
-            self.recorder.cancel()
+            job = self.recorder.job
+            self.recorder.pause()
+            job["status"] = "waiting"
+        self.save_queue()
         self.game.stop()
         super().closeEvent(event)
 
