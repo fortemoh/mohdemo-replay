@@ -199,8 +199,10 @@ Demos don't show the server's messages about players coming and going
 ("<player> has entered the battle", which it tells everyone each time a
 player enters, as at every round, has left the battle, has joined the
 Allies or the Axis, is preparing for deployment), what the player picks
-up (ammo, health and weapons, the yellow messages) or the bomb's messages
-(planted, defused, still set): they fill the message box. After a jump, the message
+up (ammo, health and weapons, the yellow messages), the bomb's messages
+(planted, defused, still set) or what the players write (their chat, with
+the words of voice commands and the server console's): they fill the
+message box; the frags' messages stay. After a jump, the message
 boxes start empty: the messages of the time jumped over aren't shown, nor
 those from before it.
 

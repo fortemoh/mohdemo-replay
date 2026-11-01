@@ -435,7 +435,9 @@ box: the yellow ones, which tell what the player picked up (ammo, health,
 weapons, in any language; also a server's "( 3 ) players are active and
 clean"), the server's own about players coming and going, like
 "<player> has entered the battle", which it tells everyone each time a
-player enters, as at every round, and the bomb's
+player enters, as at every round, the bomb's, and the players' chat,
+"<player>: <text>" with (team), (spectator) or (dead) before it, the
+words of voice commands and the server console's too
 ===================
 */
 static qboolean CL_DemoHidesPrint( const char *text ) {
@@ -451,7 +453,7 @@ static qboolean CL_DemoHidesPrint( const char *text ) {
 	size_t len, endLen;
 	int i;
 
-	if ( text[0] == HUD_MESSAGE_YELLOW[0] ) {
+	if ( text[0] == HUD_MESSAGE_YELLOW[0] || text[0] == HUD_MESSAGE_CHAT_WHITE[0] ) {
 		return qtrue;
 	}
 	if ( text[0] != HUD_MESSAGE_WHITE[0] ) {
