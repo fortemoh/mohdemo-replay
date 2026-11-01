@@ -20,6 +20,7 @@ import html
 import json
 import os
 import posixpath
+import re
 import shutil
 import sys
 import zipfile
@@ -181,6 +182,21 @@ def player_models(game):
         if folder == "models/player" and file.endswith(".tik") and not file.endswith("_fps.tik"):
             models.add(file[:-4])
     return sorted(models)
+
+
+# the words starred out of the players' names and the messages in the game
+# and in videos (cl_censor), however they're spelled: words a video can be
+# flagged for
+CENSOR_WORDS = ("nigger, nigga, nlgger, nlgga, negro, chink, gook, kike, wetback, beaner, paki, raghead, towelhead, "
+                "faggot, fag, dyke, tranny, gay, homo, nazi, hitler, heil, swastika, holocaust, auschwitz, kkk, jew, "
+                "retard")
+
+
+def censored_words(settings):
+    """The words starred out, as cl_censor takes them, "" for none."""
+    if not is_on(settings.value("censor", "1")):
+        return ""
+    return " ".join(w for w in re.split(r"[\s,]+", settings.value("censor_words", CENSOR_WORDS) or "") if w)
 
 
 def followed_models(settings):
@@ -792,10 +808,10 @@ class Game:
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
     def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None,
-              kill_before=None, kill_after=None, videos=None, followed=("", "")):
+              kill_before=None, kill_after=None, videos=None, followed=("", ""), censor=""):
         """videos: the folder its videos go to, instead of its home; followed:
         the models of the player followed when allies and axis, "" for
-        theirs."""
+        theirs; censor: the words starred out (cl_censor)."""
         self.cleanup()
         self.game = game
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
@@ -832,6 +848,7 @@ class Game:
                      "+set", "dm_playergermanmodel", "german_winter_1",
                      *(arg for cvar, model in zip(("cg_followedModel", "cg_followedGermanModel"), followed) if model
                        for arg in ("+set", cvar, model)),
+                     *(("+set", "cl_censor", censor) if censor else ()),
                      "+set", "cl_demoKillBefore", kb,
                      "+set", "cl_demoKillAfter", ka,
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "0",
@@ -1244,6 +1261,7 @@ def video_settings(settings):
             "viewmodel": "1" if is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))) else "0",
             "forcemodel": "1" if is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))) else "0",
             "followed": followed_models(settings),
+            "censor": censored_words(settings),
             "ffmpeg": settings.value("rec/ffmpeg", "").strip() or find_ffmpeg()}
 
 
@@ -1265,6 +1283,8 @@ def video_summary(settings):
     allies, axis = followed_models(settings)
     if allies or axis:
         parts.append(f"the player followed as {allies or 'theirs'} / {axis or 'theirs'}")
+    if censored_words(settings):
+        parts.append("words censored")
     return ", ".join(parts)
 
 
@@ -1385,6 +1405,24 @@ class SettingsDialog(QDialog):
         self.kill_before = seconds_box(settings, "kill_before", 4.0, "Time shown before each frag (cl_demoKillBefore)")
         self.kill_after = seconds_box(settings, "kill_after", 2.0, "Time shown after each frag (cl_demoKillAfter)")
         form.addRow("Each frag plays", lead_row(self.kill_before, self.kill_after, "it"))
+        self.censor = QCheckBox("Star out these words in the players' names and the messages, in videos too")
+        self.censor.setChecked(is_on(settings.value("censor", "1")))
+        self.censor_words = QLineEdit(settings.value("censor_words", CENSOR_WORDS))
+        self.censor_words.setToolTip("Separated by commas, found however they're spelled: any case, letters "
+                                     "repeated, look-alike digits and signs (n1gg3r, f@g), accents, anything between "
+                                     "the letters (n.i.g.g.e.r) or letters spaced out (g a y); in each word, not "
+                                     "across words")
+        self.censor_words.setEnabled(self.censor.isChecked())
+        self.censor.toggled.connect(self.censor_words.setEnabled)
+        reset = QPushButton("Default words")
+        reset.clicked.connect(lambda: self.censor_words.setText(CENSOR_WORDS))
+        censor = QVBoxLayout()
+        censor.addWidget(self.censor)
+        row = QHBoxLayout()
+        row.addWidget(self.censor_words, 1)
+        row.addWidget(reset)
+        censor.addLayout(row)
+        form.addRow("Censor", censor)
         self.tabs.addTab(game, "Game")
         self.videos = VideoSettings(settings)
         self.tabs.addTab(self.videos, "Videos")
@@ -1416,6 +1454,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue("size", self.size.currentText().strip())
         self.settings.setValue("kill_before", str(self.kill_before.value()))
         self.settings.setValue("kill_after", str(self.kill_after.value()))
+        self.settings.setValue("censor", "1" if self.censor.isChecked() else "0")
+        self.settings.setValue("censor_words", self.censor_words.text().strip())
         self.videos.save()
         super().accept()
 
@@ -1906,7 +1946,8 @@ class Recorder(QObject):
                         job["width"], job["height"], extra, driver,
                         viewmodel=viewmodel, forcemodel=forcemodel,
                         kill_before=kill_before, kill_after=kill_after, videos=self.parts_dir,
-                        followed=job.get("followed", followed_models(settings)))
+                        followed=job.get("followed", followed_models(settings)),
+                        censor=job.get("censor", censored_words(settings)))
 
     def start(self):
         job = self.job
@@ -2633,7 +2674,7 @@ class Window(QMainWindow):
         ka = self.settings.value("kill_after", "2.0")
         self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height,
                         viewmodel=vm, forcemodel=fm, kill_before=kb, kill_after=ka,
-                        followed=followed_models(self.settings))
+                        followed=followed_models(self.settings), censor=censored_words(self.settings))
         self.statusBar().showMessage("Starting the game…")
         if self.pending_demo:
             self.game.send("demo " + quoted(self.pending_demo))

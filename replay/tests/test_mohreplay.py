@@ -826,7 +826,7 @@ class TestWindow(FakeGameCase):
         window.fill_followed_menu()
         allies = window.followed_button.menu().actions()[0]
         self.assertEqual(self.menu_texts(allies.menu())[-1], ("my_own", True))
-        self.assertEqual(mohreplay.video_summary(self.settings).split(", ")[-1],
+        self.assertEqual(mohreplay.video_summary(self.settings).split(", ")[-2],
                          "the player followed as my_own / allied_pilot")
 
     def test_choose_folder(self):
@@ -1146,10 +1146,30 @@ class TestSettings(FakeGameCase):
         self.assertEqual(self.settings.value("kill_before"), "6.0")
         self.assertEqual((self.settings.value("rec/size"), self.settings.value("rec/blur")), ("1280x720", "true"))
         self.assertEqual(mohreplay.video_summary(self.settings),
-                         "1280x720, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced")
+                         "1280x720, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced, words censored")
         again = mohreplay.SettingsDialog(self.settings, window)
         self.assertEqual(again.tabs.currentIndex(), 0)
         self.assertTrue(again.videos.blur.isChecked())
+
+    def test_censor(self):
+        """The words starred out, on by default, as the game and the videos
+        are told them."""
+        window = self.window()
+        dialog = mohreplay.SettingsDialog(self.settings, window)
+        self.assertTrue(dialog.censor.isChecked())
+        self.assertEqual(dialog.censor_words.text(), mohreplay.CENSOR_WORDS)
+        self.assertEqual(mohreplay.censored_words(self.settings).split()[:3], ["nigger", "nigga", "nlgger"])
+        dialog.censor_words.setText("gay, nazi,jew")
+        dialog.accept()
+        self.assertEqual(mohreplay.censored_words(self.settings), "gay nazi jew")
+        self.assertEqual(mohreplay.video_settings(self.settings)["censor"], "gay nazi jew")
+        again = mohreplay.SettingsDialog(self.settings, window)
+        self.assertEqual(again.censor_words.text(), "gay, nazi,jew")
+        again.censor.setChecked(False)
+        self.assertFalse(again.censor_words.isEnabled())
+        again.accept()
+        self.assertEqual(mohreplay.censored_words(self.settings), "")
+        self.assertNotIn("words censored", mohreplay.video_summary(self.settings))
 
     def test_video_settings(self):
         video = mohreplay.video_settings(self.settings)
@@ -1619,11 +1639,13 @@ class TestRecording(FakeGameCase):
         self.playing(window)
 
         def setup(dialog):
-            self.assertEqual(dialog.summary.text(), "1920x1080, 60 fps, H.264 (CRF 20), sound 192k, models forced")
+            self.assertEqual(dialog.summary.text(),
+                             "1920x1080, 60 fps, H.264 (CRF 20), sound 192k, models forced, words censored")
             self.change_video(dialog, lambda videos: (self.assertFalse(videos.blur.isChecked()),
                                                       videos.blur.setChecked(True)))
             self.assertEqual(dialog.summary.text(),
-                             "1920x1080, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced")
+                             "1920x1080, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced, "
+                             "words censored")
             dialog.pattern.setText("blur")
         self.record(window, setup)
         self.done(window)
@@ -2264,6 +2286,19 @@ class TestRecording(FakeGameCase):
 
     def labels(self, window):
         return [window.queue.topLevelItem(i).text(0) for i in range(window.queue.topLevelItemCount())]
+
+    def test_censor_recorded(self):
+        """A video has the words starred out when it was queued, none when
+        it's off."""
+        self.settings.setValue("censor_words", "gay, jew")
+        window = self.window()
+        self.playing(window)
+        self.stretch(window, "1:00", "on")
+        self.settings.setValue("censor", "0")
+        self.stretch(window, "1:10", "off")
+        self.done(window, 2)
+        self.assertEqual(self.video("on.mp4")["cvars"]["cl_censor"], "gay jew")
+        self.assertNotIn("cl_censor", self.video("off.mp4")["cvars"])
 
     def test_followed_models_recorded(self):
         """A video has the models of the player followed chosen when it was

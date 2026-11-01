@@ -64,7 +64,13 @@ a round to jump to it; hovering a frag tells how it was made. Play chooses
 what plays: Everything, These frags, the frags listed, from the one
 selected or the first, or While watched, while one of the fraggers is shown.
 Settings also sets how long
-each frag plays before and after it (4 and 2 seconds), and Viewmodel and
+each frag plays before and after it (4 and 2 seconds) and the words
+Censor stars out of the players' names and the messages, in the game and
+in videos (on, with words a video can be flagged for, which you can change):
+however they're spelled, any case, letters repeated, look-alike digits and
+signs (n1gg3r, f@g), accents, anything between the letters (n.i.g.g.e.r) or
+letters spaced out (g a y), in each word but not across words, a letter a
+word has twice having to be there twice ("Nigeria" stays); Viewmodel and
 Force models, in the toolbar, show the gun in the player's hands and show
 everyone as an airborne soldier or a winter German, whatever they wore.
 Followed player, next to them, chooses the model of the player the demo
