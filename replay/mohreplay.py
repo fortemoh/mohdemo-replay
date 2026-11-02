@@ -246,6 +246,18 @@ def clean_name(name):
     return " ".join(word for word in printable.lower().split(" ") if word)
 
 
+@functools.lru_cache(maxsize=256)
+def part_pattern(part):
+    """A search's part as a pattern: a * stands for any one character."""
+    return re.compile(re.escape(part).replace(r"\*", "."))
+
+
+def has_part(text, part):
+    """Whether text has part in it, a * in part standing for any one
+    character (gr*m: grim, gr1m), as demofilter takes it."""
+    return part in text if "*" not in part else part_pattern(part).search(text) is not None
+
+
 # what the names of the objective maps' levels have, any case (obj/obj_team4,
 # OBJ/obj_Team2, obj/harbor...), and not those of the deathmatch maps (dm/)
 OBJ_LEVELS = "obj/"
@@ -362,8 +374,9 @@ class KillFilter:
     made with one of weapons (keys of WEAPONS), on the objective maps only if
     obj, great ones only if great (not slow snipes nor frags of AFK
     players), those of the players the recorder spectates only if specced.
-    Names are parts of names as the search takes its words; none is anyone,
-    no weapons any weapon. The game is told it with demofilter."""
+    Names are parts of names as the search takes its words, a * standing for
+    any one character; none is anyone, no weapons any weapon. The game is
+    told it with demofilter."""
 
     def __init__(self, killers=(), victims=(), weapons=(), shown=False, obj=False, great=False, specced=False):
         self.shown = bool(shown)
@@ -393,14 +406,14 @@ class KillFilter:
     def has_killer(self, killer):
         """Whether a killer's clean name is one of its, anyone if whoever is
         shown."""
-        return not self.killers or any(part in killer for part in self.killers)
+        return not self.killers or any(has_part(killer, part) for part in self.killers)
 
     def has(self, victim, weapon, level="", poor=False, specced=False):
         """Whether a kill of a victim (clean name) made with weapon in a level
         (lower case), poor (poor_frag) or not, specced (kill_specced) or not,
         is one of its, whoever the killer."""
         return ((not self.weapons or weapon in self.weapons)
-                and (not self.victims or any(part in victim for part in self.victims))
+                and (not self.victims or any(has_part(victim, part) for part in self.victims))
                 and (not self.obj or OBJ_LEVELS in level) and not (self.great and poor)
                 and (specced or not self.specced))
 
@@ -596,9 +609,9 @@ def search_demo(name, summary, searches):
     for words in searches:
         hits = {}
         for word in words:
-            if word in name.lower() or word in maps:
+            if has_part(name.lower(), word) or has_part(maps, word):
                 continue
-            keys = [key for key in players if word in key]
+            keys = [key for key in players if has_part(key, word)]
             if not keys:
                 break
             hits.update((key, players[key]) for key in keys)
@@ -2887,7 +2900,7 @@ class Window(QMainWindow):
             shown = shown and summary.get("duration", MIN_LENGTH) >= MIN_LENGTH
             if shown and recorders:
                 recorder = clean_name(summary.get("recorder", ""))
-                shown = bool(recorder) and any(part in recorder for part in recorders)
+                shown = bool(recorder) and any(has_part(recorder, part) for part in recorders)
             if shown and searches:
                 hits = search_demo(name, summary, searches)
                 shown, found = hits is not None, hits or {}

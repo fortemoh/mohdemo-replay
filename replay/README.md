@@ -21,7 +21,9 @@ names separated by commas, as the filter takes them; its menu lists the
 recorders, those of the most demos first), and the filter finds demos by
 name, level or player, those with all of its words, and commas separate
 searches (`pstn v2, tommeh` finds pstN's demos on v2 and tommeh's demos):
-for a player, it shows their frags in each demo. For that, `mohdemoindex`, built next to the
+for a player, it shows their frags in each demo. In all of these, a `*`
+stands for any one character: `gr*m` finds Grim and Gr1m (not Grm or
+Grimm), as Fragger and Victim below and the game's `demofilter` take it. For that, `mohdemoindex`, built next to the
 game, indexes the demos in the background the first time (about two minutes
 for 700, and again once after it changes), and the indexes are kept in
 `~/.cache/mohdemo-replay`. The bottom right tells how far indexing is, then
@@ -174,7 +176,7 @@ binds, without the app:
 | `demonextkill [player]`, `demoprevkill [player]` | jump to before the next or previous kill of `demofilter`, by that player while shown if given |
 | `demonextshownkill`, `demoprevshownkill` | jump to before the next or previous kill of whoever is shown |
 | `demonextround`, `demoprevround` | jump to the next or previous round |
-| `demofilter [clear \| shown \| killer <name> \| victim <name> \| weapon <weapon>... \| level <name> \| great [<msec> [<speed> [<streak msec> [<idle msec>]]]] \| specced]` | the kills the kill commands go to: by players whose names have one of the killers in them, while shown, or by whoever is shown, of players whose names have one of the victims, made with one of the weapons (`pistol`, `rifle`, `sniper`, `smg`, `mg`, `shotgun`, `rocket`, `melee`, `other`), in levels whose names have one of the levels in them, any case (`level obj/`: the objective maps), and `great`: not the sniper kills the killer's view shows made with the scope on for over `msec` (1000) at `speed` (30) or slower, but those with another kill of their killer within `streak msec` (5000), and not the kills of victims who had given no input for over `idle msec` (5000), and `specced`: only the kills of the players the recorder followed as a spectator, while followed; each adds, but `clear`; alone, it prints them. A player given to a command is the killer instead, the victims, weapons and levels still apply |
+| `demofilter [clear \| shown \| killer <name> \| victim <name> \| weapon <weapon>... \| level <name> \| great [<msec> [<speed> [<streak msec> [<idle msec>]]]] \| specced]` | the kills the kill commands go to: by players whose names have one of the killers in them, while shown, or by whoever is shown, of players whose names have one of the victims (a `*` in a name stands for any one character), made with one of the weapons (`pistol`, `rifle`, `sniper`, `smg`, `mg`, `shotgun`, `rocket`, `melee`, `other`), in levels whose names have one of the levels in them, any case (`level obj/`: the objective maps), and `great`: not the sniper kills the killer's view shows made with the scope on for over `msec` (1000) at `speed` (30) or slower, but those with another kill of their killer within `streak msec` (5000), and not the kills of victims who had given no input for over `idle msec` (5000), and `specced`: only the kills of the players the recorder followed as a spectator, while followed; each adds, but `clear`; alone, it prints them. A player given to a command is the killer instead, the victims, weapons and levels still apply |
 | `demoonly kills [player]` | play only the kills of `demofilter`, by that player while shown if given |
 | `demoonly multikills [player]` | play only the multi-kills, by that player while shown if given |
 | `demoonly shownkills` | play only the kills of whoever is shown (the recorder playing, or the player they follow), while they're shown |

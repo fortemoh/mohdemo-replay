@@ -1151,10 +1151,36 @@ static qboolean CL_DemoPlayerIs( const char *playerName, const char *player ) {
 
 /*
 ====================
+CL_DemoHasPart
+
+Whether s has part in it, any case, a * in part standing for any one
+character (gr*m: grim, gr1m)
+====================
+*/
+static qboolean CL_DemoHasPart( const char *s, const char *part ) {
+	size_t	len = strlen( part );
+	size_t	i;
+
+	for ( ; strlen( s ) >= len; s++ ) {
+		for ( i = 0; i < len; i++ ) {
+			if ( part[i] != '*' && tolower( (unsigned char)s[i] ) != tolower( (unsigned char)part[i] ) ) {
+				break;
+			}
+		}
+		if ( i == len ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+====================
 CL_DemoNameHas
 
 Whether a player's name has part in it, without colors, case and extra
-spaces, as the replay app's search takes it
+spaces, a * standing for any one character, as the replay app's search takes
+it
 ====================
 */
 static qboolean CL_DemoNameHas( const char *playerName, const char *part ) {
@@ -1163,7 +1189,7 @@ static qboolean CL_DemoNameHas( const char *playerName, const char *part ) {
 
 	Q_strncpyz( a, playerName, sizeof( a ) );
 	Q_strncpyz( b, part, sizeof( b ) );
-	return Q_stristr( CL_DemoCleanName( a ), CL_DemoCleanName( b ) ) != NULL;
+	return CL_DemoHasPart( CL_DemoCleanName( a ), CL_DemoCleanName( b ) );
 }
 
 /*
@@ -1968,7 +1994,7 @@ static void CL_DemoFilter_f( void ) {
 	} else if ( !Q_stricmp( what, "specced" ) && Cmd_Argc() == 2 ) {
 		cl_demoFilter.specced = qtrue;
 	} else {
-		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]] | specced]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower, but those with another kill of their killer within streak msec (5000), and the kills of victims idle for over idle msec (5000), and specced keeps only the kills of the players the recorder followed\n" );
+		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]] | specced]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; a * in a name stands for any one character (gr*m: grim, gr1m); the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower, but those with another kill of their killer within streak msec (5000), and the kills of victims idle for over idle msec (5000), and specced keeps only the kills of the players the recorder followed\n" );
 	}
 }
 

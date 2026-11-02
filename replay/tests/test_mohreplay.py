@@ -559,6 +559,26 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(search("clan bob, phil, al"), {"bob": ["Bob", 0], "phil": ["^1Phil", 0], "al": ["Al", 0]})
         self.assertEqual(search("nobody, mohdm6"), None)
 
+    def test_one_character_wildcard(self):
+        """A * in a search stands for any one character, in the names of
+        fraggers, victims and recorders and the demo search."""
+        has = mohreplay.has_part
+        self.assertTrue(has("[clan] snipe", "sn*pe") and has("sn1pe-", "sn*pe") and has("sn*pe", "sn*pe"))
+        self.assertFalse(has("snpe", "sn*pe") or has("sn11pe", "sn*pe") or has("sn", "sn*"))
+        self.assertTrue(has("snipee", "sn*pe") and has("a.b", "a.b") and not has("axb", "a.b"))
+        self.assertTrue(has("tommeh", "t*m*e") and not has("tomeh", "t*m*e"))
+        kill_filter = mohreplay.KillFilter(["Sn*pe"], ["*o*"])
+        self.assertEqual(kill_filter.commands(), ["demofilter clear", 'demofilter killer "Sn*pe"', 'demofilter victim "*o*"'])
+        self.assertTrue(kill_filter.keeps({"killerName": "^2Sn1pe-", "victimName": "Bob", "weapon": "mg"}))
+        self.assertTrue(kill_filter.keeps({"killerName": "snipe", "victimName": "Bob", "weapon": "mg"}))
+        self.assertFalse(kill_filter.keeps({"killerName": "Snpe", "victimName": "Bob", "weapon": "mg"}))
+        self.assertFalse(kill_filter.keeps({"killerName": "snipe", "victimName": "Al", "weapon": "mg"}))
+        summary = mohreplay.summarize(DEMO)
+        search = lambda text: mohreplay.search_demo("clan/first", summary, mohreplay.search_parts(text))
+        self.assertEqual(search("ph*l"), {"phil": ["^1Phil", 0]})
+        self.assertEqual(search("c*an b*b"), {"bob": ["Bob", 0]})
+        self.assertEqual(search("ph**l"), None)
+
     def test_deaths_shown(self):
         # t- killed at 3:20 while shown, Phil at 6:40 while followed
         deaths = mohreplay.deaths_shown(DEMO)
