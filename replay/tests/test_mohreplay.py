@@ -2441,6 +2441,23 @@ class TestRecording(FakeGameCase):
         window.move_jobs(1)
         self.assertEqual(self.labels(window), ["a.mp4", "c.mp4", "b.mp4"])
 
+    def test_video_keeps_its_folder(self):
+        """A video records from the folder of demos it was queued from, also
+        when another folder is opened before its turn."""
+        window = self.window()
+        self.playing(window)
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
+            self.stretch(window, "1:00", "one")
+            self.stretch(window, "1:10", "two")
+            self.assertEqual([job["demos"] for job in window.jobs], [self.demos, self.demos])
+            other = os.path.join(self.tmp, "other")
+            os.makedirs(other)
+            self.settings.setValue("demos", other)
+            self.done(window, 2, 60)
+        self.assertEqual([job["status"] for job in window.jobs], ["done", "done"], window.jobs[1]["item"].text(2))
+        self.assertFalse([clip for job in window.jobs for clip in job["clips"] if clip.get("skipped")])
+        self.assertEqual(self.video("two.mp4")["start"], 70000)
+
     def test_record_again(self):
         """A video done is recorded again into a new one next to it,
         numbered from the name it was first given."""

@@ -118,7 +118,9 @@ watch one. Closing the app
 keeps them, the one recording with its clips made, and they go on when it
 opens again (in `queue.json`, next to its settings). Only the first window
 open keeps them: another one doesn't write over its list, and asks before
-closing with videos left, which aren't kept. Each lands in the
+closing with videos left, which aren't kept. A video records from the
+folder of demos it was queued from, also when another folder is opened
+before its turn. Each lands in the
 folder chosen, named from a pattern (`{demo}`, the demo's file name,
 `{start}`, `{player}`, `{date}`), with each frag played from how long before
 it to how long after. The size, frames per second, quality, codec (H.264,

@@ -1299,6 +1299,8 @@ def video_settings(settings):
             "followed": followed_models(settings),
             "censor": censored_words(settings),
             "camera": cameras(settings),
+            # the folder its clips' demos are in, whichever is opened later
+            "demos": settings.value("demos", ""),
             "ffmpeg": settings.value("rec/ffmpeg", "").strip() or find_ffmpeg()}
 
 
@@ -1983,7 +1985,7 @@ class Recorder(QObject):
         forcemodel = job.get("forcemodel", settings.value("rec/forcemodel", settings.value("forcemodel", "1")))
         kill_before = job.get("kill_before", settings.value("rec/kill_before", settings.value("kill_before", "4.0")))
         kill_after = job.get("kill_after", settings.value("rec/kill_after", settings.value("kill_after", "2.0")))
-        self.game.start(settings.value("exe"), settings.value("game"), settings.value("demos"),
+        self.game.start(settings.value("exe"), settings.value("game"), job.get("demos") or settings.value("demos"),
                         job["width"], job["height"], extra, driver,
                         viewmodel=viewmodel, forcemodel=forcemodel,
                         kill_before=kill_before, kill_after=kill_after, videos=self.parts_dir,
