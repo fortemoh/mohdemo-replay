@@ -629,6 +629,14 @@ extern "C" {
     // Added in OPM
     qboolean CG_RecorderBehind(void);
 
+    //
+    // cg_followeyes.c
+    //
+    // Added in OPM
+    //  set on a snapshot made as if the player followed recorded it
+#define SNAPFLAG_FOLLOWED_FROM_EYES 0x100
+    void CG_FollowFromEyes(snapshot_t *snap);
+
     void  CG_EyePosition(vec3_t *o_vPos);
     void  CG_EyeOffset(vec3_t *o_vOfs);
     void  CG_EyeAngles(vec3_t *o_vAngles);

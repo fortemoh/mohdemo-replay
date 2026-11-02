@@ -681,8 +681,9 @@ static void CG_StockFollowCameraAt(
 CG_StockFollowCamera
 
 Added in OPM
-  With cg_followcamera, puts the camera that follows a player where stock
-  servers put it, behind them, when the server puts it in their head
+  With cg_followcamera 1, puts the camera that follows a player where stock
+  servers put it, behind them, when the server puts it in their head (2
+  shows them from their eyes: cg_followeyes.c)
 ===============
 */
 static void CG_StockFollowCamera(void)
@@ -694,7 +695,7 @@ static void CG_StockFollowCamera(void)
     int                  client;
     int                  i;
 
-    if (!cg_followcamera->integer || !CG_CameraInHead(&cg.snap->ps)) {
+    if (cg_followcamera->integer != 1 || !CG_CameraInHead(&cg.snap->ps)) {
         return;
     }
 
@@ -743,7 +744,8 @@ Added in OPM
 qboolean CG_RecorderBehind(void)
 {
     return cg_recordercamera->integer && cg.demoPlayback && cg.snap
-        && !(cg.snap->ps.pm_flags & (PMF_SPECTATING | PMF_CAMERA_VIEW));
+        && !(cg.snap->ps.pm_flags & (PMF_SPECTATING | PMF_CAMERA_VIEW))
+        && !(cg.snap->snapFlags & SNAPFLAG_FOLLOWED_FROM_EYES);
 }
 
 /*

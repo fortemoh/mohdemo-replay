@@ -384,6 +384,8 @@ static snapshot_t *CG_ReadNextSnapshot(void)
         // if it succeeded, return
         if (r) {
             CG_AddLagometerSnapshotInfo(dest);
+            // Added in OPM
+            CG_FollowFromEyes(dest);
             return dest;
         }
 
