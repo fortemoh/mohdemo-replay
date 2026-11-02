@@ -2476,6 +2476,9 @@ class Window(QMainWindow):
                                            "clips made, to go on from there"),
                 ("Resume", self.resume_jobs, "Records the videos selected that are paused, failed or canceled "
                                              "again, in their turn"),
+                ("Record again", self.record_jobs_again, "Records the videos selected that are done once more, in "
+                                                         "their turn, with the game as it is now: a new video, "
+                                                         "numbered, next to the one made"),
                 ("Up", lambda: self.move_jobs(-1), "Records the videos selected sooner"),
                 ("Down", lambda: self.move_jobs(1), "Records the videos selected later"),
                 ("Cancel", self.cancel_jobs, ""), ("Remove finished", self.remove_finished, ""),
@@ -3471,6 +3474,20 @@ class Window(QMainWindow):
             if job["status"] in ("paused", "failed", "canceled"):
                 job["status"] = "waiting"
                 job.pop("error", None)
+                self.show_job(job)
+        self.save_queue()
+        self.next_job()
+
+    def record_jobs_again(self):
+        """The videos selected that are done are recorded again, in their
+        turn, by a new game (with the game files as they are now): the same
+        clips with the same settings, into a new video next to the one made,
+        named as it was first, numbered (2), (3)..."""
+        for job in self.selected_jobs():
+            if job["status"] == "done":
+                base, ext = os.path.splitext(job["output"])
+                job["output"] = re.sub(r" \(\d+\)$", "", base) + ext
+                job["status"] = "waiting"
                 self.show_job(job)
         self.save_queue()
         self.next_job()

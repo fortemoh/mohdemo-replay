@@ -108,8 +108,11 @@ video. The Videos panel lists them,
 with how far the one recording is and how long it has left, in the order
 they're recorded in: Up and Down move those selected, Pause holds them (the
 one recording stops, keeping its clips made, and goes on from the next one),
-Resume records them again, also when they failed or were canceled, Cancel,
-Remove finished, Open folder, and double-click to watch one. Closing the app
+Resume records them again, also when they failed or were canceled, Record
+again records those done once more (the same clips and settings, with the
+game as it is now, as after an update: a new video next to the first,
+numbered "(2)"), Cancel, Remove finished, Open folder, and double-click to
+watch one. Closing the app
 keeps them, the one recording with its clips made, and they go on when it
 opens again (in `queue.json`, next to its settings). Only the first window
 open keeps them: another one doesn't write over its list, and asks before

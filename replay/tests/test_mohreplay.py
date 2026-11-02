@@ -2421,6 +2421,28 @@ class TestRecording(FakeGameCase):
         window.move_jobs(1)
         self.assertEqual(self.labels(window), ["a.mp4", "c.mp4", "b.mp4"])
 
+    def test_record_again(self):
+        """A video done is recorded again into a new one next to it,
+        numbered from the name it was first given."""
+        window = self.window()
+        self.playing(window)
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
+            self.stretch(window, "1:00", "again")
+            job = window.jobs[0]
+            self.assertTrue(wait_until(lambda: job["status"] == "done", 30))
+            for numbered in ("again (2).mp4", "again (3).mp4"):
+                window.queue.clearSelection()
+                window.record_jobs_again()
+                self.assertEqual(job["status"], "done")
+                job["item"].setSelected(True)
+                window.record_jobs_again()
+                self.assertIn(job["status"], ("waiting", "recording"))
+                self.assertTrue(wait_until(lambda: job["status"] == "done", 30), job["item"].text(2))
+                self.assertEqual(os.path.basename(job["output"]), numbered)
+                self.assertEqual(self.labels(window), [numbered])
+        self.assertEqual(sorted(os.listdir(self.videos)), ["again (2).mp4", "again (3).mp4", "again.mp4"])
+        self.assertEqual(self.video("again (3).mp4")["start"], 60000)
+
     def test_pause_recording(self):
         """A video paused while it records keeps its clips made, and goes on
         from the next one when it's resumed."""
