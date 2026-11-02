@@ -260,6 +260,112 @@ void CL_ReadNonPVSClient(int radarInfo) {
 
 /*
 ================
+CL_DemoFollowedHits
+
+Added in OPM
+With cg_followcamera 2, a demo shows the player the recorder follows from
+their eyes, but it only has their health (STAT_INFOCLIENT_HEALTH), not the
+view kick and red flash of their hits, nor where they came from: those are
+made again from their health dropping, as the server makes them
+(Player::DamageFeedback: a kick of 0.3 degree per point, an alpha of 0.001
+per point, at least 0.2 and at most 0.6), and shown with their health
+(CL_DemoShowFollowed). Hits are taken as from the front.
+================
+*/
+typedef struct {
+	int		messageNum;
+	qboolean	followed;
+	int		health;
+	float	alpha;
+	vec3_t	angles;
+} demoFollowedHits_t;
+
+static demoFollowedHits_t cl_demoFollowedHits[PACKET_BACKUP];
+static struct {
+	int		client; // -1 when not followed from their eyes
+	int		health;
+	int		serverTime;
+	float	alpha;
+	vec3_t	angles;
+} cl_demoHits = { -1 };
+
+static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
+	demoFollowedHits_t	*hits = &cl_demoFollowedHits[snap->messageNum & PACKET_MASK];
+	int					client = snap->ps.stats[STAT_INFOCLIENT];
+	int					health = snap->ps.stats[STAT_INFOCLIENT_HEALTH];
+	int					damage, frames, i;
+	qboolean			body = qfalse;
+
+	hits->messageNum = snap->messageNum;
+	hits->followed = qfalse;
+	if ( clc.demoplaying && Cvar_VariableIntegerValue( "cg_followcamera" ) == 2
+		&& ( snap->ps.pm_flags & PMF_CAMERA_VIEW ) && client >= 0 && client < MAX_CLIENTS ) {
+		// as cgame does, when their entity is in it
+		for ( i = 0; i < snap->numEntities && !body; i++ ) {
+			body = cl.parseEntities[( snap->parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 )].number == client;
+		}
+	}
+	if ( !body ) {
+		cl_demoHits.client = -1;
+		return;
+	}
+
+	if ( client != cl_demoHits.client || snap->serverTime < cl_demoHits.serverTime
+		|| snap->serverTime - cl_demoHits.serverTime > 1000 ) {
+		// someone else, or a jump: nothing going on
+		cl_demoHits.alpha = 0;
+		VectorClear( cl_demoHits.angles );
+	} else {
+		// fading, a server frame (50 msec) at a time
+		frames = ( snap->serverTime - cl_demoHits.serverTime ) / 50;
+		for ( i = 0; i < frames; i++ ) {
+			VectorScale( cl_demoHits.angles, 0.8f, cl_demoHits.angles );
+		}
+		cl_demoHits.alpha = Q_max( cl_demoHits.alpha - 0.06f * frames, 0.f );
+
+		damage = cl_demoHits.health - health;
+		if ( damage > 0 && health > 0 ) {
+			cl_demoHits.angles[PITCH] = Q_min( cl_demoHits.angles[PITCH] + damage * 0.3f, 30.f );
+			cl_demoHits.alpha = Q_bound( 0.2f, cl_demoHits.alpha + Q_max( damage, 10 ) * 0.001f, 0.6f );
+		}
+	}
+	cl_demoHits.client = client;
+	cl_demoHits.health = health;
+	cl_demoHits.serverTime = snap->serverTime;
+
+	hits->followed = qtrue;
+	hits->health = health;
+	hits->alpha = cl_demoHits.alpha;
+	VectorCopy( cl_demoHits.angles, hits->angles );
+}
+
+/*
+================
+CL_DemoShowFollowed
+
+Added in OPM
+A demo's snapshot, as shown, with the health and hits of the player followed
+from their eyes (CL_DemoFollowedHits); the snapshots kept stay as they came,
+as the next ones build on them
+================
+*/
+void CL_DemoShowFollowed( playerState_t *ps, int messageNum ) {
+	const demoFollowedHits_t *hits = &cl_demoFollowedHits[messageNum & PACKET_MASK];
+
+	if ( hits->messageNum != messageNum || !hits->followed ) {
+		return;
+	}
+	ps->stats[STAT_HEALTH] = hits->health;
+	VectorCopy( hits->angles, ps->damage_angles );
+	if ( hits->alpha > 0 ) {
+		ps->blend[0] = 1;
+		ps->blend[1] = ps->blend[2] = 0;
+		ps->blend[3] = hits->alpha;
+	}
+}
+
+/*
+================
 CL_ParseSnapshot
 
 If the snapshot is parsed properly, it will be copied to
@@ -386,6 +492,9 @@ void CL_ParseSnapshot( msg_t *msg ) {
 		newSnap.vmAnimTime = newSnap.serverTime;
 	}
 
+	// Added in OPM
+	CL_DemoFollowedHits( &newSnap );
+
 	// copy to the current good spot
 	cl.snap = newSnap;
 	cl.snap.ping = 999;
@@ -399,6 +508,9 @@ void CL_ParseSnapshot( msg_t *msg ) {
 	}
 	// save the frame off in the backup array for later delta comparisons
 	cl.snapshots[cl.snap.messageNum & PACKET_MASK] = cl.snap;
+	// Added in OPM
+	//  as shown (the HUD), the one kept as it came
+	CL_DemoShowFollowed( &cl.snap.ps, cl.snap.messageNum );
 
 	if (cl_shownet->integer == 3) {
 		Com_Printf( "   snapshot:%i  delta:%i  ping:%i\n", cl.snap.messageNum,

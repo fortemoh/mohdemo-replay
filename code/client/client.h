@@ -657,6 +657,8 @@ void CL_Voip_f( void );
 
 void CL_SystemInfoChanged( void );
 void CL_ParseServerMessage( msg_t *msg );
+// Added in OPM
+void CL_DemoShowFollowed( playerState_t *ps, int messageNum );
 
 int		CL_MSG_ReadBits( int bits );
 int		CL_MSG_ReadChar( void );

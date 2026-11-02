@@ -217,7 +217,10 @@ they are, look, crouch and zoom are theirs in the demo, and their arms and
 gun are drawn from the gun in their hand, firing, rechambering and
 reloading as it does, with their lean from their body (their ammo isn't in
 the demo), and their frags show "You killed <victim>", which the server told
-only them. In a demo, a player leaning where their eye would face a wall
+only them. The HUD shows their health, and their hits kick their view and
+flash the screen red as they did for them, made again from their health
+dropping (the demo doesn't have them for a player followed; hits are taken
+as from the front). In a demo, a player leaning where their eye would face a wall
 right in front of it, as next to a window, sees from where they stand
 instead, as their own game showed them (the server fires from where their
 game puts the eye, and the demo has the start of each shot). The other way, `cg_recordercamera 1` shows the recorder from

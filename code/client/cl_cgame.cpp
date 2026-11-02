@@ -202,6 +202,7 @@ qboolean	CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
 	snapshot->ps = clSnap->ps;
 	// Added in OPM
 	snapshot->vmAnimTime = clSnap->vmAnimTime;
+	CL_DemoShowFollowed( &snapshot->ps, snapshotNumber );
 
 	// wombat: sounds
 	count = clSnap->number_of_sounds;
