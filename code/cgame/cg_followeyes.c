@@ -63,7 +63,9 @@ static const struct {
     int         vmAnim;
 } gunAnims[] = {
     {"fire",           VM_ANIM_FIRE          },
+    {"fire_empty",     VM_ANIM_FIRE          },
     {"fire_secondary", VM_ANIM_FIRE_SECONDARY},
+    {"secondaryfire",  VM_ANIM_FIRE_SECONDARY},
     {"charge",         VM_ANIM_CHARGE        },
     {"rechamber",      VM_ANIM_RECHAMBER     },
     {"reload",         VM_ANIM_RELOAD        },
@@ -73,6 +75,9 @@ static const struct {
 
 // how long a weapon taken out is shown being taken out, in msec
 #define FOLLOWED_PULLOUT_TIME 700
+
+// the gun's animation (followed.gunAnim) while the player bashes with it
+#define FOLLOWED_BASH -2
 
 // what was made of the snapshots before, to tell what changes
 static struct {
@@ -109,6 +114,24 @@ static const followedWeapon_t *CG_FollowedWeapon(int modelindex)
 
 /*
 ===============
+CG_FollowedBodyTiki
+
+The model of the body of the player followed, or the default one when
+theirs isn't in the game files: all have the same skeleton and animations
+===============
+*/
+static dtiki_t *CG_FollowedBodyTiki(const entityState_t *body)
+{
+    dtiki_t *tiki = cgi.R_Model_GetHandle(cgs.model_draw[body->modelindex]);
+
+    if (!tiki) {
+        tiki = cgi.R_Model_GetHandle(cgi.R_RegisterModel(va("models/player/%s.tik", dm_playermodel->resetString)));
+    }
+    return tiki;
+}
+
+/*
+===============
 CG_FollowedGun
 
 Whether es is a gun in the hand of the player whose body is body
@@ -123,12 +146,7 @@ static qboolean CG_FollowedGun(const entityState_t *es, const entityState_t *bod
         return qfalse;
     }
 
-    // their model, or the default one when theirs isn't in the game files:
-    // all have the same skeleton
-    tiki = cgi.R_Model_GetHandle(cgs.model_draw[body->modelindex]);
-    if (!tiki) {
-        tiki = cgi.R_Model_GetHandle(cgi.R_RegisterModel(va("models/player/%s.tik", dm_playermodel->resetString)));
-    }
+    tiki = CG_FollowedBodyTiki(body);
     if (!tiki) {
         return qfalse;
     }
@@ -171,6 +189,33 @@ static int CG_FollowedGunAnim(const entityState_t *gun, int *anim, float *time)
         }
     }
     return VM_ANIM_IDLE;
+}
+
+/*
+===============
+CG_FollowedBash
+
+Whether the player followed bashes with their gun (pistol_butt), and how
+long ago it began (time): their body shows it, with the same animation as
+the first person one, but their gun only for its first snapshot
+===============
+*/
+static qboolean CG_FollowedBash(const entityState_t *body, float *time)
+{
+    dtiki_t    *tiki = CG_FollowedBodyTiki(body);
+    const char *name;
+    int         i;
+
+    for (i = 0; tiki && i < MAX_FRAMEINFOS; i++) {
+        if (body->frameInfo[i].weight > 0) {
+            name = cgi.Anim_NameForNum(tiki, body->frameInfo[i].index);
+            if (name && strstr(name, "_butt")) {
+                *time = body->frameInfo[i].time;
+                return qtrue;
+            }
+        }
+    }
+    return qfalse;
 }
 
 /*
@@ -322,6 +367,10 @@ void CG_FollowFromEyes(snapshot_t *snap)
         ps->activeItems[1]              = item;
 
         vmAnim = CG_FollowedGunAnim(gun, &anim, &time);
+        if (CG_FollowedBash(body, &time)) {
+            vmAnim = VM_ANIM_FIRE_SECONDARY;
+            anim   = FOLLOWED_BASH;
+        }
         if (gun->modelindex != followed.gunModel && followed.gunAnim < 0 && !followed.vmAnimChanged) {
             // the weapon they have as following them begins (a clip, a seek):
             // doing what it does, from when it began, as the end of a reload
