@@ -281,8 +281,11 @@ void CG_FollowFromEyes(snapshot_t *snap)
         }
     }
 
-    // another player, or back in time (a seek): nothing to go on from
-    if (client != followed.client || snap->serverTime < followed.serverTime) {
+    // another player, back in time or a jump (a seek, the next clip of
+    // demoonly, a new round or demo, as CG_ProcessSnapshots tells): nothing to
+    // go on from
+    if (client != followed.client || snap->serverTime < followed.serverTime || !cg.snap
+        || cg.snap->serverTime <= cgi.GetServerStartTime()) {
         memset(&followed, 0, sizeof(followed));
         followed.client  = client;
         followed.gunAnim = -1;
