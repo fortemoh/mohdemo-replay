@@ -199,6 +199,27 @@ def censored_words(settings):
     return " ".join(w for w in re.split(r"[\s,]+", settings.value("censor_words", CENSOR_WORDS) or "") if w)
 
 
+# where the camera is for a demo's recorder and for the player they follow:
+# {key: (label, cg_recordercamera or cg_followcamera)}, the first the default
+RECORDER_CAMERAS = {"eyes": ("In their eyes", "0"), "behind": ("Behind them", "1")}
+FOLLOWED_CAMERAS = {"behind": ("Behind them", "1"), "eyes": ("In their eyes", "2"),
+                    "server": ("As the server shows them", "0")}
+
+
+def cameras(settings):
+    """The cameras chosen, [recorder's, followed player's], keys of
+    RECORDER_CAMERAS and FOLLOWED_CAMERAS."""
+    recorder = settings.value("camera_recorder", "eyes")
+    followed = settings.value("camera_followed", "behind")
+    return [recorder if recorder in RECORDER_CAMERAS else "eyes",
+            followed if followed in FOLLOWED_CAMERAS else "behind"]
+
+
+def camera_cvars(chosen):
+    """The game's settings for cameras chosen (cameras())."""
+    return [("cg_recordercamera", RECORDER_CAMERAS[chosen[0]][1]), ("cg_followcamera", FOLLOWED_CAMERAS[chosen[1]][1])]
+
+
 def followed_models(settings):
     """The models chosen for the player followed when they're allies, and
     axis: "" for theirs."""
@@ -808,10 +829,11 @@ class Game:
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
     def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None,
-              kill_before=None, kill_after=None, videos=None, followed=("", ""), censor=""):
+              kill_before=None, kill_after=None, videos=None, followed=("", ""), censor="", camera=("eyes", "behind")):
         """videos: the folder its videos go to, instead of its home; followed:
         the models of the player followed when allies and axis, "" for
-        theirs; censor: the words starred out (cl_censor)."""
+        theirs; censor: the words starred out (cl_censor); camera: the
+        cameras (cameras())."""
         self.cleanup()
         self.game = game
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
@@ -849,6 +871,7 @@ class Game:
                      *(arg for cvar, model in zip(("cg_followedModel", "cg_followedGermanModel"), followed) if model
                        for arg in ("+set", cvar, model)),
                      *(("+set", "cl_censor", censor) if censor else ()),
+                     *(arg for cvar, value in camera_cvars(camera) for arg in ("+set", cvar, value)),
                      "+set", "cl_demoKillBefore", kb,
                      "+set", "cl_demoKillAfter", ka,
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "0",
@@ -1262,6 +1285,7 @@ def video_settings(settings):
             "forcemodel": "1" if is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))) else "0",
             "followed": followed_models(settings),
             "censor": censored_words(settings),
+            "camera": cameras(settings),
             "ffmpeg": settings.value("rec/ffmpeg", "").strip() or find_ffmpeg()}
 
 
@@ -1285,6 +1309,10 @@ def video_summary(settings):
         parts.append(f"the player followed as {allies or 'theirs'} / {axis or 'theirs'}")
     if censored_words(settings):
         parts.append("words censored")
+    recorder, followed = cameras(settings)
+    if (recorder, followed) != ("eyes", "behind"):
+        parts.append(f"the recorder {RECORDER_CAMERAS[recorder][0].lower()}, "
+                     f"the player followed {FOLLOWED_CAMERAS[followed][0].lower()}")
     return ", ".join(parts)
 
 
@@ -1947,7 +1975,8 @@ class Recorder(QObject):
                         viewmodel=viewmodel, forcemodel=forcemodel,
                         kill_before=kill_before, kill_after=kill_after, videos=self.parts_dir,
                         followed=job.get("followed", followed_models(settings)),
-                        censor=job.get("censor", censored_words(settings)))
+                        censor=job.get("censor", censored_words(settings)),
+                        camera=job.get("camera", cameras(settings)))
 
     def start(self):
         job = self.job
@@ -2495,6 +2524,13 @@ class Window(QMainWindow):
         self.followed_button.menu().aboutToShow.connect(self.fill_followed_menu)
         self.show_followed()
         toolbar.addWidget(self.followed_button)
+        self.camera_button = QToolButton()
+        self.camera_button.setText("Camera")
+        self.camera_button.setPopupMode(QToolButton.InstantPopup)
+        self.camera_button.setMenu(QMenu(self.camera_button))
+        self.camera_button.menu().aboutToShow.connect(self.fill_camera_menu)
+        self.show_camera()
+        toolbar.addWidget(self.camera_button)
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         toolbar.addWidget(spacer)
@@ -2627,6 +2663,40 @@ class Window(QMainWindow):
         self.show_followed()
         self.statusBar().showMessage(f"The player followed: {allies or 'theirs'} / {axis or 'theirs'}", 3000)
 
+    def fill_camera_menu(self):
+        """Where the camera is for the recorder and for the player followed,
+        the one chosen checked."""
+        menu = self.camera_button.menu()
+        menu.clear()
+        recorder, followed = cameras(self.settings)
+        for title, key, choices, chosen in (("Recorder", "camera_recorder", RECORDER_CAMERAS, recorder),
+                                            ("Player followed", "camera_followed", FOLLOWED_CAMERAS, followed)):
+            menu.addSection(title)
+            group = QActionGroup(menu)
+            for choice, (label, _) in choices.items():
+                action = menu.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(choice == chosen)
+                group.addAction(action)
+                action.triggered.connect(lambda _=False, key=key, choice=choice: self.choose_camera(key, choice))
+
+    def choose_camera(self, key, choice):
+        self.settings.setValue(key, choice)
+        if self.game.running():
+            self.game.send(*(f"set {cvar} {value}" for cvar, value in camera_cvars(cameras(self.settings))))
+        self.show_camera()
+        recorder, followed = cameras(self.settings)
+        self.statusBar().showMessage(f"The recorder {RECORDER_CAMERAS[recorder][0].lower()}, the player followed "
+                                     f"{FOLLOWED_CAMERAS[followed][0].lower()}", 3000)
+
+    def show_camera(self):
+        recorder, followed = cameras(self.settings)
+        self.camera_button.setToolTip(
+            "Where the camera is, in videos too: for the recorder, in their eyes as recorded or behind them as when "
+            "following a player; for the player they follow, behind them, in their eyes (made from their gun and "
+            f"body, as their own view isn't recorded) or as the server showed them. Now: the recorder "
+            f"{RECORDER_CAMERAS[recorder][0].lower()}, the player followed {FOLLOWED_CAMERAS[followed][0].lower()}")
+
     def show_followed(self):
         allies, axis = followed_models(self.settings)
         self.followed_button.setToolTip("The models of the player you spectate, and only them, when they're allies "
@@ -2684,7 +2754,8 @@ class Window(QMainWindow):
         ka = self.settings.value("kill_after", "2.0")
         self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height,
                         viewmodel=vm, forcemodel=fm, kill_before=kb, kill_after=ka,
-                        followed=followed_models(self.settings), censor=censored_words(self.settings))
+                        followed=followed_models(self.settings), censor=censored_words(self.settings),
+                        camera=cameras(self.settings))
         self.statusBar().showMessage("Starting the game…")
         if self.pending_demo:
             self.game.send("demo " + quoted(self.pending_demo))

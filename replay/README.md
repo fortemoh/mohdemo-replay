@@ -201,7 +201,14 @@ clip starts no earlier than the level and ends with it.
 While the recorder follows a player, most servers with the 1.12 Reborn patch
 put the camera in that player's head, where their own arms and gun are in
 the way. `cg_followcamera 1` (the default) puts it behind them, where stock
-servers do; `cg_followcamera 0` shows it as recorded.
+servers do; `cg_followcamera 0` shows it as recorded; `cg_followcamera 2`
+shows them from their own eyes, as if they had recorded the demo: where
+they are, look, crouch and zoom are theirs in the demo, and their arms and
+gun are drawn from the gun in their hand, firing, rechambering and
+reloading as it does, with their lean from their body (their ammo isn't in
+the demo). The other way, `cg_recordercamera 1` shows the recorder from
+behind while they play, where the camera following a player is. Camera, in
+the toolbar, chooses both, for videos too.
 
 Demos don't show the server's messages about players coming and going
 ("<player> has entered the battle", which it tells everyone each time a

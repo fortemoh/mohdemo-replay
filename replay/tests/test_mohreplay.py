@@ -829,6 +829,28 @@ class TestWindow(FakeGameCase):
         self.assertEqual(mohreplay.video_summary(self.settings).split(", ")[-2],
                          "the player followed as my_own / allied_pilot")
 
+    def test_camera_menu(self):
+        """Where the camera is for the recorder and for the player followed,
+        set in the game at once and kept."""
+        window = self.window()
+        self.playing(window)
+        window.fill_camera_menu()
+        actions = window.camera_button.menu().actions()
+        self.assertEqual([(a.text(), a.isChecked()) for a in actions],
+                         [("Recorder", False), ("In their eyes", True), ("Behind them", False),
+                          ("Player followed", False), ("Behind them", True), ("In their eyes", False),
+                          ("As the server shows them", False)])
+        actions[2].trigger()
+        actions[5].trigger()
+        self.assertEqual(mohreplay.cameras(self.settings), ["behind", "eyes"])
+        self.assertTrue(wait_until(lambda: "set cg_followcamera 2" in self.commands(window.game)))
+        self.assertIn("set cg_recordercamera 1", self.commands(window.game))
+        self.assertIn("Now: the recorder behind them, the player followed in their eyes",
+                      window.camera_button.toolTip())
+        self.assertEqual(mohreplay.video_summary(self.settings).split(", ")[-2:],
+                         ["the recorder behind them", "the player followed in their eyes"])
+        self.assertEqual(mohreplay.cameras(self.window().settings), ["behind", "eyes"])
+
     def test_choose_folder(self):
         window = self.window()
         self.assertEqual(window.folder_action.text(), "demos")
@@ -2332,6 +2354,21 @@ class TestRecording(FakeGameCase):
         third = self.window()
         self.assertTrue(third.keeps_queue)
         self.assertEqual(self.labels(third), ["first.mp4"])
+
+    def test_cameras_recorded(self):
+        """A video has the cameras chosen when it was queued; by default, the
+        recorder in their eyes and the player followed behind them."""
+        window = self.window()
+        self.playing(window)
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
+            self.stretch(window, "1:00", "default")
+            self.settings.setValue("camera_recorder", "behind")
+            self.settings.setValue("camera_followed", "eyes")
+            self.stretch(window, "1:10", "chosen")
+            window.choose_camera("camera_followed", "server")
+            self.done(window, 2)
+        cvars = [self.video(name)["cvars"] for name in ("default.mp4", "chosen.mp4")]
+        self.assertEqual([(c["cg_recordercamera"], c["cg_followcamera"]) for c in cvars], [("0", "1"), ("1", "2")])
 
     def test_followed_models_recorded(self):
         """A video has the models of the player followed chosen when it was
