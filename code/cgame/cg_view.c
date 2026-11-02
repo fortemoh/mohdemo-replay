@@ -287,6 +287,63 @@ static void CG_ApplyViewBob(vec3_t origin, const vec3_t vVelocity, const vec3_t 
 
 /*
 ===============
+CG_DemoLeanedEye
+
+Added in OPM
+  Where a demo's player looks from while leaning (leaned, their eye
+  otherwise): their game kept the eye unleaned when leaning would have put
+  it in front of a wall (closer than 16 units) that the eye unleaned doesn't
+  face (64 units or more), as where their shots start shows (the server
+  fires from the eye their game gives); a change takes 150 ms
+===============
+*/
+static void CG_DemoLeanedEye(const vec3_t eye, vec3_t leaned)
+{
+    static float fLeaned = 1; // how much of the lean moves the eye
+    static int   iLastTime;
+    vec3_t       vForward, vEnd;
+    trace_t      trace;
+    float        fTarget, fStep;
+
+    if (!cg.demoPlayback) {
+        return;
+    }
+
+    fTarget = 1;
+    AngleVectors(cg.refdefViewAngles, vForward, NULL, NULL);
+    VectorMA(leaned, 16, vForward, vEnd);
+    CG_Trace(
+        &trace, leaned, vec3_origin, vec3_origin, vEnd, cg.snap->ps.clientNum, MASK_PLAYERSOLID, qfalse, qfalse,
+        "Demo Lean Front Check"
+    );
+    if (trace.fraction < 1) {
+        VectorMA(eye, 64, vForward, vEnd);
+        CG_Trace(
+            &trace, eye, vec3_origin, vec3_origin, vEnd, cg.snap->ps.clientNum, MASK_PLAYERSOLID, qfalse, qfalse,
+            "Demo Lean Front Check"
+        );
+        if (trace.fraction == 1) {
+            fTarget = 0;
+        }
+    }
+
+    fStep     = (cg.time - iLastTime) / 150.f;
+    iLastTime = cg.time;
+    if (fStep < 0 || fStep >= 1) {
+        // a jump
+        fLeaned = fTarget;
+    } else if (fLeaned < fTarget) {
+        fLeaned = Q_min(fLeaned + fStep, fTarget);
+    } else {
+        fLeaned = Q_max(fLeaned - fStep, fTarget);
+    }
+
+    VectorSubtract(leaned, eye, vEnd);
+    VectorMA(eye, fLeaned, vEnd, leaned);
+}
+
+/*
+===============
 CG_OffsetFirstPersonView
 
 ===============
@@ -452,7 +509,10 @@ void CG_OffsetFirstPersonView(refEntity_t *pREnt, qboolean bUseWorldPosition)
 
             VectorSubtract(origin, vStart, vDelta);
             RotatePointAroundVector(vEnd, vForward, vDelta, cg.predicted_player_state.fLeanAngle);
-            VectorAdd(vStart, vEnd, origin);
+            // Added in OPM
+            VectorAdd(vStart, vEnd, vEnd);
+            CG_DemoLeanedEye(origin, vEnd);
+            VectorCopy(vEnd, origin);
         }
 
         CG_ApplyViewBob(origin, vVelocity, vLeft);

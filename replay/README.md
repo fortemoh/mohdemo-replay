@@ -207,7 +207,10 @@ they are, look, crouch and zoom are theirs in the demo, and their arms and
 gun are drawn from the gun in their hand, firing, rechambering and
 reloading as it does, with their lean from their body (their ammo isn't in
 the demo), and their frags show "You killed <victim>", which the server told
-only them. The other way, `cg_recordercamera 1` shows the recorder from
+only them. In a demo, a player leaning where their eye would face a wall
+right in front of it, as next to a window, sees from where they stand
+instead, as their own game showed them (the server fires from where their
+game puts the eye, and the demo has the start of each shot). The other way, `cg_recordercamera 1` shows the recorder from
 behind while they play, where the camera following a player is. Camera, in
 the toolbar, chooses both, for videos too.
 
