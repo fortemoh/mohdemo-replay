@@ -1353,6 +1353,12 @@ void CG_DrawCrosshair()
         return;
     }
 
+    // Added in OPM
+    //  Not from behind the recorder, as not from behind a player followed
+    if (CG_RecorderBehind()) {
+        return;
+    }
+
     cgi.R_SetColor(NULL);
     cgi.R_DrawBoxes(crosshairLayout.arms, 4, crosshairLayout.color);
 }

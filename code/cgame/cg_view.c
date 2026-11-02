@@ -629,10 +629,12 @@ Added in OPM
   their entity (their lean): 56 units behind their eyes and 24 above, moved
   aside when they lean, pulled in by walls and looking 2 degrees lower, as
   Player::GetSpectateFollowOrientation does with the default
-  g_spectatefollow_ values
+  g_spectatefollow_ values; client is theirs
 ===============
 */
-static void CG_StockFollowCameraAt(const playerState_t *ps, const entityState_t *es, vec3_t origin, vec3_t angles)
+static void CG_StockFollowCameraAt(
+    const playerState_t *ps, const entityState_t *es, int client, vec3_t origin, vec3_t angles
+)
 {
     static const vec3_t mins = {-2, -2, 2};
     static const vec3_t maxs = {2, 2, 2};
@@ -668,7 +670,7 @@ static void CG_StockFollowCameraAt(const playerState_t *ps, const entityState_t 
     VectorCopy(ps->origin, start);
     start[2] += top - 2;
 
-    CG_Trace(&trace, start, mins, maxs, end, ps->stats[STAT_INFOCLIENT], MASK_SHOT, qfalse, qtrue, "CG_StockFollowCameraAt");
+    CG_Trace(&trace, start, mins, maxs, end, client, MASK_SHOT, qfalse, qtrue, "CG_StockFollowCameraAt");
 
     angles[PITCH] += 2 * trace.fraction;
     VectorCopy(trace.endpos, origin);
@@ -700,7 +702,7 @@ static void CG_StockFollowCamera(void)
     cent   = &cg_entities[client];
 
     CG_StockFollowCameraAt(
-        &cg.snap->ps, cent->currentValid ? &cent->currentState : NULL, cg.camera_origin, cg.camera_angles
+        &cg.snap->ps, cent->currentValid ? &cent->currentState : NULL, client, cg.camera_origin, cg.camera_angles
     );
 
     // interpolate it like a camera from the server
@@ -714,7 +716,11 @@ static void CG_StockFollowCamera(void)
     }
 
     CG_StockFollowCameraAt(
-        next, cent->interpolate ? &cent->nextState : (cent->currentValid ? &cent->currentState : NULL), origin, angles
+        next,
+        cent->interpolate ? &cent->nextState : (cent->currentValid ? &cent->currentState : NULL),
+        client,
+        origin,
+        angles
     );
 
     f = (float)(cg.time - cg.snap->serverTime) / (cg.nextSnap->serverTime - cg.snap->serverTime);
@@ -722,6 +728,22 @@ static void CG_StockFollowCamera(void)
         cg.camera_origin[i] += f * (origin[i] - cg.camera_origin[i]);
         cg.camera_angles[i] = LerpAngle(cg.camera_angles[i], angles[i], f);
     }
+}
+
+/*
+===============
+CG_RecorderBehind
+
+Added in OPM
+  Whether a demo shows its recorder from behind, where the camera that
+  follows a player is (cg_recordercamera), while they play: not while they
+  follow someone or look around
+===============
+*/
+qboolean CG_RecorderBehind(void)
+{
+    return cg_recordercamera->integer && cg.demoPlayback && cg.snap
+        && !(cg.snap->ps.pm_flags & (PMF_SPECTATING | PMF_CAMERA_VIEW));
 }
 
 /*
@@ -824,7 +846,13 @@ static int CG_CalcViewValues(void)
     // decide on third person view
     cg.renderingThirdPerson = cg_3rd_person->integer;
 
-    if (cg.renderingThirdPerson) {
+    // Added in OPM
+    if (CG_RecorderBehind()) {
+        cg.renderingThirdPerson = qtrue;
+        CG_StockFollowCameraAt(
+            ps, &cg_entities[ps->clientNum].currentState, ps->clientNum, cg.refdef.vieworg, cg.refdefViewAngles
+        );
+    } else if (cg.renderingThirdPerson) {
         // back away from character
         CG_OffsetThirdPersonView();
     }

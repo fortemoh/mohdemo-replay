@@ -1060,6 +1060,9 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     s1 = &cent->currentState;
 
     bThirdPerson |= cg_3rd_person->integer ? qtrue : qfalse;
+    // Added in OPM
+    //  The recorder seen from behind
+    bThirdPerson |= CG_RecorderBehind();
     // Fixed in OPM
     //  Draw world model body when in camera
     bThirdPerson |= (cg.snap->ps.pm_flags & PMF_CAMERA_VIEW && !(cg.snap->ps.pm_flags & PMF_TURRET));

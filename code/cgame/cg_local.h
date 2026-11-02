@@ -534,6 +534,7 @@ extern "C" {
     extern cvar_t *cg_cheats;
     extern cvar_t *cg_followplayer;
     extern cvar_t *cg_followcamera;
+    extern cvar_t *cg_recordercamera;
     extern cvar_t *cg_followedModel;
     extern cvar_t *cg_followedGermanModel;
     extern cvar_t *cg_precache;
@@ -625,6 +626,8 @@ extern "C" {
 
     void CG_ZoomDown_f(void);
     void CG_ZoomUp_f(void);
+    // Added in OPM
+    qboolean CG_RecorderBehind(void);
 
     void  CG_EyePosition(vec3_t *o_vPos);
     void  CG_EyeOffset(vec3_t *o_vOfs);
