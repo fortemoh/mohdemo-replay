@@ -123,7 +123,12 @@ static qboolean CG_FollowedGun(const entityState_t *es, const entityState_t *bod
         return qfalse;
     }
 
+    // their model, or the default one when theirs isn't in the game files:
+    // all have the same skeleton
     tiki = cgi.R_Model_GetHandle(cgs.model_draw[body->modelindex]);
+    if (!tiki) {
+        tiki = cgi.R_Model_GetHandle(cgi.R_RegisterModel(va("models/player/%s.tik", dm_playermodel->resetString)));
+    }
     if (!tiki) {
         return qfalse;
     }
