@@ -319,10 +319,17 @@ void CG_FollowFromEyes(snapshot_t *snap)
         ps->activeItems[1]              = item;
 
         vmAnim = CG_FollowedGunAnim(gun, &anim, &time);
-        if (gun->modelindex != followed.gunModel) {
+        if (gun->modelindex != followed.gunModel && followed.gunAnim < 0 && !followed.vmAnimChanged) {
+            // the weapon they have as following them begins (a clip, a seek):
+            // doing what it does, from when it began, as the end of a reload
+            followed.gunModel   = gun->modelindex;
+            followed.vmAnim     = vmAnim;
+            followed.vmAnimTime = snap->serverTime - (int)(time * 1000);
+            followed.vmAnimChanged++;
+        } else if (gun->modelindex != followed.gunModel) {
             // another weapon, taken out
             followed.gunModel    = gun->modelindex;
-            followed.vmAnim      = followed.gunAnim < 0 && !followed.vmAnimChanged ? vmAnim : VM_ANIM_PULLOUT;
+            followed.vmAnim      = VM_ANIM_PULLOUT;
             followed.vmAnimTime  = snap->serverTime;
             followed.pulloutTime = snap->serverTime;
             followed.vmAnimChanged++;
