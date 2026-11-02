@@ -28,7 +28,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //  their entity and the gun in its hand, and the snapshot is made as if
 //  they had recorded it, so that the first person view draws them as it
 //  draws a recorder: their arms and gun, firing, rechambering and
-//  reloading as their gun does, and the scope.
+//  reloading as their gun does, bobbing as they walk, and the scope.
 
 #include "cg_local.h"
 
@@ -83,6 +83,7 @@ static struct {
     float gunAnimTime;
     int   vmAnim;
     int   vmAnimChanged;
+    int   vmAnimTime; // server time it began
     int   pulloutTime;
 } followed;
 
@@ -236,6 +237,9 @@ void CG_FollowFromEyes(snapshot_t *snap)
 
     ps->clientNum = client;
     ps->pm_flags &= ~(PMF_CAMERA_VIEW | PMF_SPECTATING);
+    // on the ground, as their entity is: the view and the gun bob as they walk
+    ps->groundEntityNum = body->groundEntityNum;
+    ps->walking         = body->groundEntityNum != ENTITYNUM_NONE;
     // the pelvis (bone controller 3) rolls by 0.8 times the lean
     ps->fLeanAngle               = AngleNormalize180(body->bone_angles[3][2]) / 0.8f;
     ps->stats[STAT_HEALTH]       = (body->eFlags & EF_DEAD) ? 0 : ps->stats[STAT_INFOCLIENT_HEALTH];
@@ -265,14 +269,18 @@ void CG_FollowFromEyes(snapshot_t *snap)
             // another weapon, taken out
             followed.gunModel    = gun->modelindex;
             followed.vmAnim      = followed.gunAnim < 0 && !followed.vmAnimChanged ? vmAnim : VM_ANIM_PULLOUT;
+            followed.vmAnimTime  = snap->serverTime;
             followed.pulloutTime = snap->serverTime;
             followed.vmAnimChanged++;
         } else if (anim != followed.gunAnim || time < followed.gunAnimTime) {
-            // the gun does something else, or again (a shot after a shot)
-            followed.vmAnim = vmAnim;
+            // the gun does something else, or again (a shot after a shot),
+            // from when it began
+            followed.vmAnim     = vmAnim;
+            followed.vmAnimTime = snap->serverTime - (int)(time * 1000);
             followed.vmAnimChanged++;
         } else if (followed.vmAnim == VM_ANIM_PULLOUT && snap->serverTime - followed.pulloutTime > FOLLOWED_PULLOUT_TIME) {
-            followed.vmAnim = VM_ANIM_IDLE;
+            followed.vmAnim     = VM_ANIM_IDLE;
+            followed.vmAnimTime = snap->serverTime;
             followed.vmAnimChanged++;
         }
         followed.gunAnim     = anim;
@@ -281,5 +289,8 @@ void CG_FollowFromEyes(snapshot_t *snap)
 
     ps->iViewModelAnim        = followed.vmAnim;
     ps->iViewModelAnimChanged = followed.vmAnimChanged & 3;
+    // as the client tells it from the snapshots before, which it doesn't
+    // for these
+    snap->vmAnimTime = followed.vmAnimTime;
     snap->snapFlags |= SNAPFLAG_FOLLOWED_FROM_EYES;
 }
