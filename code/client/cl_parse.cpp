@@ -1095,6 +1095,29 @@ void CL_ParseLocationprint( msg_t *msg ) {
 
 /*
 =====================
+CL_DemoHidesCenterPrint
+
+Added in OPM
+Whether a demo doesn't show this message in the middle of the screen: all but
+the round results ("Axis win!", in the languages seen), as the others are the
+server's welcome and ads, "Press fire to join the battle!" and warnings to the
+recorder
+=====================
+*/
+static qboolean CL_DemoHidesCenterPrint( const char *text ) {
+	static const char *const results[] = { "win!", "draw!", "gewinnen!", "Unentschieden!", "l'emporte", "Match nul" };
+	int i;
+
+	for ( i = 0; i < (int)ARRAY_LEN( results ); i++ ) {
+		if ( Q_stristr( text, results[i] ) ) {
+			return qfalse;
+		}
+	}
+	return qtrue;
+}
+
+/*
+=====================
 CL_ParseCenterprint
 =====================
 */
@@ -1102,6 +1125,12 @@ void CL_ParseCenterprint( msg_t *msg ) {
 	char *string;
 
 	string = MSG_ReadScrambledString( msg );
+
+	// Added in OPM
+	//  None in a demo but the round results, and none a seek goes over
+	if ( clc.demoplaying && ( clc.demoSeeking || CL_DemoHidesCenterPrint( string ) ) ) {
+		return;
+	}
 
 	// FIXME
 	UI_UpdateCenterPrint( string, 1.0 );

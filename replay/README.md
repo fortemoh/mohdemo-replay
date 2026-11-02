@@ -217,7 +217,12 @@ Allies or the Axis, is preparing for deployment), what the player picks
 up (ammo, health and weapons, the yellow messages), the bomb's messages
 (planted, defused, still set) or what the players write (their chat, with
 the words of voice commands and the server console's): they fill the
-message box; the frags' messages stay. After a jump, the message
+message box; the frags' messages stay. In the middle of the screen, only the
+round results show ("Axis win!", in the server's language): not the server's
+welcome ("Welcome <player>, have fun!") or ads, "Press fire to join the
+battle!" or the warnings to the recorder about being idle. Of the texts some
+servers add to the screen, their welcome and web addresses aren't shown,
+also while they're typed out letter by letter. After a jump, the message
 boxes start empty: the messages of the time jumped over aren't shown, nor
 those from before it.
 

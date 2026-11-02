@@ -1275,6 +1275,37 @@ void CG_MakeVehicleEffect(vec3_t i_vStart, vec3_t i_vEnd, vec3_t i_vDir)
     cgi.R_DebugLine(vFrom, trace.endpos, 1.0, 1.0, 1.0, 1.0);
 }
 
+/*
+===============
+CG_DemoHidesHudString
+
+Added in OPM
+Whether a demo doesn't show this text of the server's HUD elements: a welcome
+to the server or its web address, also while it's being typed out letter by
+letter
+===============
+*/
+static qboolean CG_DemoHidesHudString(const char *text)
+{
+    static const char *const words[] = {"welcome", "www.", "visit"};
+    size_t                   i, len;
+
+    if (!cg.demoPlayback) {
+        return qfalse;
+    }
+
+    while (*text == ' ') {
+        text++;
+    }
+    len = strlen(text);
+    for (i = 0; i < ARRAY_LEN(words); i++) {
+        if (Q_stristr(text, words[i]) || (len && len < strlen(words[i]) && !Q_stricmpn(text, words[i], len))) {
+            return qtrue;
+        }
+    }
+    return qfalse;
+}
+
 void CG_ParseCGMessage_ver_15()
 {
     int    i;
@@ -1607,6 +1638,10 @@ void CG_ParseCGMessage_ver_15()
             Q_strncpyz(
                 cgi.HudDrawElements[iInfo].string, cgi.MSG_ReadString(), sizeof(cgi.HudDrawElements[iInfo].string)
             );
+            // Added in OPM
+            if (CG_DemoHidesHudString(cgi.HudDrawElements[iInfo].string)) {
+                cgi.HudDrawElements[iInfo].string[0] = 0;
+            }
             break;
 
         case CGM_HUDDRAW_FONT:
@@ -2003,6 +2038,10 @@ void CG_ParseCGMessage_ver_6()
             Q_strncpyz(
                 cgi.HudDrawElements[iInfo].string, cgi.MSG_ReadString(), sizeof(cgi.HudDrawElements[iInfo].string)
             );
+            // Added in OPM
+            if (CG_DemoHidesHudString(cgi.HudDrawElements[iInfo].string)) {
+                cgi.HudDrawElements[iInfo].string[0] = 0;
+            }
             break;
 
         case CGM6_HUDDRAW_FONT:
