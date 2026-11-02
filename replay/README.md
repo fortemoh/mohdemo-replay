@@ -206,7 +206,8 @@ shows them from their own eyes, as if they had recorded the demo: where
 they are, look, crouch and zoom are theirs in the demo, and their arms and
 gun are drawn from the gun in their hand, firing, rechambering and
 reloading as it does, with their lean from their body (their ammo isn't in
-the demo). The other way, `cg_recordercamera 1` shows the recorder from
+the demo), and their frags show "You killed <victim>", which the server told
+only them. The other way, `cg_recordercamera 1` shows the recorder from
 behind while they play, where the camera following a player is. Camera, in
 the toolbar, chooses both, for videos too.
 

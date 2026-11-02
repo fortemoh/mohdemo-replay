@@ -636,6 +636,7 @@ extern "C" {
     //  set on a snapshot made as if the player followed recorded it
 #define SNAPFLAG_FOLLOWED_FROM_EYES 0x100
     void CG_FollowFromEyes(snapshot_t *snap);
+    void CG_FollowedKill(const char *text);
 
     void  CG_EyePosition(vec3_t *o_vPos);
     void  CG_EyeOffset(vec3_t *o_vOfs);

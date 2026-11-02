@@ -346,6 +346,8 @@ static void CG_ServerCommand(qboolean modelOnly)
 
     if (!strcmp(cmd, "print") || !strcmp(cmd, "hudprint")) {
         cgi.Printf("%s", cgi.Argv(1));
+        // Added in OPM
+        CG_FollowedKill(cgi.Argv(1));
         if (!strcmp(cmd, "hudprint")) {
             CG_HudPrint_f();
         }

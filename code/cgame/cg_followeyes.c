@@ -194,6 +194,55 @@ static int CG_FollowedWeaponItem(const char *name)
 
 /*
 ===============
+CG_FollowedKill
+
+Prints the "You killed <victim>" the server tells the killer only, for the
+player followed from their eyes, when a kill message (text) is theirs: it
+begins with the victim's name, and theirs comes after as a whole word (a
+teamkill too, not a suicide)
+===============
+*/
+void CG_FollowedKill(const char *text)
+{
+    char        killer[MAX_STRING_CHARS];
+    const char *name, *s;
+    size_t      len, best = 0;
+    int         i, victim = -1;
+
+    if (!cg.snap || !(cg.snap->snapFlags & SNAPFLAG_FOLLOWED_FROM_EYES) || text[0] != HUD_MESSAGE_CHAT_RED[0]) {
+        return;
+    }
+    text++;
+
+    for (i = 0; i < MAX_CLIENTS; i++) {
+        name = Info_ValueForKey(CG_ConfigString(CS_PLAYERS + i), "name");
+        len  = strlen(name);
+        if (len > best && !strncmp(text, name, len) && text[len] == ' ') {
+            best   = len;
+            victim = i;
+        }
+    }
+    if (victim < 0 || victim == cg.snap->ps.clientNum) {
+        return;
+    }
+
+    Q_strncpyz(killer, Info_ValueForKey(CG_ConfigString(CS_PLAYERS + cg.snap->ps.clientNum), "name"), sizeof(killer));
+    len = strlen(killer);
+    if (!len) {
+        return;
+    }
+    for (s = strstr(text + best, killer); s; s = strstr(s + 1, killer)) {
+        if (s[-1] == ' ' && !isalnum((unsigned char)s[len])) {
+            cgi.Printf(
+                HUD_MESSAGE_WHITE "You killed %s\n", Info_ValueForKey(CG_ConfigString(CS_PLAYERS + victim), "name")
+            );
+            return;
+        }
+    }
+}
+
+/*
+===============
 CG_FollowFromEyes
 
 Makes snap as if the player it follows had recorded it, with cg_followcamera
