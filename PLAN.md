@@ -108,7 +108,11 @@ taken for the game; CI now builds `main` for macOS too.
    players who left. A recording starts at the first full snapshot after the
    gamestate, so the commands in between are missing, sometimes with a
    player's name: those are learned from "X has entered the battle" and the
-   like, without client numbers.
+   like, without client numbers. The index names a player by who they are:
+   the name they have, but one who renames to the name of another player
+   (some take a teammate's name for fun) is still who they were, till they
+   leave; a kill by a name two players have is the one's in view. 126 of
+   the 38,173 kills of the test demos go to who made them that way.
 3. **Kill and follow queues (engine).** Done, from the index:
    - `demonextkill [player]`, `demoprevkill [player]`: to
      `cl_demoKillBefore` seconds (4) before the next or previous kill, by

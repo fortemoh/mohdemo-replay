@@ -134,9 +134,9 @@ static bool TestDemo(const char *demo, bool json)
             break;
         case DEMOEVENT_KILL:
             ok &= Check(demo, ev->text[0] != 0, "a kill has no message");
-            ok &= Check(demo, !ev->otherName[0] || !strncmp(ev->text, ev->otherName, strlen(ev->otherName)),
+            ok &= Check(demo, !ev->otherNameThen[0] || !strncmp(ev->text, ev->otherNameThen, strlen(ev->otherNameThen)),
                         "a kill message doesn't start with the victim");
-            ok &= Check(demo, !ev->name[0] || strstr(ev->text + strlen(ev->otherName), ev->name),
+            ok &= Check(demo, !ev->nameThen[0] || strstr(ev->text + strlen(ev->otherNameThen), ev->nameThen),
                         "a kill message doesn't have the killer");
             // whose kill is shown is looked up on its level, at its time at the latest
             later = false;

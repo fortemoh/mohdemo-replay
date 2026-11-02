@@ -59,8 +59,13 @@ typedef struct {
     int             time;   // msec from the demo's first snapshot
     int             client; // killer or watched player, -1 if none or unknown
     int             other;  // victim, -1 if unknown
+    // who they are (one who renames to another player's name is still who
+    // they were); for a kill, nameThen and otherNameThen are those the
+    // message has
     char            name[MAX_NAME_LENGTH];
     char            otherName[MAX_NAME_LENGTH];
+    char            nameThen[MAX_NAME_LENGTH];
+    char            otherNameThen[MAX_NAME_LENGTH];
     char            text[MAX_STRING_CHARS];
     // for a kill: the killer and the victim were last seen on the same team
     qboolean        teamKill;

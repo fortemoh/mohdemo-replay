@@ -34,7 +34,10 @@ Fragger, Victim and Weapon, under the filter, choose the frags, those of
 the demos listed and of the demo playing, each on its own or together:
 Fragger and Victim take parts of names, separated by commas, as the filter does
 (`pstn, tommeh` finds pstN's frags under any clan tag, and tommeh's), and
-their menus add the players of the demo playing; Weapon ticks sniper, rifle,
+their menus add the players of the demo playing. A player is who they are,
+not the name they take: one who renames to another player's name (as a
+team taking one player's name for fun) keeps their frags under their own,
+while one who just renames goes by the new name; Weapon ticks sniper, rifle,
 SMG, StG / BAR (the StG 44 and the BAR, which the game calls machine guns),
 shotgun, pistol, bazooka, melee (a hit with a gun's butt) or other, as the
 death messages tell (also the French, German, Spanish and Portuguese ones

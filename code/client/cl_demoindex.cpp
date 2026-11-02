@@ -102,6 +102,11 @@ typedef struct {
     diName_t knownNames[DI_KNOWN_NAMES];
     int      numKnownNames;
 
+    // who each player is, by name: the one they have, but a player who
+    // renames to the name of another one (some take a teammate's) is still
+    // who they were, till they leave
+    char joinedNames[MAX_CLIENTS][MAX_NAME_LENGTH];
+
     byte msgData[MAX_MSGLEN];
 } diParser_t;
 
@@ -288,6 +293,62 @@ static void DI_RememberName(diParser_t *p, const char *name, int client)
     known = &p->knownNames[p->numKnownNames++ % DI_KNOWN_NAMES];
     Q_strncpyz(known->name, name, sizeof(known->name));
     known->client = client;
+}
+
+/*
+===============
+DI_UpdateJoined
+
+Who a player is, now their info changed from having the name previous:
+one who left is no one; one who renamed is who their new name says, but
+when another player has it (or is known by it), they're still who they
+were
+===============
+*/
+static void DI_UpdateJoined(diParser_t *p, int client, const char *previous)
+{
+    char name[MAX_NAME_LENGTH];
+    char other[MAX_NAME_LENGTH];
+    int  i;
+
+    DI_PlayerName(p, client, name, sizeof(name));
+    if (!name[0]) {
+        p->joinedNames[client][0] = 0;
+        return;
+    }
+    if (p->joinedNames[client][0]) {
+        if (!strcmp(name, previous)) {
+            return;
+        }
+        for (i = 0; i < MAX_CLIENTS; i++) {
+            DI_PlayerName(p, i, other, sizeof(other));
+            if (i != client && (!strcmp(other, name) || !strcmp(p->joinedNames[i], name))) {
+                return;
+            }
+        }
+    }
+    Q_strncpyz(p->joinedNames[client], name, sizeof(p->joinedNames[client]));
+}
+
+/*
+===============
+DI_JoinedName
+
+Who a player is (DI_UpdateJoined) for name, if they still have it (not a
+player who left that slot); else name
+===============
+*/
+static void DI_JoinedName(diParser_t *p, int client, char *name, int size)
+{
+    char current[MAX_NAME_LENGTH];
+
+    if (client < 0 || client >= MAX_CLIENTS || !p->joinedNames[client][0]) {
+        return;
+    }
+    DI_PlayerName(p, client, current, sizeof(current));
+    if (!strcmp(current, name)) {
+        Q_strncpyz(name, p->joinedNames[client], size);
+    }
 }
 
 /*
@@ -693,6 +754,8 @@ static void DI_Print(diParser_t *p, const char *s)
             }
         }
         ev->teamKill = DI_IsTeamKill(p, ev->client, ev->other);
+        Q_strncpyz(ev->nameThen, ev->name, sizeof(ev->nameThen));
+        Q_strncpyz(ev->otherNameThen, ev->otherName, sizeof(ev->otherNameThen));
         ev->weapon   = DI_Weapon(text, afterVictim, afterKiller);
         ev->grenade  = ev->weapon == DEMOWEAPON_GRENADE;
         Q_strncpyz(ev->text, text, sizeof(ev->text));
@@ -723,6 +786,7 @@ static void DI_ServerCommand(diParser_t *p, const char *s)
 {
     char  buffer[BIG_INFO_STRING];
     char  joined[BIG_INFO_STRING];
+    char  previous[MAX_NAME_LENGTH];
     char *argv[MAX_STRING_TOKENS];
     int   argc;
     int   i;
@@ -761,8 +825,10 @@ static void DI_ServerCommand(diParser_t *p, const char *s)
             }
         }
         i = CPT_NormalizeConfigstring(atoi(argv[1]));
+        DI_PlayerName(p, i - CS_PLAYERS, previous, sizeof(previous));
         if (DI_SetConfigString(p, i, joined) && i >= CS_PLAYERS && i < CS_PLAYERS + MAX_CLIENTS) {
             DI_RememberPlayer(p, i - CS_PLAYERS);
+            DI_UpdateJoined(p, i - CS_PLAYERS, previous);
             if (!joined[0]) {
                 // left: whoever comes next in that slot isn't seen yet
                 p->teams[i - CS_PLAYERS] = TEAM_NONE;
@@ -792,7 +858,11 @@ static qboolean DI_ParseGamestate(diParser_t *p, msg_t *msg)
     const char   *s;
     size_t        len;
     int           cmd, i, csNum, newnum;
+    char          previous[MAX_CLIENTS][MAX_NAME_LENGTH];
 
+    for (i = 0; i < MAX_CLIENTS; i++) {
+        DI_PlayerName(p, i, previous[i], sizeof(previous[i]));
+    }
     memset(&p->gameState, 0, sizeof(p->gameState));
     memset(p->baselines, 0, sizeof(p->baselines));
     memset(p->teams, 0, sizeof(p->teams));
@@ -848,6 +918,8 @@ static qboolean DI_ParseGamestate(diParser_t *p, msg_t *msg)
 
     for (i = 0; i < MAX_CLIENTS; i++) {
         DI_RememberPlayer(p, i);
+        // players who came, left or renamed while the level loaded
+        DI_UpdateJoined(p, i, previous[i]);
     }
 
     ev = DI_AddEvent(p, DEMOEVENT_MAP);
@@ -1012,6 +1084,7 @@ static void DI_UpdateWatched(diParser_t *p)
     ev->client   = watched;
     ev->followed = watched >= 0 && (p->snap.ps.pm_flags & PMF_CAMERA_VIEW);
     DI_PlayerName(p, watched, ev->name, sizeof(ev->name));
+    DI_JoinedName(p, watched, ev->name, sizeof(ev->name));
 }
 
 /*
@@ -1208,6 +1281,41 @@ static void DI_SetKillAims(diParser_t *p, const diSnapshot_t *snap)
 
 /*
 ===============
+DI_SetKillPlayers
+
+The players of the kills waiting for snap, by who they are: a kill by the
+name of the player in view is theirs, also when someone else has that name
+(one who took it), as DI_SetKillAims takes it
+===============
+*/
+static void DI_SetKillPlayers(diParser_t *p, const diSnapshot_t *snap)
+{
+    demoEvent_t *ev;
+    char         name[MAX_NAME_LENGTH];
+    int          client = snap->valid ? DI_InView(p, &snap->ps) : -1;
+    int          i;
+
+    name[0] = 0;
+    if (client >= 0) {
+        DI_PlayerName(p, client, name, sizeof(name));
+    }
+
+    for (i = p->firstUntimed; i < p->index->numEvents; i++) {
+        ev = &p->index->events[i];
+        if (ev->type != DEMOEVENT_KILL) {
+            continue;
+        }
+        if (name[0] && ev->client != client && !strcmp(ev->name, name)) {
+            ev->client   = client;
+            ev->teamKill = DI_IsTeamKill(p, ev->client, ev->other);
+        }
+        DI_JoinedName(p, ev->client, ev->name, sizeof(ev->name));
+        DI_JoinedName(p, ev->other, ev->otherName, sizeof(ev->otherName));
+    }
+}
+
+/*
+===============
 DI_SetKillIdles
 
 The kills waiting for the next snapshot: how long their victim had given no
@@ -1300,6 +1408,7 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
     if (newSnap.valid) {
         DI_SetKillIdles(p);
     }
+    DI_SetKillPlayers(p, &newSnap);
     DI_SetEventTimes(p, newSnap.serverTime);
 
     if (!newSnap.valid) {
