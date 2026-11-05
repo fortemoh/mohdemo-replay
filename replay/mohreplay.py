@@ -311,12 +311,14 @@ def kill_streaks(index):
 def kill_specced(index):
     """Tells each kill of index whether its killer is the player the
     recorder follows as a spectator then, "specced", as the engine looks
-    them up (demofilter specced). Returns index."""
+    them up (demofilter specced), and whether it can be seen from behind a
+    killer not shown, "behind" (demofilter unshown). Returns index."""
     at = watching(index)
     for kill in index.get("kills", []):
         watch = at(kill["time"]) if kill["killerName"] else None
-        kill["specced"] = bool(watch and watch[0].get("followed")
-                               and is_shown(watch[0], kill["killer"], kill["killerName"]))
+        shown = bool(watch and is_shown(watch[0], kill["killer"], kill["killerName"]))
+        kill["specced"] = shown and bool(watch[0].get("followed"))
+        kill["behind"] = not shown and unshown_ok(kill)
     return index
 
 
@@ -375,8 +377,8 @@ class KillFilter:
     obj, great ones only if great (not slow snipes nor frags of AFK
     players), those of the players the recorder spectates only if specced,
     and also those of the killers while not shown, seen from behind them
-    (unshown_ok), if unshown, or only those, of anyone without killers, if
-    only_unshown.
+    (unshown_ok), if unshown (with specced: all but the recorder's own), or
+    only those, of anyone without killers, if only_unshown.
     Names are parts of names as the search takes its words, a * standing for
     any one character; none is anyone, no weapons any weapon. The game is
     told it with demofilter."""
@@ -388,7 +390,7 @@ class KillFilter:
         self.only_unshown = bool(only_unshown)
         self.obj = bool(obj)
         self.great = bool(great)
-        self.specced = bool(specced)
+        self.specced = bool(specced) and not only_unshown
         # as given, for the game and the labels; whoever is shown, or names
         self.names = [] if shown else [n.strip() for n in killers if clean_name(n)]
         self.victim_names = [n.strip() for n in victims if clean_name(n)]
@@ -411,9 +413,8 @@ class KillFilter:
 
     def adds_unshown(self):
         """Whether it has the kills of its killers while not shown, from
-        behind them, as demofilter unshown: not those of whoever is shown,
-        nor with specced, which only has the players followed."""
-        return self.unshown and not self.shown and not self.specced
+        behind them, as demofilter unshown: not those of whoever is shown."""
+        return self.unshown and not self.shown
 
     def just_unshown(self):
         """Whether it only has those, none made while their killer is shown."""
@@ -438,7 +439,8 @@ class KillFilter:
         the killer unless killer."""
         return ((not killer or self.has_killer(clean_name(kill["killerName"])))
                 and self.has(clean_name(kill.get("victimName", "")), weapon_of(kill), kill.get("level", ""),
-                             poor_frag(kill), kill.get("specced", False)))
+                             poor_frag(kill),
+                             kill.get("specced", False) or self.adds_unshown() and kill.get("behind", False)))
 
     def commands(self):
         """The demofilter commands telling it to the game."""
@@ -642,7 +644,8 @@ def filter_kills(summary, kill_filter):
     just_unshown = kill_filter.just_unshown()
     for name, killer, victim, weapon, shown, level, poor, specced, seen in summary.get("kills", []):
         kept = (not shown and seen) if just_unshown else (shown or not by_shown or unshown and seen)
-        if kept and kill_filter.has_killer(killer) and kill_filter.has(victim, weapon, level, poor, specced):
+        if (kept and kill_filter.has_killer(killer)
+                and kill_filter.has(victim, weapon, level, poor, specced or unshown and seen and not shown)):
             count += 1
             if name:
                 killers.setdefault(killer, [name, 0])[1] += 1
@@ -2411,18 +2414,19 @@ class Window(QMainWindow):
         self.great.toggled.connect(self.kill_filter_timer.start)
         self.specced = QCheckBox("Specced frags")
         self.specced.setToolTip("Only the frags of the players the recorder spectated, while they followed them, "
-                                "not the recorder's own")
+                                "not the recorder's own. With Unspecced frags: all but the recorder's own")
         self.specced.toggled.connect(self.kill_filter_timer.start)
         self.unshown = QCheckBox("Unspecced frags")
         self.unshown.setToolTip("Also the frags of the Fraggers made while the demo shows someone else, seen from "
                                 "behind them: when the demo has them for 3 s before, and their victim (about half of "
-                                "those frags). Not with Specced frags")
+                                "those frags). With Specced frags: all but the recorder's own")
         self.unshown.toggled.connect(self.kill_filter_timer.start)
         self.only_unshown = QCheckBox("Only unspecced")
         self.only_unshown.setToolTip("Only those frags made while the demo shows someone else, seen from behind them: "
-                                     "of the Fraggers, or of anyone without one. Not with Specced frags")
+                                     "of the Fraggers, or of anyone without one")
         self.only_unshown.toggled.connect(self.kill_filter_timer.start)
-        self.only_unshown.toggled.connect(lambda only: self.unshown.setEnabled(not only))
+        self.only_unshown.toggled.connect(lambda only: (self.unshown.setEnabled(not only),
+                                                        self.specced.setEnabled(not only)))
         left = QWidget()
         box = QVBoxLayout(left)
         box.setContentsMargins(0, 0, 0, 0)

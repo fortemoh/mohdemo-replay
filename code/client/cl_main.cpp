@@ -746,6 +746,8 @@ static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
 // while not shown, seen from behind them (cl_demoBehind), when their entity
 // is in the demo for DEMOFILTER_UNSHOWN_SEEN msec before, and their victim
 // in view then, and only those with unshownOnly, of anyone without killers.
+// With specced too, those and the ones of the players followed: all but the
+// recorder's own.
 #define DEMOFILTER_NAMES	16
 #define DEMOFILTER_UNSHOWN_SEEN	3000
 #define DEMOFILTER_GREAT_SCOPE	1000
@@ -1280,6 +1282,8 @@ its levels, is great if only those are, and made while the recorder follows
 someone if only theirs are
 ====================
 */
+static qboolean CL_DemoKillShown( int i, int *from, int *to );
+
 static qboolean CL_DemoFilterPasses( int i ) {
 	const demoEvent_t	*ev = &cl_demoIndex.events[i];
 	const demoEvent_t	*watch;
@@ -1290,8 +1294,11 @@ static qboolean CL_DemoFilterPasses( int i ) {
 		return qfalse;
 	}
 	if ( cl_demoFilter.specced ) {
+		int		from, to;
+
 		watch = CL_DemoWatchFor( i );
-		if ( !watch || !watch->followed ) {
+		// with unshown, a killer not shown is one too, whoever is shown then
+		if ( ( !watch || !watch->followed ) && ( !cl_demoFilter.unshown || CL_DemoKillShown( i, &from, &to ) ) ) {
 			return qfalse;
 		}
 	}
@@ -1442,14 +1449,13 @@ CL_DemoKillUnshown
 Whether kill event i, its killer not shown, plays with demofilter unshown,
 seen from behind them, and from when: their entity was in the demo for
 DEMOFILTER_UNSHOWN_SEEN msec before it, and their victim in view then. Not
-with specced, which only has the kills of the players followed, nor for
-whoever is shown.
+for whoever is shown.
 ====================
 */
 static qboolean CL_DemoKillUnshown( int i, int *from ) {
 	const demoEvent_t	*kill = &cl_demoIndex.events[i];
 
-	if ( !cl_demoFilter.unshown || cl_demoFilter.specced || cl_demoFilter.shown || kill->client < 0
+	if ( !cl_demoFilter.unshown || cl_demoFilter.shown || kill->client < 0
 		|| kill->seen < DEMOFILTER_UNSHOWN_SEEN
 		|| kill->idle < 0 ) {
 		return qfalse;
@@ -1470,7 +1476,7 @@ shown if whoever, who are shown.
 */
 static qboolean CL_DemoKillPlays( int i, qboolean whoever, int *from, int *to ) {
 	if ( CL_DemoKillShown( i, from, to ) ) {
-		return whoever || !cl_demoFilter.unshownOnly || cl_demoFilter.specced || cl_demoFilter.shown;
+		return whoever || !cl_demoFilter.unshownOnly || cl_demoFilter.shown;
 	}
 	*to = cl_demoIndex.duration;
 	return !whoever && CL_DemoKillUnshown( i, from );
@@ -2112,7 +2118,8 @@ With specced, only the kills of the players the recorder followed as a
 spectator, while followed. With unshown, also the kills of the killers while
 they aren't shown, seen from behind them, when the demo has them for 3
 seconds before and their victim in view then; with unshown only, only those,
-of anyone without killers. Each adds to it, but clear;
+of anyone without killers. With specced and unshown, those and the kills of
+the players followed: all but the recorder's own. Each adds to it, but clear;
 without arguments, it tells what it is.
 ====================
 */

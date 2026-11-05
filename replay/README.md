@@ -59,8 +59,9 @@ demo shows someone else, filmed from behind them, when the demo has them for
 3 s before and their victim in view then (about half of those frags): the
 server only sends the players the recorder could see. The HUD is a
 spectator's, with their name but not their health, not in the demo, and it
-doesn't go with Specced frags or "Whoever is shown". A door the demo doesn't
-have there is drawn closed, from the map, until the demo has it. Only unspecced keeps
+doesn't go with "Whoever is shown". A door the demo doesn't have there is
+drawn closed, from the map, until the demo has it. With Specced frags too, it
+keeps all but the recorder's own. Only unspecced keeps
 only those frags, of the Fraggers, or of anyone without one. The
 list then shows only the demos with such frags, with how many of each
 fragger, and the demo playing lists only those. A player's frags are only those made while the

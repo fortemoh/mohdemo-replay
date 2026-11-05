@@ -451,8 +451,7 @@ class TestFunctions(unittest.TestCase):
         # a * too, not others' frags
         self.assertEqual(plan(kf(["a*e"], unshown=True))[0], 3)
         self.assertEqual(plan(kf(["cid"], unshown=True)), (1, [(66000, 72000)]))
-        # specced only has the players followed, whoever is shown those shown
-        self.assertEqual(plan(kf(["ace"], specced=True, unshown=True)), (1, [(30000, 34000)]))
+        # whoever is shown only has those shown
         self.assertEqual(plan(kf(shown=True, unshown=True))[0], 1)
         self.assertEqual(plan(kf(["ace"], unshown=True), "shownkills")[0], 1)
         summary = mohreplay.summarize(unspecced_demo())
@@ -480,8 +479,9 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(plan(kf(["cid"], only_unshown=True)), (1, [(66000, 72000)]))
         # with the other box too, the same
         self.assertEqual(plan(kf(["ace"], unshown=True, only_unshown=True)), plan(ace))
-        # specced only has the players followed, whoever is shown those shown
-        self.assertEqual(plan(kf(["ace"], specced=True, only_unshown=True)), (1, [(30000, 34000)]))
+        # whatever Specced frags says; whoever is shown only has those shown
+        self.assertEqual(plan(kf(["ace"], specced=True, only_unshown=True)), plan(ace))
+        self.assertFalse(kf(["ace"], specced=True, only_unshown=True).specced)
         self.assertEqual(plan(kf(shown=True, only_unshown=True))[0], 1)
         self.assertEqual(plan(ace, "shownkills")[0], 1)
         summary = mohreplay.summarize(unspecced_demo())
@@ -493,6 +493,29 @@ class TestFunctions(unittest.TestCase):
             kill.pop("seen", None)
         self.assertEqual(mohreplay.demoonly_plan(old, "kills", kill_filter=anyone)[0], 0)
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(old), anyone)[0], 0)
+
+    def test_specced_and_unspecced(self):
+        """Both boxes: all the frags but the recorder's own."""
+        kf = mohreplay.KillFilter
+        index = unspecced_demo()
+        index["kills"].insert(0, {"time": 10000, "killer": 0, "killerName": "rec", "victim": 4, "victimName": "Bob",
+                                  "text": "Bob was shot by rec", "weapon": "smg", "seen": 9000, "idle": 0})
+        both = kf(specced=True, unshown=True)
+        plan = lambda kill_filter: mohreplay.demoonly_plan(json.loads(json.dumps(index)), "kills", kill_filter=kill_filter)
+        self.assertEqual(both.commands()[-2:], ["demofilter specced", "demofilter unshown"])
+        self.assertEqual(both.words(), " while specced, also unspecced")
+        # the one followed, Ace from behind before and after, and Cid
+        self.assertEqual(plan(both), (4, [(16000, 22000), (30000, 34000), (66000, 72000), (86000, 90000)]))
+        self.assertEqual(plan(kf(["ace"], specced=True, unshown=True)),
+                         (3, [(16000, 22000), (30000, 34000), (86000, 90000)]))
+        # a fragger who is only the recorder has none, as with Specced frags alone
+        self.assertEqual(plan(kf(["rec"], specced=True, unshown=True))[0], 0)
+        # each box alone as before
+        self.assertEqual(plan(kf(specced=True))[0], 1)
+        self.assertEqual(plan(kf(["rec"]))[0], 1)
+        summary = mohreplay.summarize(json.loads(json.dumps(index)))
+        self.assertEqual(mohreplay.filter_kills(summary, both), (4, {"ace": ["Ace", 3], "cid": ["Cid", 1]}))
+        self.assertEqual(mohreplay.filter_kills(summary, kf(specced=True)), (1, {"ace": ["Ace", 1]}))
 
     def test_specced_frags(self):
         """Specced frags: only those of the players the recorder follows,
@@ -1953,6 +1976,32 @@ class TestRecording(FakeGameCase):
         video = self.video("unspecced.mp4")
         self.assertEqual((video["only"], video["filter"].get("unshown")), ("kills", True))
 
+    def test_record_specced_and_unspecced(self):
+        """Specced frags and Unspecced frags together: the game is told both."""
+        self.short_demos()
+        self.add_demo("unspecced", unspecced_demo())
+        window = self.window()
+        self.playing(window, "unspecced")
+        window.specced.setChecked(True)
+        window.apply_kill_filter()
+        self.assertEqual(window.kills.topLevelItemCount(), 1)
+        window.unshown.setChecked(True)
+        window.apply_kill_filter()
+        self.assertEqual(window.kills.topLevelItemCount(), 4)
+
+        def setup(dialog):
+            self.assertIn("while specced, also unspecced", dialog.choices["kills"].text())
+            dialog.choices["kills"].setChecked(True)
+            dialog.pattern.setText("both")
+        self.record(window, setup)
+        job, = self.done(window)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual([[kill["time"] for kill in frags] for frags in job["clips"][0]["frags"]],
+                         [[20000], [32000], [70000], [89000]])
+        video = self.video("both.mp4")
+        self.assertEqual((video["only"], video["filter"].get("specced"), video["filter"].get("unshown")),
+                         ("kills", True, True))
+
     def test_record_only_unspecced(self):
         """Only unspecced: without a fragger, anyone's, and neither the
         recorder's nor those of whoever is shown to choose."""
@@ -1965,6 +2014,7 @@ class TestRecording(FakeGameCase):
         window.only_unshown.setChecked(True)
         window.apply_kill_filter()
         self.assertFalse(window.unshown.isEnabled())
+        self.assertFalse(window.specced.isEnabled())
         self.assertEqual(window.kills.topLevelItemCount(), 3)
         self.assertTrue(window.demo_items["first"].isHidden())
         self.assertFalse(window.demo_items["unspecced"].isHidden())
@@ -1984,6 +2034,7 @@ class TestRecording(FakeGameCase):
         self.assertEqual((video["only"], video["filter"].get("unshown")), ("kills", "only"))
         window.only_unshown.setChecked(False)
         self.assertTrue(window.unshown.isEnabled())
+        self.assertTrue(window.specced.isEnabled())
 
     def test_record_specced_frags(self):
         """Specced frags: the filter's frags are those of the players
