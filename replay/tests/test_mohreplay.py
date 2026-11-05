@@ -180,13 +180,13 @@ class FakeGameCase(unittest.TestCase):
                            ("rec/folder", self.videos)):
             self.settings.setValue(key, value)
         self.messages = Messages()
-        self.patches = [mock.patch.object(QMessageBox, name, self.messages) for name in ("warning", "information")]
+        patches = [mock.patch.object(QMessageBox, name, self.messages) for name in ("warning", "information")]
         # quitting while videos are recorded
-        self.patches.append(mock.patch.object(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes))
-        self.patches.append(mock.patch.dict(os.environ, {**self.env, "SDL_VIDEODRIVER": "offscreen"}))
-        self.patches.append(mock.patch.dict(os.environ, {"XDG_CACHE_HOME": os.path.join(self.tmp, "cache"),
-                                                         "XDG_CONFIG_HOME": os.path.join(self.tmp, "config")}))
-        for patch in self.patches:
+        patches.append(mock.patch.object(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes))
+        patches.append(mock.patch.dict(os.environ, {**self.env, "SDL_VIDEODRIVER": "offscreen"}))
+        patches.append(mock.patch.dict(os.environ, {"XDG_CACHE_HOME": os.path.join(self.tmp, "cache"),
+                                                    "XDG_CONFIG_HOME": os.path.join(self.tmp, "config")}))
+        for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
         self.windows = []
@@ -196,6 +196,12 @@ class FakeGameCase(unittest.TestCase):
             window.close()
         # what's left to do still runs in the test's folders and settings
         app.processEvents()
+
+    def short_demos(self):
+        """Short demos are listed too, to record quickly."""
+        patch = mock.patch.object(mohreplay, "MIN_LENGTH", 0)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def add_demo(self, name, index):
         with open(os.path.join(self.demos, name + ".dm3"), "w") as f:
@@ -2372,8 +2378,7 @@ class TestRecording(FakeGameCase):
 
     def test_whole_demos_one_video_each(self):
         # short, to record quickly, so listed anyway
-        self.patches.append(mock.patch.object(mohreplay, "MIN_LENGTH", 0))
-        self.patches[-1].start()
+        self.short_demos()
         self.add_demo("second", dict(DEMO, duration=30000))
         window = self.window()
         TestLibrary.indexed(self, window, ("first", "second"))
