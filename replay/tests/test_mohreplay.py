@@ -120,6 +120,25 @@ def wait_until(condition, timeout=10.0):
     return bool(condition())
 
 
+def unspecced_demo():
+    """A demo of its recorder, who follows Ace for a while, and of frags of
+    Ace and Cid while not shown: in the demo for long enough or not, their
+    victim in view or not."""
+    def kill(time, killer, name, **seen):
+        return {"time": time, "killer": killer, "killerName": name, "victim": 4, "victimName": "Bob",
+                "text": f"Bob was shot by {name}", "weapon": "smg", **seen}
+    return {"duration": 100000, "truncated": False, "recorder": {"client": 0, "name": "rec"},
+            "maps": [{"time": 0, "map": "obj/obj_team1"}, {"time": 90000, "map": "obj/obj_team2"}],
+            "watched": [{"time": 0, "client": 0, "name": "rec", "followed": False},
+                        {"time": 30000, "client": 1, "name": "Ace", "followed": True},
+                        {"time": 35000, "client": 0, "name": "rec", "followed": False}],
+            "kills": [kill(20000, 1, "Ace", seen=5000, idle=0), kill(32000, 1, "Ace", seen=2000, idle=0),
+                      kill(40000, 1, "Ace", seen=2000, idle=0), kill(50000, 1, "Ace", seen=9000),
+                      kill(60000, 1, "Ace"), kill(70000, 3, "Cid", seen=9000, idle=0),
+                      kill(89000, 1, "Ace", seen=3000, idle=0)],
+            "rounds": [], "roundEnds": []}
+
+
 class Messages:
     """Takes the place of QMessageBox's static functions, which would wait."""
 
@@ -404,6 +423,35 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), great)[0], 0)
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), mohreplay.KillFilter(["t-"]))[0], 3)
         self.assertEqual(mohreplay.demoonly_plan(streaks, "kills", "t-", kill_filter=great)[0], 0)
+
+    def test_unspecced_frags(self):
+        """Unspecced frags adds the frags of the fraggers while they aren't
+        shown, seen from behind them, when the demo has them for 3 s before
+        and their victim in view."""
+        kf = mohreplay.KillFilter
+        plan = lambda kill_filter, only="kills": mohreplay.demoonly_plan(unspecced_demo(), only, kill_filter=kill_filter)
+        unspecced = kf(["ace"], unshown=True)
+        self.assertEqual(unspecced.commands()[-1], "demofilter unshown")
+        self.assertEqual(unspecced.words(), " by ace, also unspecced")
+        # shown only, without it
+        self.assertEqual(plan(kf(["ace"])), (1, [(30000, 34000)]))
+        # from when they're in the demo at most, and inside the level
+        self.assertEqual(plan(unspecced), (3, [(16000, 22000), (30000, 34000), (86000, 90000)]))
+        # a * too, not others' frags
+        self.assertEqual(plan(kf(["a*e"], unshown=True))[0], 3)
+        self.assertEqual(plan(kf(["cid"], unshown=True)), (1, [(66000, 72000)]))
+        # specced only has the players followed, whoever is shown those shown
+        self.assertEqual(plan(kf(["ace"], specced=True, unshown=True)), (1, [(30000, 34000)]))
+        self.assertEqual(plan(kf(shown=True, unshown=True))[0], 1)
+        self.assertEqual(plan(kf(["ace"], unshown=True), "shownkills")[0], 1)
+        summary = mohreplay.summarize(unspecced_demo())
+        self.assertEqual(mohreplay.filter_kills(summary, unspecced), (3, {"ace": ["Ace", 3]}))
+        self.assertEqual(mohreplay.filter_kills(summary, kf(["ace"])), (1, {"ace": ["Ace", 1]}))
+        # indexes from before: not known to be in the demo
+        old = unspecced_demo()
+        for kill in old["kills"]:
+            kill.pop("seen", None)
+        self.assertEqual(mohreplay.demoonly_plan(old, "kills", kill_filter=unspecced)[0], 1)
 
     def test_specced_frags(self):
         """Specced frags: only those of the players the recorder follows,
@@ -1841,6 +1889,28 @@ class TestRecording(FakeGameCase):
         self.done(window, 2)
         video = self.video("shown.mp4")
         self.assertEqual((video["only"], video["filter"]["shown"]), ("kills", True))
+
+    def test_record_unspecced_frags(self):
+        """Unspecced frags: listed, and the game told to play them."""
+        self.add_demo("unspecced", unspecced_demo())
+        window = self.window()
+        self.playing(window, "unspecced")
+        self.choose(window, killer="ace")
+        self.assertEqual(window.kills.topLevelItemCount(), 1)
+        window.unshown.setChecked(True)
+        window.apply_kill_filter()
+        self.assertEqual(window.kills.topLevelItemCount(), 3)
+
+        def setup(dialog):
+            dialog.choices["kills"].setChecked(True)
+            dialog.pattern.setText("unspecced")
+        self.record(window, setup)
+        job, = self.done(window)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual([[kill["time"] for kill in frags] for frags in job["clips"][0]["frags"]],
+                         [[20000], [32000], [89000]])
+        video = self.video("unspecced.mp4")
+        self.assertEqual((video["only"], video["filter"].get("unshown")), ("kills", True))
 
     def test_record_specced_frags(self):
         """Specced frags: the filter's frags are those of the players
