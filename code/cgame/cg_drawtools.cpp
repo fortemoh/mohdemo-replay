@@ -943,6 +943,13 @@ void CG_UpdateAttackerDisplay()
         return;
     }
 
+    // Added in OPM
+    //  It's who hit the recorder, not the player a demo shows from behind or
+    //  from their eyes, and a spectator doesn't have it
+    if (CG_DemoBehind() >= 0 || CG_RecorderBehind() || (cg.snap->snapFlags & SNAPFLAG_FOLLOWED_FROM_EYES)) {
+        return;
+    }
+
     iClientNum    = cg.snap->ps.stats[STAT_ATTACKERCLIENT];
     pszClientInfo = CG_ConfigString(CS_PLAYERS + iClientNum);
     pszName       = Info_ValueForKey(pszClientInfo, "name");

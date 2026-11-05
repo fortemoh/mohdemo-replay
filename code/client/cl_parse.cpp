@@ -335,7 +335,10 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 
 	if ( snap->ps.stats[STAT_DAMAGEDIR] != cl_demoHits.ownDir ) {
 		cl_demoHits.ownDir = snap->ps.stats[STAT_DAMAGEDIR];
-		cl_demoHits.dir = cl_demoHits.ownDir;
+		// no mark for hits from behind someone, as for a spectator
+		if ( !CL_DemoShownFromBehind( &snap->ps, NULL ) ) {
+			cl_demoHits.dir = cl_demoHits.ownDir;
+		}
 	}
 	hits->dir = cl_demoHits.dir;
 
@@ -589,6 +592,7 @@ void CL_ParseSnapshot( msg_t *msg ) {
 	// Added in OPM
 	//  as shown (the HUD), the one kept as it came
 	CL_DemoShowFollowed( &cl.snap.ps, cl.snap.messageNum );
+	CL_DemoSpectatorHud();
 
 	if (cl_shownet->integer == 3) {
 		Com_Printf( "   snapshot:%i  delta:%i  ping:%i\n", cl.snap.messageNum,

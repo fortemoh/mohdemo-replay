@@ -1792,6 +1792,57 @@ Whose back cgame shows, right before it draws the time playing: the killer
 of the kill demoonly plays while they aren't shown (demofilter unshown)
 ====================
 */
+qboolean CL_DemoShownFromBehind( const playerState_t *ps, qboolean *other ) {
+	qboolean	unshown = clc.demoplaying && cl_demoBehind->integer >= 0;
+
+	if ( other ) {
+		*other = unshown;
+	}
+	return unshown || ( clc.demoplaying && Cvar_VariableIntegerValue( "cg_recordercamera" )
+		&& !( ps->pm_flags & ( PMF_SPECTATING | PMF_CAMERA_VIEW ) ) );
+}
+
+/*
+====================
+CL_DemoSpectatorHud
+
+Added in OPM
+What the HUD, drawn from cl.snap (the snapshots kept stay as they came), has
+for a spectator following someone, while a demo shows them from behind: no
+weapons, ammo, crosshair or scope, and no red flash. The health is theirs for
+the recorder; for a player not followed the demo doesn't have it, so as a
+spectator's own
+====================
+*/
+void CL_DemoSpectatorHud( void ) {
+	playerState_t	*ps = &cl.snap.ps;
+	qboolean		other;
+	int				i;
+
+	if ( !CL_DemoShownFromBehind( ps, &other ) ) {
+		return;
+	}
+
+	ps->stats[STAT_WEAPONS] = 0;
+	ps->stats[STAT_EQUIPPED_WEAPON] = 0;
+	ps->stats[STAT_AMMO] = 0;
+	ps->stats[STAT_MAXAMMO] = 0;
+	ps->stats[STAT_CLIPAMMO] = 0;
+	ps->stats[STAT_MAXCLIPAMMO] = 0;
+	ps->stats[STAT_INZOOM] = 0;
+	ps->stats[STAT_CROSSHAIR] = 0;
+	for ( i = 0; i < 6; i++ ) {
+		ps->activeItems[i] = -1;
+	}
+	for ( i = 0; i < MAX_AMMOCOUNT; i++ ) {
+		ps->ammo_amount[i] = 0;
+	}
+	ps->blend[3] = 0;
+	if ( other ) {
+		ps->stats[STAT_HEALTH] = ps->stats[STAT_MAXHEALTH];
+	}
+}
+
 void CL_UpdateDemoBehind( void ) {
 	int		behind = -1;
 
@@ -1801,6 +1852,7 @@ void CL_UpdateDemoBehind( void ) {
 	if ( behind != cl_demoBehind->integer ) {
 		Cvar_Set( "cl_demoBehind", va( "%i", behind ) );
 	}
+	CL_DemoSpectatorHud();
 }
 
 /*
