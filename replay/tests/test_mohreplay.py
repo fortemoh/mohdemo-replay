@@ -940,26 +940,38 @@ class TestWindow(FakeGameCase):
         os.makedirs(os.path.join(self.game_dir, "main"))
         with zipfile.ZipFile(os.path.join(self.game_dir, "main", "pak0.pk3"), "w") as pk3:
             pk3.writestr("models/player/allied_pilot.tik", "")
+            pk3.writestr("models/player/american_army.tik", "")
             pk3.writestr("models/player/german_scientist.tik", "")
+            pk3.writestr("models/player/IT_soldier.tik", "")
+            pk3.writestr("models/player/own_skin.tik", "")
         window = self.window()
         self.playing(window)
         window.fill_followed_menu()
         allies, axis = window.followed_button.menu().actions()
         self.assertEqual((allies.text(), axis.text()), ("Allies", "Axis"))
-        self.assertEqual(self.menu_texts(axis.menu()), [("As in the demo", True), ("allied_pilot", False),
-                                                        ("german_scientist", False)])
+        # each team's only, and someone's own in both
+        self.assertEqual(self.menu_texts(allies.menu()), [("As in the demo", True), ("allied_pilot", False),
+                                                          ("american_army", False), ("own_skin", False)])
+        self.assertEqual(self.menu_texts(axis.menu()), [("As in the demo", True), ("german_scientist", False),
+                                                        ("it_soldier", False), ("own_skin", False)])
         axis.menu().actions()[1].trigger()
-        self.assertEqual(self.settings.value("followed_axis"), "allied_pilot")
-        self.assertTrue(wait_until(lambda: 'set cg_followedGermanModel "allied_pilot"' in self.commands(window.game)))
+        self.assertEqual(self.settings.value("followed_axis"), "german_scientist")
+        self.assertTrue(wait_until(lambda: 'set cg_followedGermanModel "german_scientist"' in self.commands(window.game)))
         self.assertIn('set cg_followedModel ""', self.commands(window.game))
-        self.assertIn("now theirs / allied_pilot", window.followed_button.toolTip())
+        self.assertIn("now theirs / german_scientist", window.followed_button.toolTip())
+        # one chosen before for the other team still shows, to change it
+        self.settings.setValue("followed_axis", "allied_pilot")
+        window.fill_followed_menu()
+        axis = window.followed_button.menu().actions()[1]
+        self.assertEqual(self.menu_texts(axis.menu())[-1], ("allied_pilot", True))
+        self.settings.setValue("followed_axis", "german_scientist")
         # kept, one of the game files no more still shown
         self.settings.setValue("followed_allies", "my_own")
         window.fill_followed_menu()
         allies = window.followed_button.menu().actions()[0]
         self.assertEqual(self.menu_texts(allies.menu())[-1], ("my_own", True))
         self.assertEqual(mohreplay.video_summary(self.settings).split(", ")[-2],
-                         "the player followed as my_own / allied_pilot")
+                         "the player followed as my_own / german_scientist")
 
     def test_camera_menu(self):
         """Where the camera is for the recorder and for the player followed,

@@ -220,6 +220,19 @@ def camera_cvars(chosen):
     return [("cg_recordercamera", RECORDER_CAMERAS[chosen[0]][1]), ("cg_followcamera", FOLLOWED_CAMERAS[chosen[1]][1])]
 
 
+# how a player model's name tells its team, as the game goes by it
+# (Player::InitModel)
+ALLIES_MODELS = ("american", "allied")
+AXIS_MODELS = ("german", "axis", "it", "sc")
+
+
+def team_models(models, axis):
+    """The ones of models for a team, Axis if axis, else Allies, by their
+    names: one named for neither team, someone's own, can be either's."""
+    other = ALLIES_MODELS if axis else AXIS_MODELS
+    return [model for model in models if not model.startswith(other)]
+
+
 def followed_models(settings):
     """The models chosen for the player followed when they're allies, and
     axis: "" for theirs."""
@@ -2733,7 +2746,7 @@ class Window(QMainWindow):
 
     def fill_followed_menu(self):
         """The models of the game files for the player followed, allies and
-        axis, the one chosen checked."""
+        axis, each with their team's only, the one chosen checked."""
         menu = self.followed_button.menu()
         menu.clear()
         models = player_models(self.settings.value("game", ""))
@@ -2741,7 +2754,8 @@ class Window(QMainWindow):
                                                                followed_models(self.settings))):
             sub = menu.addMenu(team)
             group = QActionGroup(sub)
-            for model in ["", *models, *([chosen] if chosen and chosen not in models else [])]:
+            own = team_models(models, team == "Axis")
+            for model in ["", *own, *([chosen] if chosen and chosen not in own else [])]:
                 action = sub.addAction(model or "As in the demo")
                 action.setCheckable(True)
                 action.setChecked(model == chosen)
