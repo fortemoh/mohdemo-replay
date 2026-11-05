@@ -1011,7 +1011,8 @@ CG_FollowedPlayerModel
 
 Added in OPM
   The model cg_followedModel or cg_followedGermanModel gives the player the
-  camera follows, by their team, 0 to keep theirs
+  camera follows, by their team, 0 to keep theirs: the one a demo shows from
+  behind if any (CG_DemoBehind, CG_RecorderBehind), else the one followed
 ===============
 */
 static qhandle_t CG_FollowedPlayerModel(const entityState_t *s1)
@@ -1019,8 +1020,17 @@ static qhandle_t CG_FollowedPlayerModel(const entityState_t *s1)
     static char   missing[MAX_QPATH];
     const cvar_t *model;
     qhandle_t     handle;
+    int           client;
 
-    if (!(cg.snap->ps.pm_flags & PMF_CAMERA_VIEW) || s1->number != cg.snap->ps.stats[STAT_INFOCLIENT]) {
+    client = CG_DemoBehind();
+    if (client < 0) {
+        if (CG_RecorderBehind()) {
+            client = cg.snap->ps.clientNum;
+        } else if (cg.snap->ps.pm_flags & PMF_CAMERA_VIEW) {
+            client = cg.snap->ps.stats[STAT_INFOCLIENT];
+        }
+    }
+    if (client < 0 || s1->number != client) {
         return 0;
     }
 
@@ -1229,17 +1239,18 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
             model.tiki      = cgi.R_Model_GetHandle(model.hModel);
             model.hOldModel = cgs.model_draw[s1->modelindex];
         }
-
-        // Added in OPM
-        //  The player followed in the model chosen for them
-        hFollowed = CG_FollowedPlayerModel(s1);
-        if (hFollowed) {
-            model.hModel    = hFollowed;
-            model.tiki      = cgi.R_Model_GetHandle(hFollowed);
-            model.hOldModel = cgs.model_draw[s1->modelindex];
-        }
     } else {
         model.hModel = cgs.model_draw[s1->modelindex];
+    }
+
+    // Added in OPM
+    //  The player the camera follows in the model chosen for them, the
+    //  recorder too when they're shown from behind
+    hFollowed = CG_FollowedPlayerModel(s1);
+    if (hFollowed) {
+        model.hModel    = hFollowed;
+        model.tiki      = cgi.R_Model_GetHandle(hFollowed);
+        model.hOldModel = cgs.model_draw[s1->modelindex];
     }
 
     if (!model.tiki) {
