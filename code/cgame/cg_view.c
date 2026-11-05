@@ -978,6 +978,8 @@ static int CG_CalcViewValues(void)
         CG_StockFollowCameraAt(
             ps, &cg_entities[ps->clientNum].currentState, ps->clientNum, cg.refdef.vieworg, cg.refdefViewAngles
         );
+        // not the zoom of their scope
+        cg.camera_fov = cg_fov->value;
     } else if (cg.renderingThirdPerson) {
         // back away from character
         CG_OffsetThirdPersonView();

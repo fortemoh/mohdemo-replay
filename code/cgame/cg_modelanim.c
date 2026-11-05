@@ -1356,7 +1356,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     }
 
     if (!(s1->renderfx & RF_ALWAYSDRAW) && s1->parent != ENTITYNUM_NONE && s1->parent == clientNum
-        && ((!cg_drawviewmodel->integer && !bThirdPerson) || (cg.snap->ps.stats[STAT_INZOOM] && CG_DemoBehind() < 0))) {
+        && ((!cg_drawviewmodel->integer && !bThirdPerson) || (cg.snap->ps.stats[STAT_INZOOM] && CG_DemoBehind() < 0 && !CG_RecorderBehind()))) {
         // hide all surfaces while zooming or if the viewmodel shouldn't be shown
         for (i = 0; i < MAX_MODEL_SURFACES; i++) {
             model.surfaces[i] |= MDL_SURFACE_NODRAW;

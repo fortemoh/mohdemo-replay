@@ -511,7 +511,7 @@ void CG_DrawZoomOverlay()
 
     // Added in OPM
     //  nor while a demo shows a player from behind
-    if (!cg.snap || CG_DemoBehind() >= 0) {
+    if (!cg.snap || CG_DemoBehind() >= 0 || CG_RecorderBehind()) {
         return;
     }
 
