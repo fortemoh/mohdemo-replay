@@ -1615,14 +1615,16 @@ static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 CL_DemoBehindAt
 
 The killer of the kill demoonly plays at time while they aren't shown,
-seen from behind them (demofilter unshown), -1 if none
+seen from behind them (demofilter unshown), -1 if none; shown is whether it
+plays a kill of whoever is shown then
 ====================
 */
-static int CL_DemoBehindAt( int time ) {
+static int CL_DemoBehindAt( int time, qboolean *shown ) {
 	const demoEvent_t	*ev;
 	int					start, end, from, to;
 	int					i;
 
+	*shown = qfalse;
 	if ( !cl_demoFilter.unshown ) {
 		return -1;
 	}
@@ -1636,8 +1638,11 @@ static int CL_DemoBehindAt( int time ) {
 		if ( ev->time - CL_DemoKillBefore() > time ) {
 			break;
 		}
-		if ( CL_DemoKillStretch( i, &start, &end ) && start <= time && time < end && !CL_DemoKillShown( i, &from, &to ) ) {
-			return ev->client;
+		if ( CL_DemoKillStretch( i, &start, &end ) && start <= time && time < end ) {
+			if ( !CL_DemoKillShown( i, &from, &to ) ) {
+				return ev->client;
+			}
+			*shown = qtrue;
 		}
 	}
 	return -1;
@@ -1844,10 +1849,17 @@ void CL_DemoSpectatorHud( void ) {
 }
 
 void CL_UpdateDemoBehind( void ) {
-	int		behind = -1;
+	int			behind = -1;
+	qboolean	shown;
 
 	if ( cl_demoOnly != DEMOONLY_ALL && cl_demoOnly != DEMOONLY_WATCHED && clc.demoplaying && clc.state == CA_ACTIVE ) {
-		behind = CL_DemoBehindAt( CL_DemoTime() );
+		behind = CL_DemoBehindAt( CL_DemoTime(), &shown );
+		// between two kills that play as one, and for the frame still drawn
+		// past the end of a stretch before CL_RunDemoOnly jumps, it stays on
+		// them: what the demo shows there would flash up
+		if ( behind < 0 && !shown ) {
+			behind = cl_demoBehind->integer;
+		}
 	}
 	if ( behind != cl_demoBehind->integer ) {
 		Cvar_Set( "cl_demoBehind", va( "%i", behind ) );
