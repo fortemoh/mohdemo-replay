@@ -57,6 +57,8 @@ protected:
     float                     m_statbar_max;
     float                     m_lastfrac;
     float                     m_flashtime;
+    // Added in OPM
+    int                       m_lastservertime;
     vec3_t                    m_offset;
     vec3_t                    m_rotateoffset;
     vec3_t                    m_angles;

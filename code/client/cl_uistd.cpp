@@ -252,6 +252,7 @@ UIFakkLabel::UIFakkLabel()
     m_statbar_material_flash      = NULL;
     m_statbar_material_marker     = NULL;
     m_lastitemindex               = -1;
+    m_lastservertime              = 0;
 }
 
 void UIFakkLabel::LayoutPlayerStat(Event *ev)
@@ -1273,9 +1274,15 @@ void UIFakkLabel::DrawStatSpinner(float frac)
     col[3] = 1.f;
 
     if (m_lastfrac != frac) {
-        m_flashtime = uid.time;
+        // Changed in OPM
+        //  What it shows changing as a demo jumps isn't a hit
+        if (!clc.demoplaying
+            || (cl.snap.serverTime >= m_lastservertime && cl.snap.serverTime - m_lastservertime < 1000)) {
+            m_flashtime = uid.time;
+        }
     }
-    m_lastfrac = frac;
+    m_lastfrac       = frac;
+    m_lastservertime = cl.snap.serverTime;
 
     alpha = 1.f - (uid.time - m_flashtime) / 1500.f;
     if (alpha < 0.f) {
