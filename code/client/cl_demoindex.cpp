@@ -98,6 +98,7 @@ typedef struct {
     diPose_t poses[MAX_CLIENTS]; // each player as last seen
     int      seenTime[MAX_CLIENTS]; // the snapshot each player was last seen in, 0 if not since the level started
     int      inputTime[MAX_CLIENTS]; // the last snapshot showing each player's input
+    int      seenSince[MAX_CLIENTS]; // the first snapshot of the ones each player is in without a break
 
     diName_t knownNames[DI_KNOWN_NAMES];
     int      numKnownNames;
@@ -134,6 +135,7 @@ static demoEvent_t *DI_AddEvent(diParser_t *p, demoEventType_t type)
     ev->scope  = -1;
     ev->speed  = -1;
     ev->idle   = -1;
+    ev->seen   = -1;
     return ev;
 }
 
@@ -1159,6 +1161,9 @@ static void DI_UpdateIdle(diParser_t *p, int lastTime)
             || maxs[2] <= CROUCH_RUN_MAXS_Z || ent->bone_angles[DI_PELVIS][2]) {
             p->inputTime[ent->number] = p->snap.serverTime;
         }
+        if (p->seenTime[ent->number] != lastTime) {
+            p->seenSince[ent->number] = p->snap.serverTime;
+        }
         p->poses[ent->number]    = pose;
         p->seenTime[ent->number] = p->snap.serverTime;
     }
@@ -1311,6 +1316,10 @@ static void DI_SetKillPlayers(diParser_t *p, const diSnapshot_t *snap)
         }
         DI_JoinedName(p, ev->client, ev->name, sizeof(ev->name));
         DI_JoinedName(p, ev->other, ev->otherName, sizeof(ev->otherName));
+        // in the last snapshot, the one before the shot's
+        if (ev->client >= 0 && ev->client < MAX_CLIENTS && p->snap.valid && p->seenTime[ev->client] == p->snap.serverTime) {
+            ev->seen = p->snap.serverTime - p->seenSince[ev->client];
+        }
     }
 }
 
@@ -1700,6 +1709,9 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
             }
             if (ev->idle >= 0) {
                 DI_Printf(b, ", \"idle\": %d", ev->idle);
+            }
+            if (ev->seen >= 0) {
+                DI_Printf(b, ", \"seen\": %d", ev->seen);
             }
             break;
         case DEMOEVENT_ROUNDSTART:

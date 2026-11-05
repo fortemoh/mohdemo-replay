@@ -82,6 +82,10 @@ typedef struct {
     // for a kill whose victim was in view before it: msec they had given
     // no input then, as their entity shows it; -1 when not seen
     int idle;
+    // for a kill: msec its killer had been in the snapshots without a break
+    // before it, as their entity (seen by the recorder, or in the area they
+    // could see), -1 if not in the last one
+    int seen;
     // for a level: the recorder's snapshots at a top speed only realism
     // servers give, and at one only default servers give
     int realismTicks;
