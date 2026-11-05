@@ -464,6 +464,36 @@ class TestFunctions(unittest.TestCase):
             kill.pop("seen", None)
         self.assertEqual(mohreplay.demoonly_plan(old, "kills", kill_filter=unspecced)[0], 1)
 
+    def test_only_unspecced(self):
+        """Only unspecced: those frags without the ones shown, of anyone
+        without a fragger."""
+        kf = mohreplay.KillFilter
+        plan = lambda kill_filter, only="kills": mohreplay.demoonly_plan(unspecced_demo(), only, kill_filter=kill_filter)
+        ace = kf(["ace"], only_unshown=True)
+        anyone = kf(only_unshown=True)
+        self.assertEqual(ace.commands()[-1], "demofilter unshown only")
+        self.assertEqual(ace.words(), " by ace, unspecced only")
+        self.assertEqual(anyone.words(), ", unspecced only")
+        self.assertTrue(anyone)
+        self.assertEqual(plan(ace), (2, [(16000, 22000), (86000, 90000)]))
+        self.assertEqual(plan(anyone), (3, [(16000, 22000), (66000, 72000), (86000, 90000)]))
+        self.assertEqual(plan(kf(["cid"], only_unshown=True)), (1, [(66000, 72000)]))
+        # with the other box too, the same
+        self.assertEqual(plan(kf(["ace"], unshown=True, only_unshown=True)), plan(ace))
+        # specced only has the players followed, whoever is shown those shown
+        self.assertEqual(plan(kf(["ace"], specced=True, only_unshown=True)), (1, [(30000, 34000)]))
+        self.assertEqual(plan(kf(shown=True, only_unshown=True))[0], 1)
+        self.assertEqual(plan(ace, "shownkills")[0], 1)
+        summary = mohreplay.summarize(unspecced_demo())
+        self.assertEqual(mohreplay.filter_kills(summary, ace), (2, {"ace": ["Ace", 2]}))
+        self.assertEqual(mohreplay.filter_kills(summary, anyone), (3, {"ace": ["Ace", 2], "cid": ["Cid", 1]}))
+        # indexes from before: not known to be in the demo
+        old = unspecced_demo()
+        for kill in old["kills"]:
+            kill.pop("seen", None)
+        self.assertEqual(mohreplay.demoonly_plan(old, "kills", kill_filter=anyone)[0], 0)
+        self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(old), anyone)[0], 0)
+
     def test_specced_frags(self):
         """Specced frags: only those of the players the recorder follows,
         Phil's two from 5:00 in followed_demo, not t-'s own."""
@@ -1922,6 +1952,38 @@ class TestRecording(FakeGameCase):
                          [[20000], [32000], [89000]])
         video = self.video("unspecced.mp4")
         self.assertEqual((video["only"], video["filter"].get("unshown")), ("kills", True))
+
+    def test_record_only_unspecced(self):
+        """Only unspecced: without a fragger, anyone's, and neither the
+        recorder's nor those of whoever is shown to choose."""
+        self.short_demos()
+        self.add_demo("unspecced", unspecced_demo())
+        self.add_demo("first", DEMO)
+        window = self.window()
+        TestLibrary.indexed(self, window, ("first", "unspecced"))
+        self.playing(window, "unspecced")
+        window.only_unshown.setChecked(True)
+        window.apply_kill_filter()
+        self.assertFalse(window.unshown.isEnabled())
+        self.assertEqual(window.kills.topLevelItemCount(), 3)
+        self.assertTrue(window.demo_items["first"].isHidden())
+        self.assertFalse(window.demo_items["unspecced"].isHidden())
+        self.assertIn("Ace (2)", window.demo_items["unspecced"].text(mohreplay.COL_PLAYER))
+
+        def setup(dialog):
+            self.assertEqual(sorted(dialog.choices), ["kills", "watched"])
+            self.assertIn("unspecced only", dialog.choices["kills"].text())
+            dialog.choices["kills"].setChecked(True)
+            dialog.pattern.setText("only")
+        self.record(window, setup)
+        job, = self.done(window)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual([[kill["time"] for kill in frags] for frags in job["clips"][0]["frags"]],
+                         [[20000], [70000], [89000]])
+        video = self.video("only.mp4")
+        self.assertEqual((video["only"], video["filter"].get("unshown")), ("kills", "only"))
+        window.only_unshown.setChecked(False)
+        self.assertTrue(window.unshown.isEnabled())
 
     def test_record_specced_frags(self):
         """Specced frags: the filter's frags are those of the players

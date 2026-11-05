@@ -172,7 +172,7 @@ class FakeGame:
             elif what == "specced":
                 self.filter["specced"] = True
             elif what == "unshown":
-                self.filter["unshown"] = True
+                self.filter["unshown"] = arg or True
         elif name == "timescale":
             self.timescale = float(arg)
         elif name == "set":
