@@ -1616,7 +1616,7 @@ CL_DemoBehindAt
 
 The killer of the kill demoonly plays at time while they aren't shown,
 seen from behind them (demofilter unshown), -1 if none; shown is whether it
-plays a kill of whoever is shown then
+plays a kill seen as the demo shows it then
 ====================
 */
 static int CL_DemoBehindAt( int time, qboolean *shown ) {
@@ -1639,7 +1639,7 @@ static int CL_DemoBehindAt( int time, qboolean *shown ) {
 			break;
 		}
 		if ( CL_DemoKillStretch( i, &start, &end ) && start <= time && time < end ) {
-			if ( !CL_DemoKillShown( i, &from, &to ) ) {
+			if ( !CL_DemoKillShown( i, &from, &to ) && CL_DemoKillUnshown( i, &from ) ) {
 				return ev->client;
 			}
 			*shown = qtrue;
