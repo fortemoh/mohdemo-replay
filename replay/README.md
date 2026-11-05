@@ -57,8 +57,9 @@ frags of the players the recorder spectated, while they followed them, not
 the recorder's own. Unspecced frags adds the Fraggers' frags made while the
 demo shows someone else, filmed from behind them, when the demo has them for
 3 s before and their victim in view then (about half of those frags): the
-server only sends the players the recorder could see. The HUD stays the
-recorder's, and it doesn't go with Specced frags or "Whoever is shown". The
+server only sends the players the recorder could see. The HUD is a
+spectator's, with their name but not their health, not in the demo, and it
+doesn't go with Specced frags or "Whoever is shown". The
 list then shows only the demos with such frags, with how many of each
 fragger, and the demo playing lists only those. A player's frags are only those made while the
 demo shows them (the recorder playing, or the player the recorder follows),
@@ -229,9 +230,13 @@ from the shot or explosion that came with it. A hit with neither, like a
 fall, flashes without a kick. In a demo, a player leaning where their eye
 would face a wall right in front of it, as next to a window, sees from where they stand
 instead, as their own game showed them (the server fires from where their
-game puts the eye, and the demo has the start of each shot). The other way, `cg_recordercamera 1` shows the recorder from
-behind while they play, where the camera following a player is. Camera, in
-the toolbar, chooses both, for videos too.
+game puts the eye, and the demo has the start of each shot). The other way,
+`cg_recordercamera 1` shows the recorder from behind while they play, where
+the camera following a player is, as a spectator following them sees them:
+without their scope, crosshair, weapons, ammo or hits on the screen, and with
+their health as theirs. Both have the name of who is shown on the left, with
+their health, as a spectator has. Camera, in the toolbar, chooses both, for
+videos too.
 
 Demos don't show the server's messages about players coming and going
 ("<player> has entered the battle", which it tells everyone each time a

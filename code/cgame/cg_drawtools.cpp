@@ -870,6 +870,7 @@ void CG_DrawObjectives()
 void CG_DrawPlayerEntInfo()
 {
     int         iClientNum;
+    int         iHealth;
     const char *pszClientInfo;
     const char *pszName;
     float       fX, fY;
@@ -878,11 +879,28 @@ void CG_DrawPlayerEntInfo()
 
     // Changed in OPM: also drawn when the HUD is hidden
 
-    if (!cg.snap || cg.snap->ps.stats[STAT_INFOCLIENT] == -1) {
+    if (!cg.snap) {
         return;
     }
 
-    iClientNum    = cg.snap->ps.stats[STAT_INFOCLIENT];
+    iClientNum = cg.snap->ps.stats[STAT_INFOCLIENT];
+    iHealth    = cg.snap->ps.stats[STAT_INFOCLIENT_HEALTH];
+
+    // Added in OPM
+    //  The player a demo shows from behind or from their eyes, as a spectator
+    //  following them has it; how a player not followed is doing isn't in it
+    if (CG_DemoBehind() >= 0) {
+        iClientNum = CG_DemoBehind();
+        iHealth    = -1;
+    } else if (CG_RecorderBehind() || (cg.snap->snapFlags & SNAPFLAG_FOLLOWED_FROM_EYES)) {
+        iClientNum = cg.snap->ps.clientNum;
+        iHealth    = cg.snap->ps.stats[STAT_HEALTH];
+    }
+
+    if (iClientNum == -1) {
+        return;
+    }
+
     handle        = 0;
     pszClientInfo = CG_ConfigString(iClientNum + CS_PLAYERS);
     pszName       = Info_ValueForKey(pszClientInfo, "name");
@@ -917,14 +935,16 @@ void CG_DrawPlayerEntInfo()
         -1,
         cgs.uiHiResScale
     );
-    cgi.R_DrawString(
-        cgs.media.hudDrawFont,
-        va("%i", cg.snap->ps.stats[STAT_INFOCLIENT_HEALTH]),
-        fX / cgs.uiHiResScale[0] + 24.0,
-        fY / cgs.uiHiResScale[1] + 20.0,
-        -1,
-        cgs.uiHiResScale
-    );
+    if (iHealth >= 0) {
+        cgi.R_DrawString(
+            cgs.media.hudDrawFont,
+            va("%i", iHealth),
+            fX / cgs.uiHiResScale[0] + 24.0,
+            fY / cgs.uiHiResScale[1] + 20.0,
+            -1,
+            cgs.uiHiResScale
+        );
+    }
 }
 
 void CG_UpdateAttackerDisplay()
