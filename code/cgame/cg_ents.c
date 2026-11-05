@@ -465,7 +465,11 @@ void CG_CalcEntityLerpPositions(centity_t *cent)
         }
     }
 
-    if (cent->currentState.eType != ET_PLAYER || !cg_smoothClients->integer) {
+    // Added in OPM
+    //  The player a demo shows from behind isn't smoothed: the camera sits on
+    //  them, and what smoothing adds would shake all of the picture
+    if (cent->currentState.eType != ET_PLAYER || !cg_smoothClients->integer
+        || cent->currentState.number == CG_DemoBehind()) {
         float quat[4];
         float mat[3][3];
 
