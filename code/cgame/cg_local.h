@@ -721,6 +721,7 @@ extern "C" {
     //
     void BG_EvaluateTrajectory(const trajectory_t *tr, int atTime, const vec3_t base, vec3_t result);
     void CG_SetEntitySoundPosition(centity_t *cent);
+    void CG_CalcEntityLerpPositions(centity_t *cent);
     void CG_AddPacketEntities(void);
     void CG_Beam(centity_t *cent);
     void CG_AdjustPositionForMover(const vec3_t in, int moverNum, int fromTime, int toTime, vec3_t out);

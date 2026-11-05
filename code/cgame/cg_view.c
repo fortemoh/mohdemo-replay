@@ -845,14 +845,19 @@ static qboolean CG_DemoBehindView(vec3_t origin, vec3_t angles)
     int            client = CG_DemoBehind();
     centity_t     *cent;
     playerState_t  ps;
+    entityState_t  es;
     vec3_t         mins, maxs;
-    float          pitch, next;
+    float          pitch, next, height;
     int            i;
 
     if (client < 0) {
         return qfalse;
     }
     cent = &cg_entities[client];
+
+    // where they are this frame: CG_AddPacketEntities draws them there after
+    // this, and from where they were the last, they'd shake on the screen
+    CG_CalcEntityLerpPositions(cent);
 
     memset(&ps, 0, sizeof(ps));
     VectorCopy(cent->lerpOrigin, ps.origin);
@@ -866,9 +871,21 @@ static qboolean CG_DemoBehindView(vec3_t origin, vec3_t angles)
         ps.viewangles[PITCH] += pitch;
     }
     IntegerToBoundingBox(cent->currentState.solid, mins, maxs);
-    ps.viewheight = maxs[2] > CROUCH_MAXS_Z ? DEFAULT_VIEWHEIGHT : CROUCH_VIEWHEIGHT;
+    height = maxs[2] > CROUCH_MAXS_Z ? DEFAULT_VIEWHEIGHT : CROUCH_VIEWHEIGHT;
 
-    CG_StockFollowCameraAt(&ps, &cent->currentState, client, origin, angles);
+    // their height and lean go from one snapshot to the next too, as the
+    // camera of a server does
+    es = cent->currentState;
+    if (cent->interpolate) {
+        IntegerToBoundingBox(cent->nextState.solid, mins, maxs);
+        next   = maxs[2] > CROUCH_MAXS_Z ? DEFAULT_VIEWHEIGHT : CROUCH_VIEWHEIGHT;
+        height = height + (next - height) * cg.frameInterpolation;
+        es.bone_angles[3][2] =
+            LerpAngle(cent->currentState.bone_angles[3][2], cent->nextState.bone_angles[3][2], cg.frameInterpolation);
+    }
+    ps.viewheight = height;
+
+    CG_StockFollowCameraAt(&ps, &es, client, origin, angles);
     return qtrue;
 }
 
