@@ -603,6 +603,129 @@ void CG_AddCEntity(centity_t *cent)
     }
 }
 
+#define MAX_LEVEL_DOORS 256
+
+typedef struct {
+    int    model; // its inline model
+    vec3_t origin;
+} levelDoor_t;
+
+static levelDoor_t cg_levelDoors[MAX_LEVEL_DOORS];
+static int         cg_numLevelDoors;
+static char        cg_levelDoorsMap[MAX_QPATH];
+
+/*
+===============
+CG_FindLevelDoors
+
+Added in OPM
+  The doors of the level from its entities, those that start closed: their
+  place there is where they are closed
+===============
+*/
+static void CG_FindLevelDoors(void)
+{
+    char       *p;
+    const char *token;
+    char        key[MAX_TOKEN_CHARS];
+    qboolean    door;
+    int         model;
+    vec3_t      origin;
+
+    cg_numLevelDoors = 0;
+    door             = qfalse;
+    model            = 0;
+    VectorClear(origin);
+
+    p = cgi.CM_EntityString();
+    while (p) {
+        token = COM_Parse(&p);
+        if (!p) {
+            break;
+        }
+        if (!strcmp(token, "{")) {
+            door  = qfalse;
+            model = 0;
+            VectorClear(origin);
+            continue;
+        }
+        if (!strcmp(token, "}")) {
+            if (door && model > 0 && model < cgs.numInlineModels && cg_numLevelDoors < MAX_LEVEL_DOORS) {
+                cg_levelDoors[cg_numLevelDoors].model = model;
+                VectorCopy(origin, cg_levelDoors[cg_numLevelDoors].origin);
+                cg_numLevelDoors++;
+            }
+            continue;
+        }
+
+        Q_strncpyz(key, token, sizeof(key));
+        token = COM_Parse(&p);
+        if (!Q_stricmp(key, "classname")) {
+            door = !Q_stricmp(token, "func_rotatingdoor") || !Q_stricmp(token, "func_door");
+        } else if (!Q_stricmp(key, "model") && token[0] == '*') {
+            model = atoi(token + 1);
+        } else if (!Q_stricmp(key, "origin")) {
+            sscanf(token, "%f %f %f", &origin[0], &origin[1], &origin[2]);
+        } else if (!Q_stricmp(key, "spawnflags") && (atoi(token) & 1)) {
+            // DOOR_START_OPEN
+            model = -1;
+        }
+    }
+}
+
+/*
+===============
+CG_AddDoorsNotInSnapshot
+
+Added in OPM
+  A demo only has what its recorder could see, so from behind a player
+  elsewhere (CG_DemoBehind) a door by them may not be in the snapshot until it
+  opens, and they'd have a hole in the wall in front of them: it's drawn
+  closed, as it is unless someone is at it
+===============
+*/
+static void CG_AddDoorsNotInSnapshot(void)
+{
+    qboolean    seen[MAX_MODELS];
+    refEntity_t ent;
+    int         i;
+
+    if (CG_DemoBehind() < 0) {
+        return;
+    }
+
+    if (Q_stricmp(cg_levelDoorsMap, cgs.mapname)) {
+        Q_strncpyz(cg_levelDoorsMap, cgs.mapname, sizeof(cg_levelDoorsMap));
+        CG_FindLevelDoors();
+    }
+
+    memset(seen, 0, sizeof(seen));
+    for (i = 0; i < cg.snap->numEntities; i++) {
+        const entityState_t *es = &cg.snap->entities[i];
+
+        if (es->solid == SOLID_BMODEL && es->modelindex >= 0 && es->modelindex < MAX_MODELS) {
+            seen[es->modelindex] = qtrue;
+        }
+    }
+
+    for (i = 0; i < cg_numLevelDoors; i++) {
+        if (seen[cg_levelDoors[i].model]) {
+            continue;
+        }
+
+        memset(&ent, 0, sizeof(ent));
+        VectorCopy(cg_levelDoors[i].origin, ent.origin);
+        VectorCopy(cg_levelDoors[i].origin, ent.oldorigin);
+        AxisCopy(axisDefault, ent.axis);
+        ent.hModel = cgs.inlineDrawModel[cg_levelDoors[i].model];
+        ent.scale  = 1;
+        memset(ent.shaderRGBA, 255, sizeof(ent.shaderRGBA));
+        ent.actionWeight = 1.0;
+        ent.entityNumber = ENTITYNUM_NONE;
+        cgi.R_AddRefEntityToScene(&ent, ENTITYNUM_NONE);
+    }
+}
+
 /*
 ===============
 CG_AddPacketEntities
@@ -660,6 +783,9 @@ void CG_AddPacketEntities(void)
             CG_AddCEntity(cent);
         }
     }
+
+    // Added in OPM
+    CG_AddDoorsNotInSnapshot();
 
     // Add in the multibeams at the end
     for (num = 0; num < cg.snap->numEntities; num++) {
