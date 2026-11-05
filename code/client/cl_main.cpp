@@ -745,7 +745,7 @@ static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
 // spectator, while followed. With unshown, also the kills of the killers
 // while not shown, seen from behind them (cl_demoBehind), when their entity
 // is in the demo for DEMOFILTER_UNSHOWN_SEEN msec before, and their victim
-// in view then.
+// in view then, and only those with unshownOnly, of anyone without killers.
 #define DEMOFILTER_NAMES	16
 #define DEMOFILTER_UNSHOWN_SEEN	3000
 #define DEMOFILTER_GREAT_SCOPE	1000
@@ -763,6 +763,7 @@ typedef struct {
 	int			numLevels;
 	char		levels[DEMOFILTER_NAMES][MAX_NAME_LENGTH];	// parts of level names, any case
 	qboolean	unshown;
+	qboolean	unshownOnly;
 	qboolean	great;
 	int			greatScope;
 	int			greatSpeed;
@@ -1229,7 +1230,8 @@ those of the players followed
 ====================
 */
 static qboolean CL_DemoKillersShown( const char *player, qboolean shown ) {
-	return player[0] || shown || cl_demoFilter.shown || cl_demoFilter.numKillers || cl_demoFilter.specced;
+	return player[0] || shown || cl_demoFilter.shown || cl_demoFilter.numKillers || cl_demoFilter.specced
+		|| cl_demoFilter.unshownOnly;
 }
 
 /*
@@ -1458,6 +1460,24 @@ static qboolean CL_DemoKillUnshown( int i, int *from ) {
 
 /*
 ====================
+CL_DemoKillPlays
+
+Whether kill event i, of the ones played only while their killer is shown,
+plays, and between when: while they're shown, unless the filter only has the
+others (demofilter unshown only), or seen from behind them. Of whoever is
+shown if whoever, who are shown.
+====================
+*/
+static qboolean CL_DemoKillPlays( int i, qboolean whoever, int *from, int *to ) {
+	if ( CL_DemoKillShown( i, from, to ) ) {
+		return whoever || !cl_demoFilter.unshownOnly || cl_demoFilter.specced || cl_demoFilter.shown;
+	}
+	*to = cl_demoIndex.duration;
+	return !whoever && CL_DemoKillUnshown( i, from );
+}
+
+/*
+====================
 CL_DemoDeathShown
 
 Whether the victim of kill event i is the player shown at the time: the
@@ -1598,14 +1618,11 @@ static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 	// a player's kills, or whoever's shown, only while they're the one shown,
 	// or seen from behind them (demofilter unshown)
 	if ( shown ) {
-		if ( CL_DemoKillShown( i, &from, &to ) ) {
-			*start = Q_max( *start, from );
-			*end = Q_min( *end, to );
-		} else if ( !whoever && CL_DemoKillUnshown( i, &from ) ) {
-			*start = Q_max( *start, from );
-		} else {
+		if ( !CL_DemoKillPlays( i, whoever, &from, &to ) ) {
 			return qfalse;
 		}
+		*start = Q_max( *start, from );
+		*end = Q_min( *end, to );
 	}
 	return *end > *start;
 }
@@ -2005,9 +2022,10 @@ static void CL_DemoJumpToKill( qboolean next, qboolean shown ) {
 		}
 
 		target = Q_max( CL_DemoMapTimeFor( i ), ev->time - CL_DemoKillBefore() );
-		// a player's kills, or whoever's is shown, only while they're the one shown
+		// a player's kills, or whoever's is shown, only while they're the one
+		// shown, or seen from behind them (demofilter unshown)
 		if ( CL_DemoKillersShown( player, shown ) ) {
-			if ( !CL_DemoKillShown( i, &from, &to ) ) {
+			if ( !CL_DemoKillPlays( i, shown, &from, &to ) ) {
 				continue;
 			}
 			target = Q_max( target, from );
@@ -2077,7 +2095,7 @@ static void CL_DemoPrintFilterNames( const char *what, char names[][MAX_NAME_LEN
 ====================
 CL_DemoFilter_f
 
-demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]] | specced | unshown]
+demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]] | specced | unshown [only]]
 
 Which kills demoonly kills, demonextkill and demoprevkill go to without a
 player given: by players whose names have one of the killers in them, while
@@ -2093,7 +2111,8 @@ given no input for over idle msec (5000), AFK, which make no streak either.
 With specced, only the kills of the players the recorder followed as a
 spectator, while followed. With unshown, also the kills of the killers while
 they aren't shown, seen from behind them, when the demo has them for 3
-seconds before and their victim in view then. Each adds to it, but clear;
+seconds before and their victim in view then; with unshown only, only those,
+of anyone without killers. Each adds to it, but clear;
 without arguments, it tells what it is.
 ====================
 */
@@ -2132,8 +2151,8 @@ static void CL_DemoFilter_f( void ) {
 			Com_Printf( "Specced only: the kills of the players followed by the recorder\n" );
 		}
 		if ( cl_demoFilter.unshown ) {
-			Com_Printf( "Also not shown: the kills of the killers while not shown, from behind them, when in the demo for %d msec before\n",
-				DEMOFILTER_UNSHOWN_SEEN );
+			Com_Printf( "%s: the kills of the killers while not shown, from behind them, when in the demo for %d msec before\n",
+				cl_demoFilter.unshownOnly ? "Only not shown" : "Also not shown", DEMOFILTER_UNSHOWN_SEEN );
 		}
 		return;
 	}
@@ -2170,10 +2189,11 @@ static void CL_DemoFilter_f( void ) {
 		cl_demoFilter.greatIdle = Cmd_Argc() > 5 ? atoi( Cmd_Argv( 5 ) ) : DEMOFILTER_GREAT_IDLE;
 	} else if ( !Q_stricmp( what, "specced" ) && Cmd_Argc() == 2 ) {
 		cl_demoFilter.specced = qtrue;
-	} else if ( !Q_stricmp( what, "unshown" ) && Cmd_Argc() == 2 ) {
+	} else if ( !Q_stricmp( what, "unshown" ) && ( Cmd_Argc() == 2 || ( Cmd_Argc() == 3 && !Q_stricmp( Cmd_Argv( 2 ), "only" ) ) ) ) {
 		cl_demoFilter.unshown = qtrue;
+		cl_demoFilter.unshownOnly = Cmd_Argc() == 3;
 	} else {
-		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]] | specced | unshown]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; a * in a name stands for any one character (gr*m: grim, gr1m); the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower, but those with another kill of their killer within streak msec (5000), and the kills of victims idle for over idle msec (5000), specced keeps only the kills of the players the recorder followed, and unshown adds the kills of the killers while they aren't shown, from behind them, when the demo has them for 3 seconds before and their victim\n" );
+		Com_Printf( "demofilter [clear | shown | killer <part of a name> | victim <part of a name> | weapon <weapon>... | level <part of a name> | great [<msec> [<speed> [<streak msec> [<idle msec>]]]] | specced | unshown [only]]: the kills demoonly kills, demonextkill and demoprevkill go to without a player, each adding to them but clear; a * in a name stands for any one character (gr*m: grim, gr1m); the weapons are pistol, rifle, sniper, smg, mg, shotgun, rocket, grenade, melee and other, level obj/ keeps the objective maps', and great leaves out the sniper kills seen scoped for over msec (1000) at speed (30) or slower, but those with another kill of their killer within streak msec (5000), and the kills of victims idle for over idle msec (5000), specced keeps only the kills of the players the recorder followed, and unshown adds the kills of the killers while they aren't shown, from behind them, when the demo has them for 3 seconds before and their victim\n" );
 	}
 }
 
