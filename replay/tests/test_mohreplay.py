@@ -24,6 +24,10 @@ import zipfile
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# nothing here may reach the settings and indexes of whoever runs the tests
+TEST_HOME = tempfile.TemporaryDirectory(prefix="mohreplay-test-home-")
+os.environ["XDG_CONFIG_HOME"] = os.path.join(TEST_HOME.name, "config")
+os.environ["XDG_CACHE_HOME"] = os.path.join(TEST_HOME.name, "cache")
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
@@ -158,6 +162,9 @@ class FakeGameCase(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="mohreplay-test-")
+        # cleanups run last in, first out: a game a test leaves to its own
+        # cleanup still saves its settings in the test's folders
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.bin = os.path.join(self.tmp, "bin")
         self.game_dir = os.path.join(self.tmp, "game")
         self.demos = os.path.join(self.tmp, "demos")
@@ -181,6 +188,7 @@ class FakeGameCase(unittest.TestCase):
                                                          "XDG_CONFIG_HOME": os.path.join(self.tmp, "config")}))
         for patch in self.patches:
             patch.start()
+            self.addCleanup(patch.stop)
         self.windows = []
 
     def tearDown(self):
@@ -188,9 +196,6 @@ class FakeGameCase(unittest.TestCase):
             window.close()
         # what's left to do still runs in the test's folders and settings
         app.processEvents()
-        for patch in reversed(self.patches):
-            patch.stop()
-        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def add_demo(self, name, index):
         with open(os.path.join(self.demos, name + ".dm3"), "w") as f:
