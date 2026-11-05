@@ -16,6 +16,7 @@ set(CLIENT_SOURCES
     ${SOURCE_DIR}/client/cl_cin.cpp
     ${SOURCE_DIR}/client/cl_consolecmds.cpp
     ${SOURCE_DIR}/client/cl_curl.c
+    ${SOURCE_DIR}/client/cl_demohits.cpp
     ${SOURCE_DIR}/client/cl_demoindex.cpp
     ${SOURCE_DIR}/client/cl_input.cpp
     ${SOURCE_DIR}/client/cl_instantAction.cpp

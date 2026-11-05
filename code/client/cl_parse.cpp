@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "client.h"
 #include "cl_ui.h"
+#include "cl_demohits.h"
 #include "../qcommon/bg_compat.h"
 
 const char *svc_strings[256] = {
@@ -267,38 +268,78 @@ With cg_followcamera 2, a demo shows the player the recorder follows from
 their eyes, but it only has their health (STAT_INFOCLIENT_HEALTH), not the
 view kick and red flash of their hits, nor where they came from: those are
 made again from their health dropping, as the server makes them
-(Player::DamageFeedback: a kick of 0.3 degree per point, an alpha of 0.001
-per point, at least 0.2 and at most 0.6), and shown with their health
-(CL_DemoShowFollowed). Hits are taken as from the front.
+(Player::DamageFeedback), from the shots and explosions that come with it,
+after the snapshot in the same message (CL_DemoFollowedHitsEnd), and shown
+with their health (CL_DemoShowFollowed).
 ================
 */
 typedef struct {
 	int		messageNum;
 	qboolean	followed;
 	int		health;
+	int		dir;
 	float	alpha;
 	vec3_t	angles;
 } demoFollowedHits_t;
 
+#define MAX_DEMO_HIT_SOURCES 64
+
 static demoFollowedHits_t cl_demoFollowedHits[PACKET_BACKUP];
+static demoHitSource_t cl_demoHitSources[MAX_DEMO_HIT_SOURCES];
+static int cl_demoNumHitSources;
 static struct {
 	int		client; // -1 when not followed from their eyes
 	int		health;
 	int		serverTime;
-	float	alpha;
-	vec3_t	angles;
+	int		damage; // of this message, until what came with it is read
+	int		ownDir; // the recorder's own STAT_DAMAGEDIR
+	int		dir; // the STAT_DAMAGEDIR shown, that only changes with a hit
+	demoHitFeedback_t feedback;
 } cl_demoHits = { -1 };
+
+void CL_DemoHitSource( const vec3_t start, const vec3_t end ) {
+	demoHitSource_t	*source;
+
+	if ( !clc.demoplaying || cl_demoNumHitSources >= MAX_DEMO_HIT_SOURCES ) {
+		return;
+	}
+	source = &cl_demoHitSources[cl_demoNumHitSources++];
+	VectorCopy( start, source->start );
+	source->explosion = end == NULL;
+	if ( end ) {
+		VectorCopy( end, source->end );
+	}
+}
+
+static void CL_DemoFollowedHitsKeep( demoFollowedHits_t *hits ) {
+	hits->dir = cl_demoHits.dir;
+	hits->alpha = cl_demoHits.feedback.alpha;
+	DemoHits_ViewAngles( &cl_demoHits.feedback, hits->angles );
+}
 
 static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	demoFollowedHits_t	*hits = &cl_demoFollowedHits[snap->messageNum & PACKET_MASK];
 	int					client = snap->ps.stats[STAT_INFOCLIENT];
 	int					health = snap->ps.stats[STAT_INFOCLIENT_HEALTH];
-	int					damage, frames, i;
+	int					damage, i;
 	qboolean			body = qfalse;
 
+	hits->messageNum = -1;
+	if ( !clc.demoplaying ) {
+		return;
+	}
 	hits->messageNum = snap->messageNum;
 	hits->followed = qfalse;
-	if ( clc.demoplaying && Cvar_VariableIntegerValue( "cg_followcamera" ) == 2
+	cl_demoNumHitSources = 0;
+	cl_demoHits.damage = 0;
+
+	if ( snap->ps.stats[STAT_DAMAGEDIR] != cl_demoHits.ownDir ) {
+		cl_demoHits.ownDir = snap->ps.stats[STAT_DAMAGEDIR];
+		cl_demoHits.dir = cl_demoHits.ownDir;
+	}
+	hits->dir = cl_demoHits.dir;
+
+	if ( Cvar_VariableIntegerValue( "cg_followcamera" ) == 2
 		&& ( snap->ps.pm_flags & PMF_CAMERA_VIEW ) && client >= 0 && client < MAX_CLIENTS ) {
 		// as cgame does, when their entity is in it
 		for ( i = 0; i < snap->numEntities && !body; i++ ) {
@@ -313,20 +354,16 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	if ( client != cl_demoHits.client || snap->serverTime < cl_demoHits.serverTime
 		|| snap->serverTime - cl_demoHits.serverTime > 1000 ) {
 		// someone else, or a jump: nothing going on
-		cl_demoHits.alpha = 0;
-		VectorClear( cl_demoHits.angles );
+		DemoHits_Clear( &cl_demoHits.feedback );
 	} else {
-		// fading, a server frame (50 msec) at a time
-		frames = ( snap->serverTime - cl_demoHits.serverTime ) / 50;
-		for ( i = 0; i < frames; i++ ) {
-			VectorScale( cl_demoHits.angles, 0.8f, cl_demoHits.angles );
-		}
-		cl_demoHits.alpha = Q_max( cl_demoHits.alpha - 0.06f * frames, 0.f );
+		// a server frame is 50 msec
+		DemoHits_Fade( &cl_demoHits.feedback, ( snap->serverTime - cl_demoHits.serverTime ) / 50 );
 
 		damage = cl_demoHits.health - health;
-		if ( damage > 0 && health > 0 ) {
-			cl_demoHits.angles[PITCH] = Q_min( cl_demoHits.angles[PITCH] + damage * 0.3f, 30.f );
-			cl_demoHits.alpha = Q_bound( 0.2f, cl_demoHits.alpha + Q_max( damage, 10 ) * 0.001f, 0.6f );
+		if ( health <= 0 ) {
+			DemoHits_Clear( &cl_demoHits.feedback );
+		} else if ( damage > 0 ) {
+			cl_demoHits.damage = damage;
 		}
 	}
 	cl_demoHits.client = client;
@@ -335,8 +372,45 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 
 	hits->followed = qtrue;
 	hits->health = health;
-	hits->alpha = cl_demoHits.alpha;
-	VectorCopy( cl_demoHits.angles, hits->angles );
+	CL_DemoFollowedHitsKeep( hits );
+}
+
+/*
+================
+CL_DemoFollowedHitsEnd
+
+Added in OPM
+The end of a message: a hit of its snapshot, now that what came with it is read
+================
+*/
+static void CL_DemoFollowedHitsEnd( void ) {
+	demoHitPlayer_t		others[MAX_CLIENTS];
+	demoFollowedHits_t	*hits;
+	vec3_t				dir;
+	int					numOthers = 0, i;
+
+	if ( !clc.demoplaying || !cl_demoHits.damage ) {
+		return;
+	}
+
+	for ( i = 0; i < cl.snap.numEntities; i++ ) {
+		const entityState_t *ent = &cl.parseEntities[( cl.snap.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 )];
+
+		if ( ent->number < MAX_CLIENTS && ent->number != cl_demoHits.client ) {
+			VectorCopy( ent->netorigin, others[numOthers].origin );
+			others[numOthers].yaw = ent->netangles[YAW];
+			numOthers++;
+		}
+	}
+
+	DemoHits_Direction( cl.snap.ps.origin, cl_demoHits.damage, cl_demoHitSources, cl_demoNumHitSources, others, numOthers, dir );
+	DemoHits_Hit( &cl_demoHits.feedback, cl_demoHits.damage, dir, cl.snap.ps.viewangles[YAW] );
+	cl_demoHits.dir = DemoHits_DirStat( dir, cl_demoHits.dir );
+	cl_demoHits.damage = 0;
+
+	hits = &cl_demoFollowedHits[cl.snap.messageNum & PACKET_MASK];
+	CL_DemoFollowedHitsKeep( hits );
+	CL_DemoShowFollowed( &cl.snap.ps, cl.snap.messageNum );
 }
 
 /*
@@ -352,7 +426,11 @@ as the next ones build on them
 void CL_DemoShowFollowed( playerState_t *ps, int messageNum ) {
 	const demoFollowedHits_t *hits = &cl_demoFollowedHits[messageNum & PACKET_MASK];
 
-	if ( hits->messageNum != messageNum || !hits->followed ) {
+	if ( hits->messageNum != messageNum ) {
+		return;
+	}
+	ps->stats[STAT_DAMAGEDIR] = hits->dir;
+	if ( !hits->followed ) {
 		return;
 	}
 	ps->stats[STAT_HEALTH] = hits->health;
@@ -1338,4 +1416,7 @@ void CL_ParseServerMessage( msg_t *msg ) {
 			break;
 		}
 	}
+
+	// Added in OPM
+	CL_DemoFollowedHitsEnd();
 }

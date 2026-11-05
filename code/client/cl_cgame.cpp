@@ -899,6 +899,7 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->GetGameState				= CL_GetGameState;
 	cgi->GetSnapshot				= CL_GetSnapshot;
 	cgi->GetServerStartTime			= CL_GetServerStartTime;
+	cgi->DemoHitSource				= CL_DemoHitSource;
 	cgi->SetTime					= CL_SetTime;
 	cgi->GetCurrentSnapshotNumber	= CL_GetCurrentSnapshotNumber;
 

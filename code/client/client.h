@@ -659,6 +659,7 @@ void CL_SystemInfoChanged( void );
 void CL_ParseServerMessage( msg_t *msg );
 // Added in OPM
 void CL_DemoShowFollowed( playerState_t *ps, int messageNum );
+void CL_DemoHitSource( const vec3_t start, const vec3_t end );
 void CL_UpdateDemoBehind( void );
 
 int		CL_MSG_ReadBits( int bits );

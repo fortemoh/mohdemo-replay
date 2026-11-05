@@ -1034,6 +1034,9 @@ void CG_MakeExplosionEffect(const vec3_t vPos, int iType)
     int       iSurfEffect;
     float     fRadius;
     vec3_t    vEnd;
+
+    // Added in OPM
+    cgi.DemoHitSource(vPos, NULL);
     str       sMark;
     trace_t   trace;
     qhandle_t shader;
@@ -1355,6 +1358,11 @@ void CG_ParseCGMessage_ver_15()
                 alpha = 1.0f;
             }
 
+            if (iType != CGM_BULLET_5) {
+                // Added in OPM
+                cgi.DemoHitSource(vStart, vEndArray[0]);
+            }
+
             if (iType == CGM_BULLET_1) {
                 CG_MakeBulletTracer(vTmp, vStart, vEndArray, 1, iLarge, qtrue, qtrue, alpha);
             } else if (iType == CGM_BULLET_2) {
@@ -1394,6 +1402,8 @@ void CG_ParseCGMessage_ver_15()
                 vEndArray[i][0] = cgi.MSG_ReadCoord();
                 vEndArray[i][1] = cgi.MSG_ReadCoord();
                 vEndArray[i][2] = cgi.MSG_ReadCoord();
+                // Added in OPM
+                cgi.DemoHitSource(vStart, vEndArray[i]);
             }
 
             if (iCount) {
@@ -1797,6 +1807,11 @@ void CG_ParseCGMessage_ver_6()
             vEndArray[0][2] = cgi.MSG_ReadCoord();
             iLarge          = cgi.MSG_ReadBits(1);
 
+            if (iType != CGM6_BULLET_5) {
+                // Added in OPM
+                cgi.DemoHitSource(vStart, vEndArray[0]);
+            }
+
             if (iType == CGM6_BULLET_1) {
                 CG_MakeBulletTracer(vTmp, vStart, vEndArray, 1, iLarge, qtrue, qtrue);
             } else if (iType == CGM6_BULLET_2) {
@@ -1826,6 +1841,8 @@ void CG_ParseCGMessage_ver_6()
                 vEndArray[i][0] = cgi.MSG_ReadCoord();
                 vEndArray[i][1] = cgi.MSG_ReadCoord();
                 vEndArray[i][2] = cgi.MSG_ReadCoord();
+                // Added in OPM
+                cgi.DemoHitSource(vStart, vEndArray[i]);
             }
 
             if (iCount) {

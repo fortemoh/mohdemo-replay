@@ -339,6 +339,10 @@ functions exported to the main executable
         void (*GetGameState)(gameState_t *gamestate);
         int (*GetSnapshot)(int snapshotNumber, snapshot_t *snapshot);
         int (*GetServerStartTime)();
+        // Added in OPM
+        //  What came with a snapshot of a demo that can hurt: a shot from
+        //  start to end, or an explosion at start, without an end
+        void (*DemoHitSource)(const vec3_t start, const vec3_t end);
         void (*SetTime)(int time);
         void (*GetCurrentSnapshotNumber)(int *snapshotNumber, int *serverTime);
         void (*GetGlconfig)(glconfig_t *glconfig);

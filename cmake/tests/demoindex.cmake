@@ -15,3 +15,14 @@ add_executable(test_demoindex
 
 add_test(NAME test_demoindex COMMAND test_demoindex)
 set_tests_properties(test_demoindex PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+
+# The hits of a player a demo follows (see test_demohits.cpp)
+add_executable(test_demohits
+    ${SOURCE_DIR}/client/tests/test_demohits.cpp
+    ${SOURCE_DIR}/client/cl_demohits.cpp
+    ${SOURCE_DIR}/qcommon/q_shared.c
+    ${SOURCE_DIR}/qcommon/q_math.c
+    ${SOURCE_DIR}/qcommon/common_light.c
+)
+
+add_test(NAME test_demohits COMMAND test_demohits)
