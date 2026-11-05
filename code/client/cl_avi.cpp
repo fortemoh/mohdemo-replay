@@ -858,6 +858,21 @@ int CL_VideoFrameMsec( void )
 
 /*
 ===============
+CL_VideoNextFrameMsec
+
+Added in OPM
+What CL_VideoFrameMsec will give next
+===============
+*/
+int CL_VideoNextFrameMsec( void )
+{
+  int msec = (int)( afd.gameTime + 1000.0 * com_timescale->value / afd.frameRate );
+
+  return msec > 0 ? msec : 1;
+}
+
+/*
+===============
 CL_VideoFileName
 
 Added in OPM

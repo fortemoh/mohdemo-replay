@@ -1869,12 +1869,29 @@ void CL_UpdateDemoBehind( void ) {
 
 /*
 ====================
-CL_RunDemoOnly
+CL_DemoSnapshotMsec
 
-Jumps over what demoonly doesn't play, and pauses after the last of it
+How long a snapshot of the demo lasts, as the last two tell
 ====================
 */
-static void CL_RunDemoOnly( void ) {
+static int CL_DemoSnapshotMsec( void ) {
+	const clSnapshot_t	*last = &cl.snapshots[( cl.snap.messageNum - 1 ) & PACKET_MASK];
+	int					msec = cl.snap.serverTime - last->serverTime;
+
+	return last->valid && last->messageNum == cl.snap.messageNum - 1 && msec > 0 && msec <= 200 ? msec : 50;
+}
+
+/*
+====================
+CL_RunDemoOnly
+
+Jumps over what demoonly doesn't play, and pauses after the last of it, as
+it will be in ahead msec. A stretch ends before the snapshot that comes at
+its end is read: the HUD goes by the one read, ahead of the time drawn, and
+it may be of the round over, with no HUD, or of someone else
+====================
+*/
+static void CL_RunDemoOnly( int ahead ) {
 	int		time, start, end;
 
 	if ( cl_demoOnly == DEMOONLY_ALL || !clc.demoplaying || clc.state != CA_ACTIVE
@@ -1882,8 +1899,8 @@ static void CL_RunDemoOnly( void ) {
 		return;
 	}
 
-	time = CL_DemoTime();
-	if ( !CL_DemoNextStretch( time, &start, &end, NULL ) ) {
+	time = CL_DemoTime() + ahead;
+	if ( !CL_DemoNextStretch( time + CL_DemoSnapshotMsec(), &start, &end, NULL ) ) {
 		Com_Printf( "Nothing more to play, paused\n" );
 		cl_demoOnly = DEMOONLY_ALL;
 		Cvar_Set( "cl_freezeDemo", "1" );
@@ -4313,6 +4330,12 @@ void CL_Frame ( int msec ) {
 		}
 	}
 
+	// Added in OPM
+	//  Before the time moves on: no frame is drawn and saved past the end of
+	//  a stretch, where the round may be over, with the scoreboard up, or
+	//  someone else shown
+	CL_RunDemoOnly( CL_VideoRecording() && cl_aviFrameRate->integer ? CL_VideoNextFrameMsec() : msec );
+
 	// if recording an avi, lock to a fixed fps
 	if ( CL_VideoRecording( ) && cl_aviFrameRate->integer && msec) {
 		// save the current screen
@@ -4445,7 +4468,7 @@ void CL_Frame ( int msec ) {
 	SCR_RunCinematic();
 
 	// Added in OPM
-	CL_RunDemoOnly();
+	CL_RunDemoOnly( 0 );
 	CL_RunDemoVideo();
 	CL_UpdateDemoState();
 

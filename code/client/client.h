@@ -795,6 +795,7 @@ void CL_NET_OutOfBandPrint( netadr_t adr, const char* format, ... );
 qboolean CL_OpenAVIForWriting( const char *filename, qboolean pipe );
 // Added in OPM
 int CL_VideoFrameMsec( void );
+int CL_VideoNextFrameMsec( void );
 const char *CL_VideoFileName( void );
 void CL_TakeVideoFrame( void );
 void CL_WriteAVIVideoFrame( const byte *imageBuffer, int size );
