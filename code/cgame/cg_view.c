@@ -1453,6 +1453,12 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
 
     cg.refdef.time = cg.time;
     memcpy(cg.refdef.areamask, cg.snap->areamask, sizeof(cg.refdef.areamask));
+    // Added in OPM
+    //  It tells what the recorder can see from where they are. From behind a
+    //  player elsewhere, the rooms they can't see would be black
+    if (CG_DemoBehind() >= 0) {
+        memset(cg.refdef.areamask, 0, sizeof(cg.refdef.areamask));
+    }
 
     // update audio positions
     cgi.S_Respatialize(cg.snap->ps.clientNum, cg.SoundOrg, cg.SoundAxis);
