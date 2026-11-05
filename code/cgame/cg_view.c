@@ -830,62 +830,82 @@ int CG_DemoBehind(void)
 
 /*
 ===============
+CG_DemoBehindState
+
+Added in OPM
+  What a stock server's camera behind a player goes by, from their entity: its
+  place and yaw, their pitch that their head, torso, arms and pelvis share
+  between them (PmoveAdjustAngleSettings), and their eyes' height that their
+  box tells (standing or crouching)
+===============
+*/
+static void CG_DemoBehindState(const entityState_t *es, playerState_t *ps)
+{
+    vec3_t mins, maxs;
+    int    i;
+
+    memset(ps, 0, sizeof(*ps));
+    VectorCopy(es->origin, ps->origin);
+    ps->viewangles[YAW] = es->angles[YAW];
+    for (i = 0; i < 4; i++) {
+        ps->viewangles[PITCH] += AngleNormalize180(es->bone_angles[i][PITCH]);
+    }
+    IntegerToBoundingBox(es->solid, mins, maxs);
+    ps->viewheight = maxs[2] > CROUCH_MAXS_Z ? DEFAULT_VIEWHEIGHT : CROUCH_VIEWHEIGHT;
+}
+
+/*
+===============
+CG_DemoBehindCamera
+
+Added in OPM
+  Where the camera behind a player is, from their entity, done as for a player
+  followed (CG_StockFollowCamera): from the snapshot to the next. It doesn't
+  go by where they're drawn this frame, which cg_smoothClients moves ahead of
+  them, so that they move against it as a player followed does
+===============
+*/
+static void CG_DemoBehindCamera(int client, vec3_t origin, vec3_t angles)
+{
+    centity_t    *cent = &cg_entities[client];
+    playerState_t ps;
+    vec3_t        nextOrigin, nextAngles;
+    int           i;
+
+    CG_DemoBehindState(&cent->currentState, &ps);
+    CG_StockFollowCameraAt(&ps, &cent->currentState, client, origin, angles);
+
+    if (!cent->interpolate) {
+        return;
+    }
+
+    CG_DemoBehindState(&cent->nextState, &ps);
+    CG_StockFollowCameraAt(&ps, &cent->nextState, client, nextOrigin, nextAngles);
+
+    for (i = 0; i < 3; i++) {
+        origin[i] += cg.frameInterpolation * (nextOrigin[i] - origin[i]);
+        angles[i] = LerpAngle(angles[i], nextAngles[i], cg.frameInterpolation);
+    }
+}
+
+/*
+===============
 CG_DemoBehindView
 
 Added in OPM
   Where the camera behind the player of CG_DemoBehind is, as a stock server
-  puts the camera that follows them (CG_StockFollowCameraAt), from their
-  entity: its place and yaw, their pitch that their head, torso, arms and
-  pelvis share between them (PmoveAdjustAngleSettings), and their eyes'
-  height that their box tells (standing or crouching)
+  puts the camera that follows them
 ===============
 */
 static qboolean CG_DemoBehindView(vec3_t origin, vec3_t angles)
 {
-    int            client = CG_DemoBehind();
-    centity_t     *cent;
-    playerState_t  ps;
-    entityState_t  es;
-    vec3_t         mins, maxs;
-    float          pitch, next, height;
-    int            i;
+    int client = CG_DemoBehind();
 
     if (client < 0) {
         return qfalse;
     }
-    cent = &cg_entities[client];
 
-    // where they are this frame: CG_AddPacketEntities draws them there after
-    // this, and from where they were the last, they'd shake on the screen
-    CG_CalcEntityLerpPositions(cent);
-
-    memset(&ps, 0, sizeof(ps));
-    VectorCopy(cent->lerpOrigin, ps.origin);
-    ps.viewangles[YAW] = cent->lerpAngles[YAW];
-    for (i = 0; i < 4; i++) {
-        pitch = AngleNormalize180(cent->currentState.bone_angles[i][PITCH]);
-        if (cent->interpolate) {
-            next  = AngleNormalize180(cent->nextState.bone_angles[i][PITCH]);
-            pitch = pitch + (next - pitch) * cg.frameInterpolation;
-        }
-        ps.viewangles[PITCH] += pitch;
-    }
-    IntegerToBoundingBox(cent->currentState.solid, mins, maxs);
-    height = maxs[2] > CROUCH_MAXS_Z ? DEFAULT_VIEWHEIGHT : CROUCH_VIEWHEIGHT;
-
-    // their height and lean go from one snapshot to the next too, as the
-    // camera of a server does
-    es = cent->currentState;
-    if (cent->interpolate) {
-        IntegerToBoundingBox(cent->nextState.solid, mins, maxs);
-        next   = maxs[2] > CROUCH_MAXS_Z ? DEFAULT_VIEWHEIGHT : CROUCH_VIEWHEIGHT;
-        height = height + (next - height) * cg.frameInterpolation;
-        es.bone_angles[3][2] =
-            LerpAngle(cent->currentState.bone_angles[3][2], cent->nextState.bone_angles[3][2], cg.frameInterpolation);
-    }
-    ps.viewheight = height;
-
-    CG_StockFollowCameraAt(&ps, &es, client, origin, angles);
+    CG_DemoBehindCamera(client, origin, angles);
     return qtrue;
 }
 
