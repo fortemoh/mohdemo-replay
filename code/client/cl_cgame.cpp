@@ -1156,6 +1156,8 @@ void CL_CGameRendering( stereoFrame_t stereo ) {
 		cl.oldServerTime = cl.serverStartTime;
 	}
 
+	// Added in OPM
+	CL_UpdateDemoBehind();
 	cge->CG_DrawActiveFrame( cl.serverTime, cl.serverTime - cl.oldServerTime, stereo, clc.demoplaying );
 
 	cl.oldServerTime = cl.serverTime;

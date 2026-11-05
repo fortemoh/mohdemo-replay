@@ -1063,6 +1063,8 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     // Added in OPM
     //  The recorder seen from behind
     bThirdPerson |= CG_RecorderBehind();
+    // Added in OPM
+    bThirdPerson |= CG_DemoBehind() >= 0;
     // Fixed in OPM
     //  Draw world model body when in camera
     bThirdPerson |= (cg.snap->ps.pm_flags & PMF_CAMERA_VIEW && !(cg.snap->ps.pm_flags & PMF_TURRET));
@@ -1354,7 +1356,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     }
 
     if (!(s1->renderfx & RF_ALWAYSDRAW) && s1->parent != ENTITYNUM_NONE && s1->parent == clientNum
-        && ((!cg_drawviewmodel->integer && !bThirdPerson) || cg.snap->ps.stats[STAT_INZOOM])) {
+        && ((!cg_drawviewmodel->integer && !bThirdPerson) || (cg.snap->ps.stats[STAT_INZOOM] && CG_DemoBehind() < 0))) {
         // hide all surfaces while zooming or if the viewmodel shouldn't be shown
         for (i = 0; i < MAX_MODEL_SURFACES; i++) {
             model.surfaces[i] |= MDL_SURFACE_NODRAW;

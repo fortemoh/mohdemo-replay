@@ -810,6 +810,70 @@ qboolean CG_RecorderBehind(void)
 
 /*
 ===============
+CG_DemoBehind
+
+Added in OPM
+  The player a demo shows from behind, -1 for none: the killer of a kill
+  demoonly plays while they aren't the one shown (demofilter unshown,
+  cl_demoBehind), when their entity is in the snapshot
+===============
+*/
+int CG_DemoBehind(void)
+{
+    int client = cl_demoBehind->integer;
+
+    if (!cg.demoPlayback || !cg.snap || client < 0 || client >= MAX_CLIENTS || !cg_entities[client].currentValid) {
+        return -1;
+    }
+    return client;
+}
+
+/*
+===============
+CG_DemoBehindView
+
+Added in OPM
+  Where the camera behind the player of CG_DemoBehind is, as a stock server
+  puts the camera that follows them (CG_StockFollowCameraAt), from their
+  entity: its place and yaw, their pitch that their head, torso, arms and
+  pelvis share between them (PmoveAdjustAngleSettings), and their eyes'
+  height that their box tells (standing or crouching)
+===============
+*/
+static qboolean CG_DemoBehindView(vec3_t origin, vec3_t angles)
+{
+    int            client = CG_DemoBehind();
+    centity_t     *cent;
+    playerState_t  ps;
+    vec3_t         mins, maxs;
+    float          pitch, next;
+    int            i;
+
+    if (client < 0) {
+        return qfalse;
+    }
+    cent = &cg_entities[client];
+
+    memset(&ps, 0, sizeof(ps));
+    VectorCopy(cent->lerpOrigin, ps.origin);
+    ps.viewangles[YAW] = cent->lerpAngles[YAW];
+    for (i = 0; i < 4; i++) {
+        pitch = AngleNormalize180(cent->currentState.bone_angles[i][PITCH]);
+        if (cent->interpolate) {
+            next  = AngleNormalize180(cent->nextState.bone_angles[i][PITCH]);
+            pitch = pitch + (next - pitch) * cg.frameInterpolation;
+        }
+        ps.viewangles[PITCH] += pitch;
+    }
+    IntegerToBoundingBox(cent->currentState.solid, mins, maxs);
+    ps.viewheight = maxs[2] > CROUCH_MAXS_Z ? DEFAULT_VIEWHEIGHT : CROUCH_VIEWHEIGHT;
+
+    CG_StockFollowCameraAt(&ps, &cent->currentState, client, origin, angles);
+    return qtrue;
+}
+
+/*
+===============
 CG_CalcViewValues
 
 Sets cg.refdef view values
@@ -947,6 +1011,18 @@ static int CG_CalcViewValues(void)
         VectorCopy(cg.refdefViewAngles, cg.currentViewAngles);
         // Added in 2.0
         //  Also copy location data for sound
+        VectorCopy(cg.refdef.vieworg, cg.SoundOrg);
+        AnglesToAxis(cg.refdefViewAngles, cg.SoundAxis);
+    }
+
+    // Added in OPM
+    //  a kill of a player not shown, seen from behind them
+    if (CG_DemoBehindView(cg.refdef.vieworg, cg.refdefViewAngles)) {
+        cg.renderingThirdPerson = qtrue;
+        // not the zoom of the player shown
+        cg.camera_fov = cg_fov->value;
+        VectorCopy(cg.refdef.vieworg, cg.currentViewPos);
+        VectorCopy(cg.refdefViewAngles, cg.currentViewAngles);
         VectorCopy(cg.refdef.vieworg, cg.SoundOrg);
         AnglesToAxis(cg.refdefViewAngles, cg.SoundAxis);
     }

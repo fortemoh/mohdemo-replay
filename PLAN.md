@@ -91,7 +91,9 @@ taken for the game; CI now builds `main` for macOS too.
      kill seen from the killer's view, `scope`, the msec they had a scope on
      before the shot, 0 for none, and `speed`, theirs then; for a kill whose
      victim was in view just before, `idle`, the msec their entity showed no
-     input: the same place, view, animations and box, standing, no lean),
+     input: the same place, view, animations and box, standing, no lean; for
+     a kill whose killer is in the snapshots, `seen`, the msec they were
+     without a break, which `demofilter unshown` looks at),
      `rounds` (when the level restarts: snapshots toggle
      `SNAPFLAG_SERVERCOUNT`, about 3.3 s after a round end, also without
      one, like at the start of a match) and `roundEnds` (`text`: "Axis

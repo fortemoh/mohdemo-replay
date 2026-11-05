@@ -509,7 +509,9 @@ void CG_DrawZoomOverlay()
     weaponstring = "";
     bDrawOverlay = qtrue;
 
-    if (!cg.snap) {
+    // Added in OPM
+    //  nor while a demo shows a player from behind
+    if (!cg.snap || CG_DemoBehind() >= 0) {
         return;
     }
 
@@ -1355,7 +1357,7 @@ void CG_DrawCrosshair()
 
     // Added in OPM
     //  Not from behind the recorder, as not from behind a player followed
-    if (CG_RecorderBehind()) {
+    if (CG_RecorderBehind() || CG_DemoBehind() >= 0) {
         return;
     }
 
