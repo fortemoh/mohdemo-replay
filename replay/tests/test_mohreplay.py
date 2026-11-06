@@ -317,7 +317,6 @@ class TestFunctions(unittest.TestCase):
         # a player's while shown, whoever's is shown
         self.assertEqual(plan(DEMO, "kills", "T-"), (3, [(6000, 16500)]))
         self.assertEqual(plan(followed_demo(), "shownkills"), (5, [(6000, 16500), (300000, 305500)]))
-        self.assertEqual(plan(DEMO, "watched", "^1Phil"), (0, [(300000, 600000)]))
 
     def test_demoonly_plan_with_a_kill_filter(self):
         plan, kf = mohreplay.demoonly_plan, mohreplay.KillFilter
@@ -333,9 +332,20 @@ class TestFunctions(unittest.TestCase):
         # a player given, or whoever is shown, instead of the killers
         self.assertEqual(plan(DEMO, "kills", "t-", kill_filter=kf(["phil"], weapons=["rifle"])), (2, [(6000, 14000)]))
         self.assertEqual(plan(DEMO, "shownkills", kill_filter=kf(["phil"], victims=["al"])), (1, [(10500, 16500)]))
-        # while a killer is watched
-        self.assertEqual(plan(DEMO, "watched", kill_filter=kf(["phil"])), (0, [(300000, 600000)]))
-        self.assertEqual(plan(DEMO, "watched", kill_filter=kf()), (0, []))
+
+    def test_cut_where_the_player_shown_changes(self):
+        demo = json.loads(json.dumps(DEMO))
+        # t- kills 0.8 s apart, then 0.5 s on each side of half a second of Phil
+        demo["watched"] = [{"time": 0, "client": 0, "name": "t-"}, {"time": 40000, "client": 1, "name": "^1Phil"},
+                           {"time": 40500, "client": 0, "name": "t-"}]
+        demo["kills"] = [{"time": time, "killer": 0, "killerName": "t-", "victim": 1, "victimName": "^1Phil",
+                          "text": "Phil was rifled by t-"} for time in (20000, 26800, 38000, 44000)]
+        plan, kf = mohreplay.demoonly_plan, mohreplay.KillFilter
+        cut = [(16000, 28800), (34000, 40000), (40500, 46000)]
+        self.assertEqual(plan(demo, "kills", kill_filter=kf(shown=True))[1], cut)
+        self.assertEqual(plan(demo, "kills", kill_filter=kf(["t-"]))[1], cut)
+        # all the kills, whoever is shown
+        self.assertEqual(plan(demo, "kills")[1], [(16000, 28800), (34000, 46000)])
 
     def test_kill_filter(self):
         kill_filter = mohreplay.KillFilter(["^1Phil ", " ", "T-"], ["bob"], ["mg", "sniper", "grenade"])
@@ -1689,9 +1699,16 @@ class TestRecording(FakeGameCase):
         os.symlink(FAKEGAME, os.path.join(self.bin, "ffmpeg"))
         self.settings.setValue("rec/ffmpeg", os.path.join(self.bin, "ffmpeg"))
 
+    def ready(self, window, *names):
+        """Those demos indexed and selected, first by default."""
+        names = names or ("first",)
+        TestLibrary.indexed(self, window, names)
+        window.demos.clearSelection()
+        for name in names:
+            window.demo_items[name].setSelected(True)
+
     def record(self, window, setup=None, action=None):
-        """Records with the Record dialog, as if its button were pressed;
-        action opens it, Record… by default."""
+        """Records with the Record dialog, as if its button were pressed."""
         dialogs = []
 
         def exec_dialog(dialog):
@@ -1701,7 +1718,7 @@ class TestRecording(FakeGameCase):
             dialog.accept()
             return dialog.result()
         with mock.patch.object(mohreplay.RecordDialog, "exec", exec_dialog):
-            (action or window.record)()
+            (action or window.record_button.click)()
         return dialogs[0] if dialogs else None
 
     def video(self, name):
@@ -1716,9 +1733,10 @@ class TestRecording(FakeGameCase):
 
     def test_record_a_stretch(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
 
         def setup(dialog):
+            dialog.range.setChecked(True)
             dialog.start.setText("1:00")
             dialog.end.setText("1:10")
             dialog.pattern.setText("{demo} {start}")
@@ -1744,9 +1762,10 @@ class TestRecording(FakeGameCase):
         os.makedirs(os.path.join(self.demos, "clan", "war 2"))
         self.add_demo("clan/war 2/first", DEMO)
         window = self.window()
-        self.playing(window, "clan/war 2/first")
+        self.ready(window, "clan/war 2/first")
 
         def setup(dialog):
+            dialog.range.setChecked(True)
             dialog.start.setText("1:00")
             dialog.end.setText("1:10")
             dialog.pattern.setText("{demo} {start}")
@@ -1762,9 +1781,10 @@ class TestRecording(FakeGameCase):
         """A video longer than the parts' length is recorded in parts, each
         with its list of clips, the numbers going on."""
         window = self.window()
-        self.playing(window)
+        self.ready(window)
 
         def setup(dialog):
+            dialog.range.setChecked(True)
             dialog.start.setText("1:00")
             dialog.end.setText("3:30")
             dialog.pattern.setText("{demo} {start}")
@@ -1786,7 +1806,7 @@ class TestRecording(FakeGameCase):
                 self.assertEqual(f.read().splitlines()[1], f"1,0:00,first,{start},,,")
         self.assertEqual((self.settings.value("rec/split"), self.settings.value("rec/split_minutes")), ("true", "1"))
         # not split when short enough
-        self.record(window, lambda dialog: (dialog.start.setText("4:00"), dialog.end.setText("4:30"),
+        self.record(window, lambda dialog: (dialog.range.setChecked(True), dialog.start.setText("4:00"), dialog.end.setText("4:30"),
                                             dialog.pattern.setText("short")))
         self.done(window, 4)
         self.assertEqual(self.video("short.mp4")["end"], 270000)
@@ -1802,7 +1822,7 @@ class TestRecording(FakeGameCase):
 
     def test_motion_blur(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
 
         def setup(dialog):
             self.assertEqual(dialog.summary.text(),
@@ -1835,9 +1855,44 @@ class TestRecording(FakeGameCase):
         self.assertEqual((cvars["r_motionBlur"], cvars["cl_aviFrameRate"]), ("1", "30"))
         self.assertEqual(cvars["cl_aviPipeFormat"], "-vf scale=640:-2 -c:v libx264")
 
+    def test_record_button(self):
+        """Record is for the demos selected, those in the folders selected,
+        else all those listed, as they're listed; a stretch only of one."""
+        self.add_demo("second", DEMO)
+        os.makedirs(os.path.join(self.demos, "clan"))
+        self.add_demo("clan/third", DEMO)
+        self.add_demo("clan/fourth", dict(DEMO, kills=[]))
+        window = self.window()
+        TestLibrary.indexed(self, window, ("first", "second", "clan/third", "clan/fourth"))
+        self.assertEqual(window.record_button.text(), "Record 4 demos…")
+        root = window.demos.invisibleRootItem()
+        shown = window.demos_of(root.child(i) for i in range(root.childCount()))
+        self.assertEqual(window.chosen_demos(), shown)
+        dialogs = []
+        with mock.patch.object(mohreplay.RecordDialog, "exec", lambda dialog: dialogs.append(dialog) or 0):
+            window.record_button.click()
+            self.assertIsNone(dialogs[-1].range)
+            self.assertTrue(dialogs[-1].join.isVisibleTo(dialogs[-1]))
+            window.demo_items["first"].setSelected(True)
+            self.assertEqual(window.record_button.text(), "Record 1 demo…")
+            window.record_button.click()
+            self.assertIsNotNone(dialogs[-1].range)
+        self.assertEqual(window.jobs, [])
+        # a folder's are its demos; the filter's only those it lists
+        window.folder_items["clan"].setSelected(True)
+        self.assertEqual(window.record_button.text(), "Record 3 demos…")
+        self.choose(window, killer="t-")
+        self.assertEqual(window.record_button.text(), "Record 2 demos…")
+        window.demos.clearSelection()
+        self.assertEqual(window.record_button.text(), "Record 3 demos…")
+        # nothing listed, nothing to record
+        window.filter.setText("nobody")
+        self.assertEqual(window.record_button.text(), "Record…")
+        self.assertFalse(window.record_button.isEnabled())
+
     def test_record_kills_of_a_player_without_sound(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         self.choose(window, killer="t-")
 
         self.settings.setValue("rec/sound", "false")
@@ -1857,7 +1912,7 @@ class TestRecording(FakeGameCase):
 
     def test_lengths_follow_the_lead_in_and_out(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         self.choose(window, killer="t-")
 
         def setup(dialog):
@@ -1877,75 +1932,56 @@ class TestRecording(FakeGameCase):
 
     def test_record_recorder_frags(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
 
         def setup(dialog):
             dialog.choices["recorderkills"].setChecked(True)
             dialog.pattern.setText("{demo} {player} recfrags")
         dialog = self.record(window, setup)
         self.assertEqual(dialog.choices["recorderkills"].text(), "The 3 recorder frags, under a minute")
-        # what can't be recorded isn't offered: while who is watched?
-        self.assertFalse(dialog.choices["watched"].isEnabled())
-        self.assertTrue(dialog.choices["watched"].isHidden())
         self.assertFalse(dialog.choices["recorderkills"].isHidden())
         self.assertTrue(dialog.nothing.isHidden())
         job, = self.done(window)
-        self.assertEqual(job["item"].text(1), "first, the 3 recorder frags")
+        self.assertEqual(job["item"].text(1), "first, recorder frags")
         video = self.video("first t- recfrags.mp4")
         # from just before the first kill
         self.assertEqual((video["start"], video["only"], video["player"]), (6000, "kills", "t-"))
 
     def test_record_kills_with_a_weapon(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         self.choose(window, victim="bob, phil", weapons=["rifle"])
 
         def setup(dialog):
             dialog.choices["recorderkills"].setChecked(True)
             dialog.pattern.setText("rifle")
         dialog = self.record(window, setup)
-        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "shownkills", "watched"])
+        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "shownkills", "everything"])
         self.assertEqual(dialog.choices["kills"].text(), "The 2 frags of bob or phil with rifle, under a minute")
         self.assertEqual(dialog.choices["recorderkills"].text(), "The 2 recorder frags of bob or phil with rifle, under a minute")
         self.assertEqual(dialog.choices["shownkills"].text(), "The 2 frags shown of bob or phil with rifle: the recorder's "
                          "and the players they follow, under a minute")
         job, = self.done(window)
-        self.assertEqual(job["item"].text(1), "first, the 2 recorder frags of bob or phil with rifle")
+        self.assertEqual(job["item"].text(1), "first, recorder frags")
         video = self.video("rifle.mp4")
         self.assertEqual((video["start"], video["only"], video["player"]), (6000, "kills", "t-"))
         self.assertEqual(video["filter"], {"shown": False, "killers": [], "victims": ["bob", "phil"], "weapons": ["rifle"]})
 
-        # while a killer is watched
-        self.choose(window, killer="phil", victim="", weapons=[])
-
-        def watched(dialog):
-            dialog.choices["watched"].setChecked(True)
-            dialog.pattern.setText("{player} watched")
-        dialog = self.record(window, watched)
-        self.assertEqual(dialog.choices["watched"].text(), "While phil is watched, about 5 min")
-        self.assertEqual(dialog.choices["kills"].text(), "No frags by phil")
-        self.assertTrue(dialog.choices["kills"].isHidden())
-        self.done(window, 2)
-        video = self.video("phil watched.mp4")
-        self.assertEqual((video["start"], video["only"], video["player"]), (300000, "watched", ""))
-        self.assertEqual(video["filter"]["killers"], ["phil"])
-
     def test_record_frags_shown(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         self.choose(window, killer="t-")
 
         def setup(dialog):
             dialog.choices["shownkills"].setChecked(True)
             dialog.pattern.setText("{demo} frags {player}")
         dialog = self.record(window, setup)
-        # the recorder's are the kills by t-
-        self.assertEqual(list(dialog.choices), ["kills", "shownkills", "watched"])
+        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "shownkills", "everything"])
         self.assertEqual(dialog.choices["kills"].text(), "The 3 frags by t-, under a minute")
         self.assertEqual(dialog.choices["shownkills"].text(),
                          "The 3 frags shown: the recorder's and the players they follow, under a minute")
         job, = self.done(window)
-        self.assertEqual(job["item"].text(1), "first, the 3 frags shown: the recorder's and the players they follow")
+        self.assertEqual(job["item"].text(1), "first, frags shown")
         video = self.video("first frags.mp4")
         # from just before the first kill
         self.assertEqual((video["start"], video["only"], video["player"]), (6000, "shownkills", ""))
@@ -1957,25 +1993,22 @@ class TestRecording(FakeGameCase):
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("shown")
         dialog = self.record(window, shown)
-        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "watched"])
+        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "everything"])
         self.assertEqual(dialog.choices["kills"].text(),
                          "The 3 frags shown: the recorder's and the players they follow, under a minute")
-        self.assertEqual(dialog.choices["watched"].text(), "While a player is watched")
-        self.assertFalse(dialog.choices["watched"].isEnabled())
         self.done(window, 2)
         video = self.video("shown.mp4")
         self.assertEqual((video["only"], video["filter"]["shown"]), ("kills", True))
 
     def test_record_unspecced_frags(self):
         """Unspecced frags: listed, and the game told to play them."""
+        self.short_demos()
         self.add_demo("unspecced", unspecced_demo())
         window = self.window()
-        self.playing(window, "unspecced")
+        self.ready(window, "unspecced")
         self.choose(window, killer="ace")
-        self.assertEqual(window.kills.topLevelItemCount(), 1)
         window.unshown.setChecked(True)
         window.apply_kill_filter()
-        self.assertEqual(window.kills.topLevelItemCount(), 3)
 
         def setup(dialog):
             dialog.choices["kills"].setChecked(True)
@@ -1993,13 +2026,10 @@ class TestRecording(FakeGameCase):
         self.short_demos()
         self.add_demo("unspecced", unspecced_demo())
         window = self.window()
-        self.playing(window, "unspecced")
+        self.ready(window, "unspecced")
         window.specced.setChecked(True)
-        window.apply_kill_filter()
-        self.assertEqual(window.kills.topLevelItemCount(), 1)
         window.unshown.setChecked(True)
         window.apply_kill_filter()
-        self.assertEqual(window.kills.topLevelItemCount(), 4)
 
         def setup(dialog):
             self.assertIn("while specced, also unspecced", dialog.choices["kills"].text())
@@ -2022,18 +2052,17 @@ class TestRecording(FakeGameCase):
         self.add_demo("first", DEMO)
         window = self.window()
         TestLibrary.indexed(self, window, ("first", "unspecced"))
-        self.playing(window, "unspecced")
+        self.ready(window, "unspecced")
         window.only_unshown.setChecked(True)
         window.apply_kill_filter()
         self.assertFalse(window.unshown.isEnabled())
         self.assertFalse(window.specced.isEnabled())
-        self.assertEqual(window.kills.topLevelItemCount(), 3)
         self.assertTrue(window.demo_items["first"].isHidden())
         self.assertFalse(window.demo_items["unspecced"].isHidden())
         self.assertIn("Ace (2)", window.demo_items["unspecced"].text(mohreplay.COL_PLAYER))
 
         def setup(dialog):
-            self.assertEqual(sorted(dialog.choices), ["kills", "watched"])
+            self.assertEqual(sorted(dialog.choices), ["everything", "kills"])
             self.assertIn("unspecced only", dialog.choices["kills"].text())
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("only")
@@ -2053,23 +2082,23 @@ class TestRecording(FakeGameCase):
         followed, neither the recorder's nor all those shown."""
         self.add_demo("followed", followed_demo())
         window = self.window()
-        self.playing(window, "followed")
+        self.ready(window, "followed")
         self.choose(window, specced=True)
 
         def setup(dialog):
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("specced")
         dialog = self.record(window, setup)
-        self.assertEqual(list(dialog.choices), ["kills", "watched"])
+        self.assertEqual(list(dialog.choices), ["kills", "everything"])
         self.assertEqual(dialog.choices["kills"].text(), "The 2 frags while specced, under a minute")
         job, = self.done(window)
-        self.assertEqual(job["item"].text(1), "followed, the 2 frags while specced")
+        self.assertEqual(job["item"].text(1), "followed, frags while specced")
         video = self.video("specced.mp4")
         self.assertEqual((video["only"], video["filter"].get("specced")), ("kills", True))
 
     def test_last_choice_remembered(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         dialog = self.record(window, lambda d: (d.choices["shownkills"].setChecked(True), d.pattern.setText("a")))
         self.done(window)
         # offered: chosen again, else the first
@@ -2077,10 +2106,10 @@ class TestRecording(FakeGameCase):
         self.assertTrue(dialog.choices["shownkills"].isChecked())
         self.done(window, 2)
         self.assertEqual(self.video("b.mp4")["only"], "shownkills")
-        self.choose(window, killer="phil")
+        # not offered any more, as nothing's there to record: a stretch
         with mock.patch.object(self.settings, "value", lambda key, default=None, s=self.settings.value: (
-                "watched" if key == "rec/what" else s(key, default))):
-            dialog = mohreplay.RecordDialog(self.settings, [("watched", "While Phil is watched", False)], 0)
+                "kills" if key == "rec/what" else s(key, default))):
+            dialog = mohreplay.RecordDialog(self.settings, [("kills", "No frags", False)], 0, parent=window)
         self.assertTrue(dialog.range.isChecked())
 
     def test_progress(self):
@@ -2097,7 +2126,7 @@ class TestRecording(FakeGameCase):
 
     def test_no_overwrite(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         os.makedirs(self.videos)
         with open(os.path.join(self.videos, "clip.mp4"), "w") as f:
             f.write("mine")
@@ -2113,7 +2142,7 @@ class TestRecording(FakeGameCase):
 
     def test_ffmpeg_failing(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_FFMPEG_FAIL": "1"}):
             self.record(window)
             job, = self.done(window)
@@ -2125,7 +2154,7 @@ class TestRecording(FakeGameCase):
 
     def test_ffmpeg_quitting_midway(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_FFMPEG_FAIL": "mid", "FAKEGAME_SPEED": "1"}):
             self.record(window)
             job, = self.done(window)
@@ -2137,9 +2166,10 @@ class TestRecording(FakeGameCase):
 
     def test_bad_times(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
 
         def setup(dialog):
+            dialog.range.setChecked(True)
             dialog.start.setText("2:00")
             dialog.end.setText("1:00")
         self.record(window, setup)
@@ -2148,9 +2178,10 @@ class TestRecording(FakeGameCase):
 
     def test_queue(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         for start in ("1:00", "2:00", "3:00"):
             def setup(dialog, start=start):
+                dialog.range.setChecked(True)
                 dialog.start.setText(start)
                 dialog.end.setText(start.replace(":00", ":05"))
             self.record(window, setup)
@@ -2169,7 +2200,7 @@ class TestRecording(FakeGameCase):
 
     def test_cancel(self):
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "0.01"}):
             self.record(window)
             recorder = window.recorder
@@ -2181,89 +2212,12 @@ class TestRecording(FakeGameCase):
         self.assertFalse(recorder.game.running())
         self.assertFalse(os.path.exists(self.videos) and os.listdir(self.videos))
 
-    def test_selected_kills_in_one_video(self):
-        window = self.window()
-        self.playing(window)
-        # two close together, and one later
-        for row in (0, 1, 3):
-            window.kills.topLevelItem(row).setSelected(True)
-
-        def setup(dialog):
-            dialog.join.setChecked(True)
-            dialog.pattern.setText("selected")
-        dialog = self.record(window, setup, lambda: window.record_selected(window.kills))
-        self.assertEqual(dialog.choices["selected"].text(), "The 3 frags selected, under a minute")
-        self.assertTrue(dialog.join.isVisibleTo(dialog))
-        job, = self.done(window)
-        self.assertEqual(job["status"], "done", job["item"].toolTip(2))
-        parts = self.video("selected.mp4")["joined"]
-        self.assertEqual([(p["start"], p["end"]) for p in parts], [(6000, 14000), (246000, 252000)])
-
-    def test_team_kills_arent_kills(self):
-        self.add_demo("first", team_demo())
-        window = self.window()
-        self.playing(window)
-        # neither listed nor marked
-        rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
-        self.assertEqual([row.text(0) for row in rows], ["0:10", "0:12", "0:14", "4:10"])
-        self.assertEqual([mark[0] for mark in window.slider.kills], [10000, 12000, 14500, 250000])
-        # but the one 1.5 s after t-'s kill at 0:14 is in its video
-
-        def setup(dialog):
-            dialog.pattern.setText("selected")
-        rows[2].setSelected(True)
-        dialog = self.record(window, setup, lambda: window.record_selected(window.kills))
-        self.assertEqual(dialog.choices["selected"].text(), "The frag selected, under a minute")
-        self.done(window)
-        video = self.video("selected.mp4")
-        self.assertEqual((video["start"], video["end"]), (10500, 18000))
-
-    def test_selected_kills_one_video_each(self):
-        window = self.window()
-        self.playing(window)
-        for row in (0, 3):
-            window.kills.topLevelItem(row).setSelected(True)
-
-        def setup(dialog):
-            dialog.join.setChecked(False)
-            dialog.pattern.setText("kill {start}")
-        self.record(window, setup, lambda: window.record_selected(window.kills))
-        self.done(window, 2)
-        self.assertEqual(sorted(os.listdir(self.videos)), ["kill 0-06.mp4", "kill 4-06.mp4"])
-        self.assertEqual(self.settings.value("rec/join"), "false")
-
-    def test_selected_kills_cut_where_the_player_shown_changes(self):
-        demo = json.loads(json.dumps(DEMO))
-        # t- kills 0.8 s apart, then 0.5 s on each side of half a second of Phil
-        demo["watched"] = [{"time": 0, "client": 0, "name": "t-"}, {"time": 40000, "client": 1, "name": "^1Phil"},
-                           {"time": 40500, "client": 0, "name": "t-"}]
-        demo["kills"] = [{"time": time, "killer": 0, "killerName": "t-", "victim": 1, "victimName": "^1Phil",
-                          "text": "Phil was rifled by t-"} for time in (20000, 26800, 38000, 44000)]
-        self.add_demo("cut", demo)
-        window = self.window()
-        self.playing(window, "cut")
-        for name, killer, shown, clips in (("shown", "", True, [(16000, 28800), (34000, 40000), (40500, 46000)]),
-                                           ("t-", "t-", False, [(16000, 28800), (34000, 40000), (40500, 46000)]),
-                                           ("all", "", False, [(16000, 28800), (34000, 46000)])):
-            self.choose(window, killer=killer, shown=shown)
-            for row in range(window.kills.topLevelItemCount()):
-                window.kills.topLevelItem(row).setSelected(True)
-
-            def setup(dialog, name=name):
-                dialog.join.setChecked(True)
-                dialog.pattern.setText(name)
-            self.record(window, setup, lambda: window.record_selected(window.kills))
-            self.done(window, len(window.jobs))
-            parts = self.video(name + ".mp4")["joined"]
-            self.assertEqual([(p["start"], p["end"]) for p in parts], clips, name)
-
     def test_join_failing(self):
+        self.add_demo("second", DEMO)
         window = self.window()
-        self.playing(window)
-        for row in (0, 3):
-            window.kills.topLevelItem(row).setSelected(True)
+        self.ready(window, "first", "second")
         with mock.patch.dict(os.environ, {"FAKEGAME_FFMPEG_FAIL": "join"}):
-            self.record(window, lambda d: d.join.setChecked(True), lambda: window.record_selected(window.kills))
+            self.record(window, lambda d: d.join.setChecked(True))
             job, = self.done(window)
         self.assertEqual(job["status"], "failed")
         self.assertIn("can't join", job["item"].toolTip(2))
@@ -2539,7 +2493,7 @@ class TestRecording(FakeGameCase):
         it's off."""
         self.settings.setValue("censor_words", "gay, jew")
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         self.stretch(window, "1:00", "on")
         self.settings.setValue("censor", "0")
         self.stretch(window, "1:10", "off")
@@ -2552,13 +2506,13 @@ class TestRecording(FakeGameCase):
         doesn't write over its list, and asks before closing with videos
         left, which aren't kept."""
         first = self.window()
-        self.playing(first)
+        self.ready(first)
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "0.01"}):
             self.stretch(first, "1:00", "first")
             second = self.window()
             self.assertFalse(second.keeps_queue)
             self.assertIn("Another window keeps", second.statusBar().currentMessage())
-            self.playing(second)
+            self.ready(second)
             self.stretch(second, "2:00", "second")
             with open(first.queue_file()) as f:
                 self.assertEqual([j["output"] for j in json.load(f)], [os.path.join(self.videos, "first.mp4")])
@@ -2584,7 +2538,7 @@ class TestRecording(FakeGameCase):
         """A video has the cameras chosen when it was queued; by default, the
         recorder in their eyes and the player followed behind them."""
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
             self.stretch(window, "1:00", "default")
             self.settings.setValue("camera_recorder", "behind")
@@ -2600,7 +2554,7 @@ class TestRecording(FakeGameCase):
         queued."""
         self.settings.setValue("followed_axis", "german_scientist")
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
             self.stretch(window, "1:00", "a")
             self.stretch(window, "1:10", "b")
@@ -2615,7 +2569,7 @@ class TestRecording(FakeGameCase):
         """A video paused waits till it's resumed; the order of the list is
         the order they're recorded in."""
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
             for start, name in (("1:00", "a"), ("1:10", "b"), ("1:20", "c")):
                 self.stretch(window, start, name)
@@ -2650,7 +2604,7 @@ class TestRecording(FakeGameCase):
         """A video records from the folder of demos it was queued from, also
         when another folder is opened before its turn."""
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
             self.stretch(window, "1:00", "one")
             self.stretch(window, "1:10", "two")
@@ -2667,7 +2621,7 @@ class TestRecording(FakeGameCase):
         """A video done is recorded again into a new one next to it,
         numbered from the name it was first given."""
         window = self.window()
-        self.playing(window)
+        self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
             self.stretch(window, "1:00", "again")
             job = window.jobs[0]
@@ -2714,7 +2668,7 @@ class TestRecording(FakeGameCase):
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
             job, sent = self.record_failing(("first", "second"), wait=False)
             window = self.windows[-1]
-            self.playing(window)
+            self.ready(window)
             self.stretch(window, "1:00", "later")
             self.stretch(window, "2:00", "held")
             window.jobs[2]["item"].setSelected(True)
@@ -2870,11 +2824,13 @@ class TestRealGame(FakeGameCase):
         self.settings.setValue("rec/size", "640x360")
 
         def setup(dialog):
+            dialog.range.setChecked(True)
             dialog.start.setText("2:00")
             dialog.end.setText("2:03")
             dialog.pattern.setText("real")
+        window.demo_items[self.demo].setSelected(True)
         with mock.patch.object(mohreplay.RecordDialog, "exec", lambda d: (setup(d), d.accept(), d.result())[-1]):
-            window.record()
+            window.record_demos()
         output = os.path.join(self.videos, "real.mp4")
         self.assertTrue(wait_until(lambda: window.jobs[0]["status"] not in ("waiting", "recording"), 120), "no video")
         self.assertEqual(window.jobs[0]["status"], "done", window.jobs[0]["item"].toolTip(2))
@@ -2897,11 +2853,13 @@ class TestRealGame(FakeGameCase):
             self.settings.setValue("rec/" + key, value)
 
         def setup(dialog):
+            dialog.range.setChecked(True)
             dialog.start.setText("2:00")
             dialog.end.setText("2:03")
             dialog.pattern.setText("blur")
+        window.demo_items[self.demo].setSelected(True)
         with mock.patch.object(mohreplay.RecordDialog, "exec", lambda d: (setup(d), d.accept(), d.result())[-1]):
-            window.record()
+            window.record_demos()
         output = os.path.join(self.videos, "blur.mp4")
         self.assertTrue(wait_until(lambda: window.jobs[0]["status"] not in ("waiting", "recording"), 120), "no video")
         self.assertEqual(window.jobs[0]["status"], "done", window.jobs[0]["item"].toolTip(2))

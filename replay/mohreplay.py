@@ -56,7 +56,7 @@ SHOWN_WHO = ": the recorder's and the players they follow"
 # what Record… offers for the recorder's own frags
 RECORDER_KILLS = ("recorder frag", "recorder frags")
 # what demoonly plays for each of Record…'s choices of kills
-ONLY = {"kills": "kills", "recorderkills": "kills", "shownkills": "shownkills", "watched": "watched"}
+ONLY = {"kills": "kills", "recorderkills": "kills", "shownkills": "shownkills"}
 # the weapons kills are filtered by, as the demo index names them, and in
 # words, but grenades, whose kills aren't kills; other is anything else,
 # and the death messages not known
@@ -1608,8 +1608,8 @@ def range_clip(demo, start, end):
 
 
 def only_clip(demo, only="", player="", spans=None, kill_filter=None):
-    """A clip of what demoonly plays ("kills", "shownkills" or "watched")
-    with kill_filter, or of all of demo; spans: what that is, from
+    """A clip of what demoonly plays ("kills" or "shownkills") with
+    kill_filter, or of all of demo; spans: what that is, from
     demoonly_plan(), if known."""
     command = f"demoonly {only}" + (" " + quoted(player) if player else "") if only else "demoonly"
     start = spans[0][0] if (spans and spans[0][0] > 0) else 0
@@ -1755,18 +1755,9 @@ def demoonly_plan(index, only="", player="", kill_before=None, kill_after=None, 
     Team kills aren't counted, and only play with a kill of their killer near
     them; the deaths of the player shown aren't kills."""
     kill_filter = kill_filter or KillFilter()
-    duration = index.get("duration", 0)
-    watched = index.get("watched", [])
-    switches = [w["time"] for w in watched]
+    switches = [w["time"] for w in index.get("watched", [])]
     if not only:
-        return 0, [(0, duration)]
-    if only == "watched":
-        # the player given, else the filter's killers
-        spans = [(w["time"], watched[i + 1]["time"] if i + 1 < len(watched) else duration)
-                 for i, w in enumerate(watched)
-                 if (same_player(w["name"], player) if player
-                     else kill_filter.killers and kill_filter.has_killer(clean_name(w["name"])))]
-        return 0, stretches(spans, switches)
+        return 0, [(0, index.get("duration", 0))]
     frags, kills, cut = planned_kills(index, only, player, kill_filter)
     kb = KILL_BEFORE if kill_before is None else kill_before
     ka = KILL_AFTER if kill_after is None else kill_after
@@ -1800,8 +1791,8 @@ def planned_kills(index, only, player="", kill_filter=None):
 
 def clip_frags(index, spans, only="", player="", kill_filter=None):
     """The frags in each of spans, the clips demoonly <only> [player] plays:
-    [[kill]], none for all of the demo or while a player is watched."""
-    if only in ("", "watched"):
+    [[kill]], none for all of the demo."""
+    if not only:
         return [[] for _ in spans]
     frags = [k for k, _, _ in planned_kills(index, only, player, kill_filter)[0]]
     return [[k for k in frags if start <= k["time"] < end] for start, end in spans]
@@ -1827,8 +1818,8 @@ def length(spans):
 class RecordDialog(QDialog):
     """What to record and how, kept in the settings.
 
-    choices: [(key, label, enabled)], what can be recorded, after a stretch
-    of time from time when it isn't None. join: offer one video for all.
+    choices: [(key, label, enabled)], what can be recorded, and a stretch of
+    time from time when it isn't None. join: offer one video for all.
     relabel(before, after): the choices again for that lead-in and out, in
     msec, as their lengths change with them."""
 
@@ -1840,6 +1831,11 @@ class RecordDialog(QDialog):
 
         group = QButtonGroup(self)
         what = QVBoxLayout()
+        self.choices = {}
+        for key, label, enabled in choices:
+            button = self.choices[key] = QRadioButton(label)
+            group.addButton(button)
+            what.addWidget(button)
         self.range = None
         if time is not None:
             self.range = QRadioButton("From")
@@ -1850,18 +1846,13 @@ class RecordDialog(QDialog):
                 row.addWidget(widget)
             what.addLayout(row)
             group.addButton(self.range)
-        self.choices = {}
-        for key, label, enabled in choices:
-            button = self.choices[key] = QRadioButton(label)
-            group.addButton(button)
-            what.addWidget(button)
         # only what there is to record
         self.nothing = QLabel("Nothing to record")
         what.addWidget(self.nothing)
         self.relabel(choices)
         # the last choice, if it's offered
         last = self.range if settings.value("rec/what") == "range" else self.choices.get(settings.value("rec/what"))
-        first = self.range or next((b for b in self.choices.values() if b.isEnabled()), None)
+        first = next((b for b in self.choices.values() if b.isEnabled()), self.range)
         if last and last.isEnabled():
             last.setChecked(True)
         elif first:
@@ -2390,7 +2381,8 @@ class Window(QMainWindow):
         self.demos.sortByColumn(COL_DATE, Qt.DescendingOrder)
         self.demos.itemActivated.connect(lambda item: item.data(COL_DEMO, Qt.UserRole)
                                          and self.play_demo(item.data(COL_DEMO, Qt.UserRole)))
-        self.add_menu(self.demos, "Record the demos selected…", self.record_demos)
+        self.demos.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.demos.itemSelectionChanged.connect(self.show_record_button)
         # the kills of the demos listed and of the demo playing
         self.killer = NamesField("Frags by players whose names have one of these, separated by commas, while "
                                  "they're shown, or by whoever is shown", offer_shown=True)
@@ -2503,7 +2495,6 @@ class Window(QMainWindow):
         for tree in (self.kills, self.rounds):
             tree.itemClicked.connect(self.jump_to_item)
             tree.itemActivated.connect(self.jump_to_item)
-        self.add_menu(self.kills, "Record the ones selected…", lambda: self.record_selected(self.kills))
         self.tabs = tabs = QTabWidget()
         tabs.addTab(self.kills, "Frags")
         tabs.addTab(self.rounds, "Rounds")
@@ -2558,10 +2549,10 @@ class Window(QMainWindow):
         controls.addSpacing(8)
         controls.addWidget(self.speed)
         controls.addSpacing(8)
-        record = QPushButton(theme_icon("media-record", record_icon()), "Record…")
-        record.setToolTip("Record a video of this demo")
-        record.clicked.connect(self.record)
-        controls.addWidget(record)
+        self.record_button = QPushButton(theme_icon("media-record", record_icon()), "Record…")
+        self.record_button.setToolTip("The demos selected, or all those listed if none is")
+        self.record_button.clicked.connect(self.record_demos)
+        controls.addWidget(self.record_button)
 
         central = QWidget()
         box = QVBoxLayout(central)
@@ -2688,14 +2679,6 @@ class Window(QMainWindow):
     def fit_columns(self, tree):
         for column in range(tree.columnCount() - 1):
             tree.resizeColumnToContents(column)
-
-    def add_menu(self, tree, text, action):
-        """Several items can be selected, and a right-click offers action."""
-        tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        tree.setContextMenuPolicy(Qt.ActionsContextMenu)
-        menu_action = QAction(text, tree)
-        menu_action.triggered.connect(action)
-        tree.addAction(menu_action)
 
     def make_button(self, icon, tip, action, text=""):
         button = QToolButton()
@@ -3017,6 +3000,7 @@ class Window(QMainWindow):
         self.demos.setColumnHidden(COL_PLAYER, not found_any)
         self.fit_columns(self.demos)
         self.show_demo_count()
+        self.show_record_button()
 
     def show_demo_count(self):
         progress = self.library.progress()
@@ -3038,6 +3022,18 @@ class Window(QMainWindow):
         if found - short - listed > 0:
             tip.append(f"{found - short - listed:,} left out by the search and the filters")
         self.demo_count.setToolTip("; ".join(tip))
+
+    def chosen_demos(self):
+        """The names of the demos Record is for: those selected, else all
+        those listed, as they're listed."""
+        root = self.demos.invisibleRootItem()
+        return (self.demos_of(self.demos.selectedItems())
+                or self.demos_of(root.child(i) for i in range(root.childCount())))
+
+    def show_record_button(self):
+        count = len(self.chosen_demos())
+        self.record_button.setText(f"Record {count:,} demo{'s' if count != 1 else ''}…" if count else "Record…")
+        self.record_button.setEnabled(bool(count))
 
     def library_changed(self):
         # those who recorded the most first
@@ -3276,113 +3272,13 @@ class Window(QMainWindow):
         return {"kills": shown if kill_filter.shown else ("frag" + kill_filter.words(), "frags" + kill_filter.words(), ""),
                 "recorderkills": (RECORDER_KILLS[0] + others, RECORDER_KILLS[1] + others, ""), "shownkills": shown}
 
-    def record(self):
-        """Record…: a stretch of the demo playing, the kills of the filter,
-        those of the recorder or of whoever is shown with its victims and
-        weapons, or while one of its killers is watched."""
-        demo = self.state.get("demo")
-        if not demo:
-            QMessageBox.information(self, "Record a video", "Play a demo first.")
-            return
-        kill_filter = self.kill_filter()
-        index = self.index or {}
-        recorder = (index.get("recorder") or {}).get("name", "")
-        keys = ["kills", "recorderkills", "shownkills", "watched"]
-        # not twice the same kills, nor the recorder's when only those of
-        # the players they spectate are
-        if kill_filter.of_shown() or kill_filter.just_unshown():
-            keys.remove("shownkills")
-        if (not recorder or kill_filter.specced or kill_filter.just_unshown()
-                or kill_filter.killers and all(part in clean_name(recorder) for part in kill_filter.killers)):
-            keys.remove("recorderkills")
-        texts = self.kill_texts(kill_filter)
-        # whose kills each choice plays instead of the filter's killers
-        whose = {"recorderkills": recorder}
-
-        def plans_for(before, after):
-            """{key: (count, spans)} with that lead-in and out."""
-            return {key: (0, []) if key == "watched" and not kill_filter.killers
-                    else demoonly_plan(index, ONLY[key], whose.get(key, ""), before, after, kill_filter) for key in keys}
-
-        def choices(plans):
-            listed = []
-            for key in keys:
-                enabled = bool(plans[key][1]) if key == "watched" else plans[key][0] > 0
-                listed.append((key, labels[key] + (", " + about(length(plans[key][1])) if enabled else ""), enabled))
-            return listed
-
-        plans = plans_for(*self.get_rec_kill_times())
-        labels = {key: the(plans[key][0], *texts[key][:2]) + texts[key][2] for key in keys if key != "watched"}
-        labels["watched"] = (f"While {or_list(kill_filter.names)} is watched" if kill_filter.killers
-                             else "While a player is watched")
-        dialog = RecordDialog(self.settings, choices(plans), self.state.get("time", 0), parent=self,
-                              relabel=lambda before, after: choices(plans_for(before, after)))
-        if not dialog.exec():
-            return
-        what = dialog.what()
-        # who's in the video's name
-        player = ", ".join(kill_filter.names)
-        if what == "range":
-            start, end = dialog.times()
-            label = f"{demo}, {clock(start)} to {clock(end)}"
-            clip = range_clip(demo, start, end)
-        else:
-            label = demo + ", " + labels[what][0].lower() + labels[what][1:]
-            player = whose.get(what, "" if what == "shownkills" else player)
-            clip = only_clip(demo, ONLY[what], whose.get(what, ""), plans_for(*dialog.kill_times())[what][1],
-                             kill_filter)
-            clip["frags"] = clip_frags(index, clip["spans"], ONLY[what], whose.get(what, ""), kill_filter)
-        self.add_jobs(dialog.jobs(label, [clip], demo, player))
-
-    def record_selected(self, tree):
-        """The kills selected, in one video or one each."""
-        demo = self.state.get("demo")
-        items = tree.selectedItems()
-        if not demo or not items:
-            QMessageBox.information(self, "Record a video", "Select frags of the demo playing first.")
-            return
-        one = "frag"
-        kind = f"{len(items)} {one}s" if len(items) > 1 else one
-        kill_filter = self.kill_filter()
-        # those of a killer, or of whoever is shown, only while they're shown
-        kills = self.listed_kills(kill_filter)
-        player = ", ".join(kill_filter.names)
-        index = self.index or {}
-        chains = [[index["kills"][i] for i in item.data(2, Qt.UserRole)] for item in items]
-
-        def spans_for(before, after):
-            """The clips of the kills selected, and of the team kills near
-            them, with that lead-in and out."""
-            spans = {id(k): kill_span(index, k, start, end, before, after) for k, start, end in kills.values()}
-            return stretches([spans[id(k)] for chain in chains for k in chain if id(k) in spans]
-                             + [spans[id(k)] for chain in chains
-                                for k, _, _ in team_kills_with(list(kills.values()), chain)], self.switches())
-
-        def choices(spans):
-            return [("selected", f"{the(len(items), one, one + 's')} selected, {about(length(spans))}", True)]
-
-        spans = spans_for(*self.get_rec_kill_times())
-        dialog = RecordDialog(self.settings, choices(spans), join=len(spans) > 1, parent=self,
-                              relabel=lambda before, after: choices(spans_for(before, after)))
-        if not dialog.exec():
-            return
-        clips = [range_clip(demo, start, end) for start, end in spans_for(*dialog.kill_times())]
-        for clip in clips:
-            clip["frags"] = [[k for chain in chains for k in chain if clip["start"] <= k["time"] < clip["end"]]]
-        if dialog.join.isChecked() or len(clips) == 1:
-            self.add_jobs(dialog.jobs(f"{demo}, {kind}", clips, demo, player))
-        else:
-            for clip in clips:
-                label = f"{demo}, {clock(clip['start'])} to {clock(clip['end'])}"
-                self.add_jobs(dialog.jobs(label, [clip], demo, player))
-
     def record_demos(self):
-        """The demos selected, all of them, or the kills of the filter, of
-        their recorder or of whoever is shown, with its victims and weapons,
-        in one video or one each."""
-        names = self.demos_of(self.demos.selectedItems())
+        """The demos chosen (chosen_demos): all of them, or the kills of the
+        filter, of their recorder or of whoever is shown, with its victims
+        and weapons, in one video or one each; of one demo, a stretch of it
+        too."""
+        names = self.chosen_demos()
         if not names:
-            QMessageBox.information(self, "Record a video", "Select demos first.")
             return
         kill_filter = self.kill_filter()
         indexes = {name: self.library.index(name) for name in names}
@@ -3431,11 +3327,17 @@ class Window(QMainWindow):
                     text(key, "All of the demo" if len(names) == 1 else f"All of the {len(names)} demos")
                     for key in keys]
 
-        dialog = RecordDialog(self.settings, choices(plans_for(*self.get_rec_kill_times())), join=len(names) > 1,
-                              parent=self, relabel=lambda before, after: choices(plans_for(before, after)))
+        dialog = RecordDialog(self.settings, choices(plans_for(*self.get_rec_kill_times())),
+                              0 if len(names) == 1 else None, join=len(names) > 1, parent=self,
+                              relabel=lambda before, after: choices(plans_for(before, after)))
         if not dialog.exec():
             return
         what = dialog.what()
+        if what == "range":
+            start, end = dialog.times()
+            self.add_jobs(dialog.jobs(f"{names[0]}, {clock(start)} to {clock(end)}", [range_clip(names[0], start, end)],
+                                      names[0], ", ".join(kill_filter.names)))
+            return
         plans = plans_for(*dialog.kill_times())
         chosen = list(plans[what])
         kind = {"kills": SHOWN_KILLS[1] if kill_filter.shown else "frags" + kill_filter.words(),

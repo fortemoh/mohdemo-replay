@@ -96,12 +96,10 @@ The time slider marks the frags listed under it and the rounds above it:
 hovering one tells what it is, elsewhere the time there, and a click jumps
 there.
 
-Record… makes an MP4 of the demo playing: a stretch of time, the frags
-listed, the recorder's own or the frags shown (both of the victims and with
-the weapons chosen), one after the other, or only while a fragger is
-watched. A right-click on frags selected records those, and on demos or
-folders selected, all of their demos, the frags chosen, the recorder's, or
-the frags shown: in one video, or one each. Only the choices with something to record are offered; each tells how many
+Record makes MP4s of the demos selected, or in the folders selected, or of
+all those listed when none is, as its button tells ("Record 148 demos…"):
+the frags chosen, the recorder's, the frags shown, or all of each demo, in one
+video or one each, and of one demo, a stretch of time too. Only the choices with something to record are offered; each tells how many
 frags it holds and how long the video will be, and the last one is chosen
 again next time. Clips, Number them, puts a number on each clip of the
 video (#1, #2 and on through all of its demos, at the bottom of the
