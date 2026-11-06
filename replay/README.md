@@ -229,7 +229,8 @@ Both have the name of who is shown on the left, as a spectator has. Record
 chooses both, for videos too. Health only shows from someone's own eyes: the
 recorder playing, or a player followed with `cg_followcamera 2`.
 
-Demos don't show the server's messages about players coming and going
+Demos don't show the score and time left, top right, or the server's messages
+about players coming and going
 ("<player> has entered the battle", which it tells everyone each time a
 player enters, as at every round, has left the battle, has joined the
 Allies or the Axis, is preparing for deployment), what the player picks

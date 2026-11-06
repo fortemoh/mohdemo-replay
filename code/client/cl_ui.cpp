@@ -5234,6 +5234,16 @@ void UI_AddHud_f(void)
 {
     Menu *hud = menuManager.FindMenu(Cmd_Argv(1));
 
+    // Added in OPM
+    //  A demo shows no score or time left, top right
+    if (hud && clc.demoplaying
+        && (!Q_stricmp(Cmd_Argv(1), "hud_score") || !Q_stricmp(Cmd_Argv(1), "hud_fraglimit")
+            || !Q_stricmp(Cmd_Argv(1), "hud_timelimit"))) {
+        hud->ForceHide();
+        hudList.RemoveObject(hud);
+        return;
+    }
+
     if (hud) {
         if (!hudList.ObjectInList(hud)) {
             hudList.AddObject(hud);
