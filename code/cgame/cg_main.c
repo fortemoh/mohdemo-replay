@@ -127,6 +127,7 @@ cvar_t *cg_followcamera;
 cvar_t *cg_recordercamera;
 cvar_t *cl_demoBehind;
 cvar_t *cg_demoguns;
+cvar_t *cg_recordersmooth;
 cvar_t *cg_demoholsters;
 cvar_t *cl_demoShooter;
 cvar_t *cg_followedModel;
@@ -241,6 +242,7 @@ void CG_RegisterCvars(void)
     // the client's: the player demoonly shows from behind (demofilter unshown)
     cl_demoBehind = cgi.Cvar_Get("cl_demoBehind", "-1", CVAR_ROM);
     cg_demoguns   = cgi.Cvar_Get("cg_demoguns", "1", 0);
+    cg_recordersmooth = cgi.Cvar_Get("cg_recordersmooth", "1", 0);
     cg_demoholsters = cgi.Cvar_Get("cg_demoholsters", "0", 0);
     cl_demoShooter = cgi.Cvar_Get("cl_demoShooter", "-1", CVAR_ROM);
     cgi.Cvar_Get("cg_demoLastShot", "0", 0);

@@ -231,7 +231,9 @@ fall, flashes without a kick. In a demo, a player leaning where their eye
 would face a wall right in front of it, as next to a window, sees from where they stand
 instead, as their own game showed them (the server fires from where their
 game puts the eye, and the demo has the start of each shot). The other way,
-`cg_recordercamera 1` shows the recorder from behind while they play, where
+`cg_recordercamera 1` shows the recorder from behind while they play, their
+body moving against the camera as a followed player's does (`cg_recordersmooth
+0` keeps it fixed in the view), where
 the camera following a player is, as a spectator following them sees them:
 without their scope, crosshair, weapons, ammo, health or hits on the screen.
 Both have the name of who is shown on the left, as a spectator has. Record

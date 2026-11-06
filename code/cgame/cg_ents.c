@@ -454,7 +454,9 @@ void CG_CalcEntityLerpPositions(centity_t *cent)
     f = cg.frameInterpolation;
 
     if (cent->currentState.eType == ET_PLAYER) {
-        if (cent->currentState.number == cg.snap->ps.clientNum) {
+        // Changed in OPM
+        //  Not a recorder shown from behind: they go as a player followed does
+        if (cent->currentState.number == cg.snap->ps.clientNum && !(CG_RecorderBehind() && cg_recordersmooth->integer)) {
             // if the player, take position from prediction
             VectorCopy(cg.predicted_player_state.origin, cent->lerpOrigin);
             for (i = 0; i < 3; i++) {

@@ -537,6 +537,7 @@ extern "C" {
     extern cvar_t *cg_recordercamera;
     extern cvar_t *cl_demoBehind;
     extern cvar_t *cg_demoguns;
+    extern cvar_t *cg_recordersmooth;
     extern cvar_t *cg_demoholsters;
     extern cvar_t *cl_demoShooter;
     extern cvar_t *cg_followedModel;

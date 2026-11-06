@@ -810,6 +810,39 @@ qboolean CG_RecorderBehind(void)
 
 /*
 ===============
+CG_RecorderBehindCamera
+
+Added in OPM
+  Where the camera behind a recorder is, done as for a player followed
+  (CG_StockFollowCamera), from the snapshot to the next, with cg_recordersmooth:
+  their body, drawn as other players are, moves ahead of it (cg_smoothClients)
+  as a player followed's does. Without it, they stay fixed in the view.
+===============
+*/
+static void CG_RecorderBehindCamera(const playerState_t *ps, vec3_t origin, vec3_t angles)
+{
+    centity_t *cent = &cg_entities[ps->clientNum];
+    vec3_t     nextOrigin, nextAngles;
+    int        i;
+
+    if (!cg_recordersmooth->integer || !cg.nextSnap || cg.nextSnap->serverTime <= cg.snap->serverTime
+        || !cent->interpolate || cg.nextFrameCameraCut
+        || (cg.nextSnap->ps.pm_flags & (PMF_SPECTATING | PMF_CAMERA_VIEW))) {
+        CG_StockFollowCameraAt(ps, &cent->currentState, ps->clientNum, origin, angles);
+        return;
+    }
+
+    CG_StockFollowCameraAt(&cg.snap->ps, &cent->currentState, ps->clientNum, origin, angles);
+    CG_StockFollowCameraAt(&cg.nextSnap->ps, &cent->nextState, ps->clientNum, nextOrigin, nextAngles);
+
+    for (i = 0; i < 3; i++) {
+        origin[i] += cg.frameInterpolation * (nextOrigin[i] - origin[i]);
+        angles[i] = LerpAngle(angles[i], nextAngles[i], cg.frameInterpolation);
+    }
+}
+
+/*
+===============
 CG_DemoBehind
 
 Added in OPM
@@ -1012,9 +1045,7 @@ static int CG_CalcViewValues(void)
     // Added in OPM
     if (CG_RecorderBehind()) {
         cg.renderingThirdPerson = qtrue;
-        CG_StockFollowCameraAt(
-            ps, &cg_entities[ps->clientNum].currentState, ps->clientNum, cg.refdef.vieworg, cg.refdefViewAngles
-        );
+        CG_RecorderBehindCamera(ps, cg.refdef.vieworg, cg.refdefViewAngles);
         // not the zoom of their scope
         cg.camera_fov = cg_fov->value;
     } else if (cg.renderingThirdPerson) {
