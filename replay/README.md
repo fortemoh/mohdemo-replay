@@ -54,25 +54,19 @@ and so do the frags of other weapons and those the demo doesn't show from
 the fragger's view. It leaves out the frags of AFK players too, any weapon:
 victims who had given no input for over 5 s, not moving, turning, firing,
 crouching or leaning, as long as the demo showed them (demos indexed by an
-older version are indexed again once for it). Specced frags keeps only the
-frags of the players the recorder spectated, while they followed them, not
-the recorder's own. Unspecced frags adds the Fraggers' frags made while the
-demo shows someone else, filmed from behind them, when the demo has them for
-3 s before and their victim in view then (about half of those frags): the
-server only sends the players the recorder could see. The HUD is a
-spectator's, with their name but not their health, not in the demo, and it
-doesn't go with "Whoever is shown". A door the demo doesn't have there is
-drawn closed, from the map, until the demo has it. With Specced frags too, it
-keeps all but the recorder's own. Only unspecced keeps
-only those frags, of the Fraggers, or of anyone without one. The
-list then shows only the demos with such frags, with how many of each
-fragger. A player's frags are only those made while the
-demo shows them (the recorder playing, or the player the recorder follows),
-and only while they're shown, so a video of them never shows someone else
-(Unspecced frags adds the others, from behind them).
-"Whoever is shown", in Fragger's menu, keeps the frags shown: the recorder's
-while they play and those of the players they follow, while they follow
-them.
+older version are indexed again once for it). From says who the frags are
+from, any of these together, and remembers it: Recorder is the recorder's own
+frags, while they play; Specced those of the players the recorder spectated,
+while they followed them; Unspecced those made while the demo shows someone
+else, filmed from behind the fragger, when the demo has them for 3 s before and
+their victim in view then (about half of those frags): the server only sends
+the players the recorder could see. The HUD of those is a spectator's, with
+their name but not their health, not in the demo. A door the demo doesn't have
+there is drawn closed, from the map, until the demo has it. With none of them,
+it's anyone's frags, as the demo shows them; with a Fragger, those made while
+the demo shows them, and only while they're shown, so a video of them never
+shows someone else. The list then shows only the demos with such frags, with
+how many of each fragger.
 
 Double-click a demo to watch it in the game, with the keys below.
 Settings also sets how long
@@ -183,7 +177,7 @@ binds, without the app:
 | `demonextkill [player]`, `demoprevkill [player]` | jump to before the next or previous kill of `demofilter`, by that player while shown if given |
 | `demonextshownkill`, `demoprevshownkill` | jump to before the next or previous kill of whoever is shown |
 | `demonextround`, `demoprevround` | jump to the next or previous round |
-| `demofilter [clear \| shown \| killer <name> \| victim <name> \| weapon <weapon>... \| level <name> \| great [<msec> [<speed> [<streak msec> [<idle msec>]]]] \| specced \| unshown]` | the kills the kill commands go to: by players whose names have one of the killers in them, while shown, or by whoever is shown, of players whose names have one of the victims (a `*` in a name stands for any one character), made with one of the weapons (`pistol`, `rifle`, `sniper`, `smg`, `mg`, `shotgun`, `rocket`, `melee`, `other`), in levels whose names have one of the levels in them, any case (`level obj/`: the objective maps), and `great`: not the sniper kills the killer's view shows made with the scope on for over `msec` (1000) at `speed` (30) or slower, but those with another kill of their killer within `streak msec` (5000), and not the kills of victims who had given no input for over `idle msec` (5000), `specced`: only the kills of the players the recorder followed as a spectator, while followed, and `unshown`: also the kills of the killers while they aren't shown, seen from behind them, when the demo has them for 3 seconds before and their victim in view then; each adds, but `clear`; alone, it prints them. A player given to a command is the killer instead, the victims, weapons and levels still apply |
+| `demofilter [clear \| shown \| killer <name> \| victim <name> \| weapon <weapon>... \| level <name> \| great [<msec> [<speed> [<streak msec> [<idle msec>]]]] \| recorder \| specced \| unshown [only]]` | the kills the kill commands go to: by players whose names have one of the killers in them, while shown, or by whoever is shown, of players whose names have one of the victims (a `*` in a name stands for any one character), made with one of the weapons (`pistol`, `rifle`, `sniper`, `smg`, `mg`, `shotgun`, `rocket`, `melee`, `other`), in levels whose names have one of the levels in them, any case (`level obj/`: the objective maps), and `great`: not the sniper kills the killer's view shows made with the scope on for over `msec` (1000) at `speed` (30) or slower, but those with another kill of their killer within `streak msec` (5000), and not the kills of victims who had given no input for over `idle msec` (5000), `recorder`: only the recorder's own kills, while they play, `specced`: only the kills of the players the recorder followed as a spectator, while followed, and `unshown`: also the kills of the killers while they aren't shown, seen from behind them, when the demo has them for 3 seconds before and their victim in view then, with `unshown only` only those; each adds, but `clear`; alone, it prints them. A player given to a command is the killer instead, the victims, weapons and levels still apply |
 | `demoonly kills [player]` | play only the kills of `demofilter`, by that player while shown if given |
 | `demoonly multikills [player]` | play only the multi-kills, by that player while shown if given |
 | `demoonly shownkills` | play only the kills of whoever is shown (the recorder playing, or the player they follow), while they're shown |

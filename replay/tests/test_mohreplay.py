@@ -227,18 +227,18 @@ class FakeGameCase(unittest.TestCase):
         window.play_demo(name)
         self.assertTrue(wait_until(lambda: self.game_state(window).get("demo") == name), "the demo didn't load")
 
-    def choose(self, window, killer=None, victim=None, weapons=None, shown=None, obj=None, great=None, specced=None):
+    def choose(self, window, killer=None, victim=None, weapons=None, obj=None, great=None, recorder=None, specced=None,
+               unshown=None):
         """The kill filter, as typed and ticked, applied at once."""
         if obj is not None:
             window.obj.setChecked(obj)
         if great is not None:
             window.great.setChecked(great)
-        if specced is not None:
-            window.specced.setChecked(specced)
+        for key, value in (("recorder", recorder), ("specced", specced), ("unshown", unshown)):
+            if value is not None:
+                window.from_buttons[key].setChecked(value)
         if killer is not None:
             window.killer.setText(killer)
-        if shown is not None:
-            window.killer.set_shown(shown)
         if victim is not None:
             window.victim.setText(victim)
         if weapons is not None:
@@ -309,14 +309,15 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.quoted('say "hi"'), "\"say 'hi'\"")
 
     def test_demoonly_plan(self):
-        plan = mohreplay.demoonly_plan
+        plan, kf = mohreplay.demoonly_plan, mohreplay.KillFilter
         self.assertEqual(plan(DEMO), (0, [(0, 600000)]))
         # anyone's kills, wherever the recorder looks, but the deaths of the
         # player shown: t-'s at 3:20, Phil's at 6:40
         self.assertEqual(plan(DEMO, "kills"), (4, [(6000, 16500), (246000, 252000)]))
         # a player's while shown, whoever's is shown
-        self.assertEqual(plan(DEMO, "kills", "T-"), (3, [(6000, 16500)]))
-        self.assertEqual(plan(followed_demo(), "shownkills"), (5, [(6000, 16500), (300000, 305500)]))
+        self.assertEqual(plan(DEMO, "kills", kill_filter=kf(["T-"])), (3, [(6000, 16500)]))
+        self.assertEqual(plan(followed_demo(), "kills", kill_filter=kf(recorder=True, specced=True)),
+                         (5, [(6000, 16500), (300000, 305500)]))
 
     def test_demoonly_plan_with_a_kill_filter(self):
         plan, kf = mohreplay.demoonly_plan, mohreplay.KillFilter
@@ -328,10 +329,10 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(plan(DEMO, "kills", kill_filter=kf(["phil", "T-"], weapons=["other"])), (1, [(10500, 16500)]))
         self.assertEqual(plan(followed_demo(), "kills", kill_filter=kf(["t-", "phil"], weapons=["sniper"])),
                          (1, [(300000, 305500)]))
-        self.assertEqual(plan(DEMO, "kills", kill_filter=kf(shown=True)), plan(DEMO, "shownkills"))
-        # a player given, or whoever is shown, instead of the killers
-        self.assertEqual(plan(DEMO, "kills", "t-", kill_filter=kf(["phil"], weapons=["rifle"])), (2, [(6000, 14000)]))
-        self.assertEqual(plan(DEMO, "shownkills", kill_filter=kf(["phil"], victims=["al"])), (1, [(10500, 16500)]))
+        # the same client under another name
+        renamed = json.loads(json.dumps(DEMO))
+        renamed["kills"][0]["killerName"] = "t-.fi"
+        self.assertEqual(plan(renamed, "kills", kill_filter=kf(["t-.fi"]))[0], 1)
 
     def test_cut_where_the_player_shown_changes(self):
         demo = json.loads(json.dumps(DEMO))
@@ -342,7 +343,7 @@ class TestFunctions(unittest.TestCase):
                           "text": "Phil was rifled by t-"} for time in (20000, 26800, 38000, 44000)]
         plan, kf = mohreplay.demoonly_plan, mohreplay.KillFilter
         cut = [(16000, 28800), (34000, 40000), (40500, 46000)]
-        self.assertEqual(plan(demo, "kills", kill_filter=kf(shown=True))[1], cut)
+        self.assertEqual(plan(demo, "kills", kill_filter=kf(recorder=True, specced=True))[1], cut)
         self.assertEqual(plan(demo, "kills", kill_filter=kf(["t-"]))[1], cut)
         # all the kills, whoever is shown
         self.assertEqual(plan(demo, "kills")[1], [(16000, 28800), (34000, 46000)])
@@ -356,15 +357,10 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(kill_filter.commands(), ["demofilter clear", 'demofilter killer "^1Phil"', 'demofilter killer "T-"',
                                                   'demofilter victim "bob"', "demofilter weapon sniper mg"])
         self.assertEqual(kill_filter.words(), " by ^1Phil or T- of bob with sniper or StG / BAR")
-        self.assertEqual(kill_filter.words(killers=False), " of bob with sniper or StG / BAR")
         self.assertTrue(kill_filter.keeps({"killerName": "^4phil", "victimName": "Bob!", "weapon": "mg"}))
         # of t-, with a rifle
         self.assertFalse(kill_filter.keeps(DEMO["kills"][3]) or kill_filter.keeps(DEMO["kills"][1]))
         self.assertTrue(kill_filter.keeps(dict(DEMO["kills"][1], weapon="sniper"), killer=False))
-        # whoever is shown, or names
-        shown = mohreplay.KillFilter(["x"], shown=True)
-        self.assertEqual((shown.names, shown.commands(), shown.words()), ([], ["demofilter clear", "demofilter shown"], ""))
-        self.assertTrue(shown.by_shown() and shown.has_killer("anyone"))
         nothing = mohreplay.KillFilter()
         self.assertFalse(nothing or nothing.by_shown())
         self.assertEqual(nothing.commands(), ["demofilter clear"])
@@ -387,11 +383,11 @@ class TestFunctions(unittest.TestCase):
         summary = mohreplay.summarize(mixed)
         self.assertEqual(mohreplay.filter_kills(summary, mohreplay.KillFilter(["t-"]))[0], 3)
         self.assertEqual(mohreplay.filter_kills(summary, obj), (0, {}))
-        self.assertEqual(mohreplay.demoonly_plan(mixed, "kills", "t-", kill_filter=obj), (0, []))
+        self.assertEqual(mohreplay.demoonly_plan(mixed, "kills", kill_filter=obj), (0, []))
         mixed = json.loads(json.dumps(DEMO))
         mixed["maps"] = [{"time": 0, "map": "obj/obj_team1"}, {"time": 100000, "map": "dm/mohdm6"}]
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(mixed), obj), (3, {"t-": ["t-", 3]}))
-        self.assertEqual(mohreplay.demoonly_plan(mixed, "kills", "t-", kill_filter=obj)[0], 3)
+        self.assertEqual(mohreplay.demoonly_plan(mixed, "kills", kill_filter=obj)[0], 3)
         self.assertFalse(obj.keeps(dict(mixed["kills"][5], level="dm/mohdm6")))
 
     def test_great_frags(self):
@@ -418,7 +414,7 @@ class TestFunctions(unittest.TestCase):
         summary = mohreplay.summarize(snipes)
         self.assertEqual(mohreplay.filter_kills(summary, mohreplay.KillFilter(["t-"]))[0], 3)
         self.assertEqual(mohreplay.filter_kills(summary, great), (1, {"t-": ["t-", 1]}))
-        self.assertEqual(mohreplay.demoonly_plan(snipes, "kills", "t-", kill_filter=great)[0], 1)
+        self.assertEqual(mohreplay.demoonly_plan(snipes, "kills", kill_filter=great)[0], 1)
         self.assertEqual([great.keeps(kill) for kill in snipes["kills"][:3]], [False, False, True])
         # the second slow snipe in a streak with the third frag, at most 5 s
         # before it, and not when that's a team kill or a grenade kill
@@ -433,7 +429,7 @@ class TestFunctions(unittest.TestCase):
         streaks = json.loads(json.dumps(snipes))
         streaks["kills"][2]["time"] = 24000
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), great), (2, {"t-": ["t-", 2]}))
-        self.assertEqual(mohreplay.demoonly_plan(streaks, "kills", "t-", kill_filter=great)[0], 2)
+        self.assertEqual(mohreplay.demoonly_plan(streaks, "kills", kill_filter=great)[0], 2)
         # a victim idle for over 5 s: never great, whatever the weapon, and
         # makes no streak
         self.assertTrue(mohreplay.idle_victim({"weapon": "rifle", "idle": 5001}))
@@ -443,100 +439,70 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual([great.keeps(kill) for kill in streaks["kills"][:3]], [False, False, False])
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), great)[0], 0)
         self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(streaks), mohreplay.KillFilter(["t-"]))[0], 3)
-        self.assertEqual(mohreplay.demoonly_plan(streaks, "kills", "t-", kill_filter=great)[0], 0)
+        self.assertEqual(mohreplay.demoonly_plan(streaks, "kills", kill_filter=great)[0], 0)
 
-    def test_unspecced_frags(self):
-        """Unspecced frags adds the frags of the fraggers while they aren't
-        shown, seen from behind them, when the demo has them for 3 s before
-        and their victim in view."""
+    def test_from(self):
+        """Recorder, Specced and Unspecced, any of them: who the frags are
+        from, as the game is told; those not shown are seen from behind their
+        fragger, when the demo has them for 3 s before and their victim in
+        view."""
         kf = mohreplay.KillFilter
-        plan = lambda kill_filter, only="kills": mohreplay.demoonly_plan(unspecced_demo(), only, kill_filter=kill_filter)
-        unspecced = kf(["ace"], unshown=True)
-        self.assertEqual(unspecced.commands()[-1], "demofilter unshown")
-        self.assertEqual(unspecced.words(), " by ace, also unspecced")
-        # shown only, without it
-        self.assertEqual(plan(kf(["ace"])), (1, [(30000, 34000)]))
+        demo = unspecced_demo()
+        demo["kills"].insert(0, {"time": 10000, "killer": 0, "killerName": "rec", "victim": 4, "victimName": "Bob",
+                                 "text": "Bob was shot by rec", "weapon": "smg", "seen": 9000, "idle": 0})
+        planned = lambda kill_filter: [k["time"] for k, _, _ in mohreplay.planned_kills(demo, kill_filter)[0]]
+        summary = mohreplay.summarize(json.loads(json.dumps(demo)))
+        for who, times, commands, words in (
+                (dict(recorder=True), [10000], ["demofilter recorder"], " from the recorder"),
+                (dict(specced=True), [32000], ["demofilter specced"], " from specced"),
+                (dict(unshown=True), [20000, 70000, 89000], ["demofilter unshown only"], " from unspecced"),
+                (dict(recorder=True, specced=True), [10000, 32000], ["demofilter recorder", "demofilter specced"],
+                 " from the recorder and specced"),
+                (dict(recorder=True, unshown=True), [10000, 20000, 70000, 89000],
+                 ["demofilter recorder", "demofilter unshown"], " from the recorder and unspecced"),
+                (dict(specced=True, unshown=True), [20000, 32000, 70000, 89000],
+                 ["demofilter specced", "demofilter unshown"], " from specced and unspecced"),
+                (dict(recorder=True, specced=True, unshown=True), [10000, 20000, 32000, 70000, 89000],
+                 ["demofilter recorder", "demofilter specced", "demofilter unshown"],
+                 " from the recorder, specced and unspecced")):
+            kill_filter = kf(**who)
+            self.assertTrue(kill_filter and kill_filter.by_shown() and kill_filter.who_chosen())
+            self.assertEqual(planned(kill_filter), times, who)
+            self.assertEqual(kill_filter.commands(), ["demofilter clear", *commands], who)
+            self.assertEqual(kill_filter.words(), words)
+            # the list of demos counts the same
+            self.assertEqual(mohreplay.filter_kills(summary, kill_filter)[0], len(times), who)
+        # none: anyone's, as the demo shows them
+        self.assertEqual(len(planned(kf())), 8)
+        self.assertEqual(mohreplay.filter_kills(summary, kf())[0], 8)
+        # with a fragger, theirs of those; alone, theirs while shown
+        self.assertEqual(planned(kf(["ace"])), [32000])
+        self.assertEqual(planned(kf(["ace"], unshown=True)), [20000, 89000])
+        self.assertEqual(planned(kf(["a*e"], specced=True, unshown=True)), [20000, 32000, 89000])
+        self.assertEqual(planned(kf(["cid"], unshown=True)), [70000])
+        self.assertEqual(planned(kf(["rec"], recorder=True)), [10000])
+        self.assertEqual(planned(kf(["rec"], specced=True)), [])
+        self.assertEqual(planned(kf(["ace"], recorder=True)), [])
+        self.assertEqual(kf(["ace"], weapons=["smg"], specced=True, great=True).words(),
+                         " by ace with SMG from specced, great ones")
+        self.assertEqual(mohreplay.filter_kills(summary, kf(["ace"], unshown=True)), (2, {"ace": ["Ace", 2]}))
+        self.assertEqual(mohreplay.filter_kills(summary, kf(unshown=True)), (3, {"ace": ["Ace", 2], "cid": ["Cid", 1]}))
         # from when they're in the demo at most, and inside the level
-        self.assertEqual(plan(unspecced), (3, [(16000, 22000), (30000, 34000), (86000, 90000)]))
-        # a * too, not others' frags
-        self.assertEqual(plan(kf(["a*e"], unshown=True))[0], 3)
-        self.assertEqual(plan(kf(["cid"], unshown=True)), (1, [(66000, 72000)]))
-        # whoever is shown only has those shown
-        self.assertEqual(plan(kf(shown=True, unshown=True))[0], 1)
-        self.assertEqual(plan(kf(["ace"], unshown=True), "shownkills")[0], 1)
-        summary = mohreplay.summarize(unspecced_demo())
-        self.assertEqual(mohreplay.filter_kills(summary, unspecced), (3, {"ace": ["Ace", 3]}))
-        self.assertEqual(mohreplay.filter_kills(summary, kf(["ace"])), (1, {"ace": ["Ace", 1]}))
+        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", kill_filter=kf(specced=True, unshown=True)),
+                         (4, [(16000, 22000), (30000, 34000), (66000, 72000), (86000, 90000)]))
         # indexes from before: not known to be in the demo
-        old = unspecced_demo()
+        old = json.loads(json.dumps(demo))
         for kill in old["kills"]:
             kill.pop("seen", None)
-        self.assertEqual(mohreplay.demoonly_plan(old, "kills", kill_filter=unspecced)[0], 1)
-
-    def test_only_unspecced(self):
-        """Only unspecced: those frags without the ones shown, of anyone
-        without a fragger."""
-        kf = mohreplay.KillFilter
-        plan = lambda kill_filter, only="kills": mohreplay.demoonly_plan(unspecced_demo(), only, kill_filter=kill_filter)
-        ace = kf(["ace"], only_unshown=True)
-        anyone = kf(only_unshown=True)
-        self.assertEqual(ace.commands()[-1], "demofilter unshown only")
-        self.assertEqual(ace.words(), " by ace, unspecced only")
-        self.assertEqual(anyone.words(), ", unspecced only")
-        self.assertTrue(anyone)
-        self.assertEqual(plan(ace), (2, [(16000, 22000), (86000, 90000)]))
-        self.assertEqual(plan(anyone), (3, [(16000, 22000), (66000, 72000), (86000, 90000)]))
-        self.assertEqual(plan(kf(["cid"], only_unshown=True)), (1, [(66000, 72000)]))
-        # with the other box too, the same
-        self.assertEqual(plan(kf(["ace"], unshown=True, only_unshown=True)), plan(ace))
-        # whatever Specced frags says; whoever is shown only has those shown
-        self.assertEqual(plan(kf(["ace"], specced=True, only_unshown=True)), plan(ace))
-        self.assertFalse(kf(["ace"], specced=True, only_unshown=True).specced)
-        self.assertEqual(plan(kf(shown=True, only_unshown=True))[0], 1)
-        self.assertEqual(plan(ace, "shownkills")[0], 1)
-        summary = mohreplay.summarize(unspecced_demo())
-        self.assertEqual(mohreplay.filter_kills(summary, ace), (2, {"ace": ["Ace", 2]}))
-        self.assertEqual(mohreplay.filter_kills(summary, anyone), (3, {"ace": ["Ace", 2], "cid": ["Cid", 1]}))
-        # indexes from before: not known to be in the demo
-        old = unspecced_demo()
-        for kill in old["kills"]:
-            kill.pop("seen", None)
-        self.assertEqual(mohreplay.demoonly_plan(old, "kills", kill_filter=anyone)[0], 0)
-        self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(old), anyone)[0], 0)
-
-    def test_specced_and_unspecced(self):
-        """Both boxes: all the frags but the recorder's own."""
-        kf = mohreplay.KillFilter
-        index = unspecced_demo()
-        index["kills"].insert(0, {"time": 10000, "killer": 0, "killerName": "rec", "victim": 4, "victimName": "Bob",
-                                  "text": "Bob was shot by rec", "weapon": "smg", "seen": 9000, "idle": 0})
-        both = kf(specced=True, unshown=True)
-        plan = lambda kill_filter: mohreplay.demoonly_plan(json.loads(json.dumps(index)), "kills", kill_filter=kill_filter)
-        self.assertEqual(both.commands()[-2:], ["demofilter specced", "demofilter unshown"])
-        self.assertEqual(both.words(), " while specced, also unspecced")
-        # the one followed, Ace from behind before and after, and Cid
-        self.assertEqual(plan(both), (4, [(16000, 22000), (30000, 34000), (66000, 72000), (86000, 90000)]))
-        self.assertEqual(plan(kf(["ace"], specced=True, unshown=True)),
-                         (3, [(16000, 22000), (30000, 34000), (86000, 90000)]))
-        # a fragger who is only the recorder has none, as with Specced frags alone
-        self.assertEqual(plan(kf(["rec"], specced=True, unshown=True))[0], 0)
-        # each box alone as before
-        self.assertEqual(plan(kf(specced=True))[0], 1)
-        self.assertEqual(plan(kf(["rec"]))[0], 1)
-        summary = mohreplay.summarize(json.loads(json.dumps(index)))
-        self.assertEqual(mohreplay.filter_kills(summary, both), (4, {"ace": ["Ace", 3], "cid": ["Cid", 1]}))
-        self.assertEqual(mohreplay.filter_kills(summary, kf(specced=True)), (1, {"ace": ["Ace", 1]}))
+        self.assertEqual(mohreplay.demoonly_plan(old, "kills", kill_filter=kf(unshown=True))[0], 0)
+        self.assertEqual(mohreplay.filter_kills(mohreplay.summarize(old), kf(unshown=True))[0], 0)
 
     def test_specced_frags(self):
         """Specced frags: only those of the players the recorder follows,
         Phil's two from 5:00 in followed_demo, not t-'s own."""
         demo, kf = followed_demo(), mohreplay.KillFilter
         specced = kf(specced=True)
-        self.assertTrue(specced)
-        self.assertTrue(specced.by_shown() and specced.of_shown())
-        self.assertFalse(kf(["phil"], specced=True).of_shown())
-        self.assertEqual(specced.commands()[-1], "demofilter specced")
-        self.assertEqual(kf(["phil"], weapons=["sniper"], specced=True).words(), " by phil with sniper while specced")
+        self.assertEqual(kf(["phil"], weapons=["sniper"], specced=True).words(), " by phil with sniper from specced")
         mohreplay.kill_specced(demo)
         self.assertEqual([kill["time"] for kill in demo["kills"] if kill["specced"]], [301000, 303500])
         self.assertEqual([specced.keeps(kill) for kill in demo["kills"][5:7]], [True, True])
@@ -547,7 +513,7 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.filter_kills(summary, kf(["t-"], specced=True))[0], 0)
         self.assertEqual(mohreplay.filter_kills(summary, kf(weapons=["sniper"], specced=True))[0], 1)
         self.assertEqual(mohreplay.demoonly_plan(demo, "kills", kill_filter=specced), (2, [(300000, 305500)]))
-        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", "t-", kill_filter=specced)[0], 0)
+        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", kill_filter=kf(["t-"], specced=True))[0], 0)
         # an index made before followed was: none
         for watch in demo["watched"]:
             del watch["followed"]
@@ -587,12 +553,13 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.filter_kills(summary, kf(["T-"])), (3, {"t-": ["t-", 3]}))
         self.assertEqual(mohreplay.filter_kills(summary, kf(["phil"])), (0, {}))
         self.assertEqual(mohreplay.filter_kills(summary, kf(victims=["bob"])), (2, {"t-": ["t-", 1]}))
-        self.assertEqual(mohreplay.filter_kills(summary, kf(shown=True, weapons=["rifle"])), (2, {"t-": ["t-", 2]}))
+        self.assertEqual(mohreplay.filter_kills(summary, kf(recorder=True, specced=True, weapons=["rifle"])),
+                         (2, {"t-": ["t-", 2]}))
 
     def test_numbered_clips(self):
         """The game numbers each stretch a clip plays, counting on through the
         video, from the number it's given."""
-        clips = [mohreplay.only_clip("a", "kills", "t-", [(0, 5000), (9000, 15000)]),
+        clips = [mohreplay.only_clip("a", "kills", [(0, 5000), (9000, 15000)]),
                  mohreplay.range_clip("b", 1000, 2000), mohreplay.only_clip("c")]
         mohreplay.numbered(clips, True)
         self.assertEqual([clip["number"] for clip in clips], [1, 3, 4])
@@ -605,7 +572,7 @@ class TestFunctions(unittest.TestCase):
         """A video in parts of at most a length, cut between the stretches
         it plays, a stretch longer than a part in pieces."""
         split = mohreplay.split_clips
-        kills = mohreplay.only_clip("a", "kills", "t-", [(0, 10000), (20000, 30000), (40000, 50000)])
+        kills = mohreplay.only_clip("a", "kills", [(0, 10000), (20000, 30000), (40000, 50000)])
         kills["frags"] = [[{"time": 4000}], [{"time": 24000}], [{"time": 44000}]]
         rest = mohreplay.only_clip("b")
         # short enough: as they are
@@ -616,12 +583,12 @@ class TestFunctions(unittest.TestCase):
         first, second = split([kills], 25000)
         self.assertEqual(len(first), 1)
         self.assertEqual((first[0]["spans"], first[0]["start"], first[0]["end"]), ([(0, 10000), (20000, 30000)], 0, 30000))
-        self.assertEqual(first[0]["commands"][-4:], ["demoseek 0.000", "demopause 0", "demoonly kills \"t-\"",
+        self.assertEqual(first[0]["commands"][-4:], ["demoseek 0.000", "demopause 0", "demoonly kills",
                                                      "demovideo {part} 30.000"])
         self.assertEqual(first[0]["frags"], [[{"time": 4000}], [{"time": 24000}]])
         self.assertEqual((second[0]["spans"], second[0]["end"], second[0]["frags"]), ([(40000, 50000)], None,
                                                                                       [[{"time": 44000}]]))
-        self.assertEqual(second[0]["commands"][-4:], ["demoseek 40.000", "demopause 0", "demoonly kills \"t-\"",
+        self.assertEqual(second[0]["commands"][-4:], ["demoseek 40.000", "demopause 0", "demoonly kills",
                                                       "demovideo {part}"])
         self.assertEqual(kills["spans"], [(0, 10000), (20000, 30000), (40000, 50000)])
         # a stretch longer than a part starts one and goes on in the next
@@ -647,10 +614,11 @@ class TestFunctions(unittest.TestCase):
     def test_clip_rows(self):
         """The list of a video's clips: a row for each frag, the clip's
         number, start in the video and the demo, and the frag."""
-        count, spans = mohreplay.demoonly_plan(DEMO, "kills", "t-", 4000, 2000)
-        frags = mohreplay.clip_frags(DEMO, spans, "kills", "t-")
+        t = mohreplay.KillFilter(["t-"])
+        count, spans = mohreplay.demoonly_plan(DEMO, "kills", 4000, 2000, t)
+        frags = mohreplay.clip_frags(DEMO, spans, "kills", t)
         self.assertEqual(sum(len(f) for f in frags), count)
-        clip = mohreplay.only_clip("first", "kills", "t-", spans)
+        clip = mohreplay.only_clip("first", "kills", spans, t)
         clip["frags"] = frags
         other = mohreplay.range_clip("other", 60000, 70000)
         rows = mohreplay.clip_rows(mohreplay.numbered([clip, other], True))
@@ -714,7 +682,7 @@ class TestFunctions(unittest.TestCase):
         # a player killing themselves while shown made no frag
         demo = json.loads(json.dumps(DEMO))
         demo["kills"][1].update(victim=0, victimName="t-", text="t- blew himself up")
-        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", "t-")[0], 2)
+        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", kill_filter=mohreplay.KillFilter(["t-"]))[0], 2)
         self.assertEqual(mohreplay.summarize(demo)["players"]["t-"], ["t-", 2])
 
     def test_team_kills(self):
@@ -722,14 +690,14 @@ class TestFunctions(unittest.TestCase):
         # not counted, and only played with a kill of their killer at most 2 s
         # away: not Phil's 1.5 s after killing t-, who's shown, at 3:20
         self.assertEqual(plan(demo, "kills"), (4, [(6000, 18000), (246000, 252000)]))
-        self.assertEqual(plan(demo, "kills", "T-"), (3, [(6000, 18000)]))
+        self.assertEqual(plan(demo, "kills", kill_filter=mohreplay.KillFilter(["T-"])), (3, [(6000, 18000)]))
         self.assertEqual(mohreplay.summarize(demo)["players"]["t-"], ["t-", 3])
 
     def test_grenade_kills(self):
         plan, demo = mohreplay.demoonly_plan, grenade_demo()
         self.assertEqual([mohreplay.is_grenade(kill) for kill in demo["kills"]][2:5], [False, True, True])
         # not counted, not played
-        self.assertEqual(plan(demo, "kills", "T-"), (3, [(6000, 16500)]))
+        self.assertEqual(plan(demo, "kills", kill_filter=mohreplay.KillFilter(["T-"])), (3, [(6000, 16500)]))
         self.assertEqual(mohreplay.summarize(demo)["players"]["t-"], ["t-", 3])
 
     def test_levels(self):
@@ -741,7 +709,8 @@ class TestFunctions(unittest.TestCase):
         demo["kills"].append({"time": 257000, "killer": 0, "killerName": "t-", "victim": 2, "victimName": "Bob",
                               "text": "Bob was rifled by t-"})
         demo["kills"].sort(key=lambda kill: kill["time"])
-        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", "T-"), (4, [(6000, 16500), (256000, 259000)]))
+        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", kill_filter=mohreplay.KillFilter(["T-"])),
+                         (4, [(6000, 16500), (256000, 259000)]))
         kill = {"time": 255000}
         self.assertEqual(mohreplay.kill_span(demo, kill, 0, 600000), (251000, 256000))
         self.assertEqual(mohreplay.kill_span(demo, dict(kill, time=257000), 0, 600000), (256000, 259000))
@@ -749,9 +718,9 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.kill_span(demo, dict(kill, time=599000), 0, 602000), (595000, 600000))
 
     def test_lead_in_and_out(self):
-        plan = mohreplay.demoonly_plan
-        self.assertEqual(plan(DEMO, "kills", "T-", 1000, 400), (3, [(9000, 12400), (13500, 14900)]))
-        self.assertEqual(plan(DEMO, "kills", "T-", 10000, 5000), (3, [(0, 19500)]))
+        plan, t = mohreplay.demoonly_plan, mohreplay.KillFilter(["T-"])
+        self.assertEqual(plan(DEMO, "kills", 1000, 400, t), (3, [(9000, 12400), (13500, 14900)]))
+        self.assertEqual(plan(DEMO, "kills", 10000, 5000, t), (3, [(0, 19500)]))
 
     def test_wording(self):
         self.assertEqual([mohreplay.the(n, "frag", "frags") for n in (0, 1, 3)], ["No frags", "The frag", "The 3 frags"])
@@ -1313,7 +1282,7 @@ class TestLibrary(FakeGameCase):
         self.choose(window, weapons=["mg"])
         self.assertEqual(self.shown(window), [])
         # whoever is shown
-        self.choose(window, weapons=[], shown=True)
+        self.choose(window, weapons=[], recorder=True, specced=True)
         self.assertEqual(self.shown(window), ["first", "other"])
         # with the search's words
         window.filter.setText("mohdm6")
@@ -1322,7 +1291,7 @@ class TestLibrary(FakeGameCase):
         # on the obj maps: other is on a dm one
         self.choose(window, obj=True)
         self.assertEqual(self.shown(window), ["first"])
-        self.choose(window, obj=False, shown=False)
+        self.choose(window, obj=False, recorder=False, specced=False)
         self.assertEqual(self.shown(window), ["broken", "first", "other"])
         self.assertTrue(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
 
@@ -1343,6 +1312,32 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_PLAYER), "t- (3)")
         self.choose(window, weapons=["sniper"])
         self.assertEqual(self.shown(window), ["snipes"])
+
+    def test_from_buttons(self):
+        """Any of them together, in the list of demos, kept for next time."""
+        self.add_demo("followed", followed_demo())
+        window = self.window()
+        self.indexed(window, ("first", "other", "followed"))
+        self.assertEqual([window.from_buttons[key].text() for key in ("recorder", "specced", "unshown")],
+                         ["Recorder", "Specced", "Unspecced"])
+        self.assertFalse(any(button.isChecked() for button in window.from_buttons.values()))
+        self.assertFalse(window.kill_filter())
+        self.choose(window, recorder=True)
+        self.assertEqual(self.shown(window), ["first", "followed", "other"])
+        self.assertEqual(window.demo_items["followed"].text(mohreplay.COL_PLAYER), "t- (3)")
+        self.choose(window, recorder=False, specced=True)
+        self.assertEqual(self.shown(window), ["followed"])
+        self.choose(window, recorder=True)
+        self.assertEqual(sorted(window.demo_items["followed"].text(mohreplay.COL_PLAYER).split(", ")),
+                         ["^1Phil (2)", "t- (3)"])
+        again = self.window()
+        self.assertEqual([again.from_buttons[key].isChecked() for key in ("recorder", "specced", "unshown")],
+                         [True, True, False])
+        self.assertEqual(again.kill_filter().commands(), ["demofilter clear", "demofilter recorder", "demofilter specced"])
+        # applied once a click has stopped, as the other filters are
+        again.from_buttons["recorder"].click()
+        self.assertTrue(again.kill_filter_timer.isActive())
+        self.assertEqual(self.settings.value("from_recorder"), "0")
 
     def test_specced_frags(self):
         """Specced frags, in the list: Phil's two in followed, while the
@@ -1384,16 +1379,6 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(self.players(window.victim), (["t- (3)", "^1Phil (0)", "Al (0)", "Bob (0)"], []))
         self.assertEqual(len(window.victim.menu.actions()), 1)
         window.victim.menu.close()
-        # whoever is shown instead of names, and names instead of it
-        window.killer.open_menu()
-        window.killer.shown_action.trigger()
-        window.killer.menu.close()
-        self.assertTrue(window.killer.shown())
-        self.assertEqual((window.killer.text(), window.killer.placeholderText()), ("", "Whoever is shown"))
-        self.assertTrue(window.kill_filter().shown)
-        window.killer.setText("bob")
-        self.assertFalse(window.killer.shown())
-        self.assertEqual(window.killer.placeholderText(), "Anyone")
         # a long list scrolls instead of leaving the screen
         window.victim.fill = lambda: ([f"player {n}" for n in range(100)], {})
         window.victim.open_menu()
@@ -1667,7 +1652,7 @@ class TestRecording(FakeGameCase):
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("{player} frags")
         dialog = self.record(window, setup)
-        self.assertEqual(dialog.choices["kills"].text(), "The 3 frags by t-, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 3 frags listed, under a minute")
         self.assertFalse(dialog.join.isVisible())
         self.done(window)
         video = self.video("t- frags.mp4")
@@ -1682,11 +1667,11 @@ class TestRecording(FakeGameCase):
         self.choose(window, killer="t-")
 
         def setup(dialog):
-            self.assertEqual(dialog.choices["kills"].text(), "The 3 frags by t-, under a minute")
+            self.assertEqual(dialog.choices["kills"].text(), "The 3 frags listed, under a minute")
             dialog.kill_before.setValue(30)
             dialog.kill_after.setValue(30)
             # 0:00 to 0:44.5, while t- is shown
-            self.assertTrue(wait_until(lambda: dialog.choices["kills"].text() == "The 3 frags by t-, about 1 min", 2),
+            self.assertTrue(wait_until(lambda: dialog.choices["kills"].text() == "The 3 frags listed, about 1 min", 2),
                             dialog.choices["kills"].text())
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("long")
@@ -1699,19 +1684,22 @@ class TestRecording(FakeGameCase):
     def test_record_recorder_frags(self):
         window = self.window()
         self.ready(window)
+        self.choose(window, recorder=True)
 
         def setup(dialog):
-            dialog.choices["recorderkills"].setChecked(True)
-            dialog.pattern.setText("{demo} {player} recfrags")
+            dialog.choices["kills"].setChecked(True)
+            dialog.pattern.setText("{demo} recfrags")
         dialog = self.record(window, setup)
-        self.assertEqual(dialog.choices["recorderkills"].text(), "The 3 recorder frags, under a minute")
-        self.assertFalse(dialog.choices["recorderkills"].isHidden())
+        self.assertEqual(list(dialog.choices), ["kills", "everything"])
+        self.assertEqual(dialog.choices["kills"].text(), "The 3 frags listed, under a minute")
+        self.assertFalse(dialog.choices["kills"].isHidden())
         self.assertTrue(dialog.nothing.isHidden())
         job, = self.done(window)
-        self.assertEqual(job["item"].text(1), "first, recorder frags")
-        video = self.video("first t- recfrags.mp4")
+        self.assertEqual(job["item"].text(1), "first, frags from the recorder")
+        video = self.video("first recfrags.mp4")
         # from just before the first kill
-        self.assertEqual((video["start"], video["only"], video["player"]), (6000, "kills", "t-"))
+        self.assertEqual((video["start"], video["only"], video["player"], video["filter"].get("recorder")),
+                         (6000, "kills", "", True))
 
     def test_record_kills_with_a_weapon(self):
         window = self.window()
@@ -1719,62 +1707,39 @@ class TestRecording(FakeGameCase):
         self.choose(window, victim="bob, phil", weapons=["rifle"])
 
         def setup(dialog):
-            dialog.choices["recorderkills"].setChecked(True)
             dialog.pattern.setText("rifle")
         dialog = self.record(window, setup)
-        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "shownkills", "everything"])
-        self.assertEqual(dialog.choices["kills"].text(), "The 2 frags of bob or phil with rifle, under a minute")
-        self.assertEqual(dialog.choices["recorderkills"].text(), "The 2 recorder frags of bob or phil with rifle, under a minute")
-        self.assertEqual(dialog.choices["shownkills"].text(), "The 2 frags shown of bob or phil with rifle: the recorder's "
-                         "and the players they follow, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 2 frags listed, under a minute")
         job, = self.done(window)
-        self.assertEqual(job["item"].text(1), "first, recorder frags")
+        self.assertEqual(job["item"].text(1), "first, frags of bob or phil with rifle")
         video = self.video("rifle.mp4")
-        self.assertEqual((video["start"], video["only"], video["player"]), (6000, "kills", "t-"))
+        self.assertEqual((video["start"], video["only"], video["player"]), (6000, "kills", ""))
         self.assertEqual(video["filter"], {"shown": False, "killers": [], "victims": ["bob", "phil"], "weapons": ["rifle"]})
 
-    def test_record_frags_shown(self):
+    def test_record_nothing_listed(self):
+        """Only what there is to record is offered."""
+        self.add_demo("second", DEMO)
         window = self.window()
-        self.ready(window)
+        self.ready(window, "first", "second")
+        self.choose(window, victim="nobody")
+        self.assertEqual(window.chosen_demos(), [])
+        self.assertFalse(window.record_button.isEnabled())
+        self.choose(window, victim="")
         self.choose(window, killer="t-")
-
-        def setup(dialog):
-            dialog.choices["shownkills"].setChecked(True)
-            dialog.pattern.setText("{demo} frags {player}")
-        dialog = self.record(window, setup)
-        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "shownkills", "everything"])
-        self.assertEqual(dialog.choices["kills"].text(), "The 3 frags by t-, under a minute")
-        self.assertEqual(dialog.choices["shownkills"].text(),
-                         "The 3 frags shown: the recorder's and the players they follow, under a minute")
-        job, = self.done(window)
-        self.assertEqual(job["item"].text(1), "first, frags shown")
-        video = self.video("first frags.mp4")
-        # from just before the first kill
-        self.assertEqual((video["start"], video["only"], video["player"]), (6000, "shownkills", ""))
-
-        # whoever is shown in Killer: its kills are the frags shown
-        self.choose(window, killer="", shown=True)
-
-        def shown(dialog):
-            dialog.choices["kills"].setChecked(True)
-            dialog.pattern.setText("shown")
-        dialog = self.record(window, shown)
-        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "everything"])
-        self.assertEqual(dialog.choices["kills"].text(),
-                         "The 3 frags shown: the recorder's and the players they follow, under a minute")
-        self.done(window, 2)
-        video = self.video("shown.mp4")
-        self.assertEqual((video["only"], video["filter"]["shown"]), ("kills", True))
+        dialogs = []
+        with mock.patch.object(mohreplay.RecordDialog, "exec", lambda dialog: dialogs.append(dialog) or 0):
+            self.choose(window, victim="al")
+            window.record_button.click()
+        self.assertEqual(dialogs[-1].choices["kills"].text(), "The 2 frags listed, in 2 demos, under a minute")
+        self.assertTrue(dialogs[-1].choices["kills"].isChecked())
 
     def test_record_unspecced_frags(self):
-        """Unspecced frags: listed, and the game told to play them."""
+        """Unspecced frags: the game told to play them."""
         self.short_demos()
         self.add_demo("unspecced", unspecced_demo())
         window = self.window()
         self.ready(window, "unspecced")
-        self.choose(window, killer="ace")
-        window.unshown.setChecked(True)
-        window.apply_kill_filter()
+        self.choose(window, killer="ace", unshown=True)
 
         def setup(dialog):
             dialog.choices["kills"].setChecked(True)
@@ -1782,70 +1747,34 @@ class TestRecording(FakeGameCase):
         self.record(window, setup)
         job, = self.done(window)
         self.assertEqual(job["status"], "done")
-        self.assertEqual([[kill["time"] for kill in frags] for frags in job["clips"][0]["frags"]],
-                         [[20000], [32000], [89000]])
+        self.assertEqual([[kill["time"] for kill in frags] for frags in job["clips"][0]["frags"]], [[20000], [89000]])
         video = self.video("unspecced.mp4")
-        self.assertEqual((video["only"], video["filter"].get("unshown")), ("kills", True))
+        self.assertEqual((video["only"], video["filter"].get("unshown")), ("kills", "only"))
 
     def test_record_specced_and_unspecced(self):
-        """Specced frags and Unspecced frags together: the game is told both."""
+        """Specced and Unspecced together: the game is told both."""
         self.short_demos()
         self.add_demo("unspecced", unspecced_demo())
         window = self.window()
         self.ready(window, "unspecced")
-        window.specced.setChecked(True)
-        window.unshown.setChecked(True)
-        window.apply_kill_filter()
+        self.choose(window, specced=True, unshown=True)
 
         def setup(dialog):
-            self.assertIn("while specced, also unspecced", dialog.choices["kills"].text())
+            self.assertEqual(dialog.choices["kills"].text(), "The 4 frags listed, under a minute")
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("both")
         self.record(window, setup)
         job, = self.done(window)
         self.assertEqual(job["status"], "done")
+        self.assertEqual(job["item"].text(1), "unspecced, frags from specced and unspecced")
         self.assertEqual([[kill["time"] for kill in frags] for frags in job["clips"][0]["frags"]],
                          [[20000], [32000], [70000], [89000]])
         video = self.video("both.mp4")
         self.assertEqual((video["only"], video["filter"].get("specced"), video["filter"].get("unshown")),
                          ("kills", True, True))
 
-    def test_record_only_unspecced(self):
-        """Only unspecced: without a fragger, anyone's, and neither the
-        recorder's nor those of whoever is shown to choose."""
-        self.short_demos()
-        self.add_demo("unspecced", unspecced_demo())
-        self.add_demo("first", DEMO)
-        window = self.window()
-        TestLibrary.indexed(self, window, ("first", "unspecced"))
-        self.ready(window, "unspecced")
-        window.only_unshown.setChecked(True)
-        window.apply_kill_filter()
-        self.assertFalse(window.unshown.isEnabled())
-        self.assertFalse(window.specced.isEnabled())
-        self.assertTrue(window.demo_items["first"].isHidden())
-        self.assertFalse(window.demo_items["unspecced"].isHidden())
-        self.assertIn("Ace (2)", window.demo_items["unspecced"].text(mohreplay.COL_PLAYER))
-
-        def setup(dialog):
-            self.assertEqual(sorted(dialog.choices), ["everything", "kills"])
-            self.assertIn("unspecced only", dialog.choices["kills"].text())
-            dialog.choices["kills"].setChecked(True)
-            dialog.pattern.setText("only")
-        self.record(window, setup)
-        job, = self.done(window)
-        self.assertEqual(job["status"], "done")
-        self.assertEqual([[kill["time"] for kill in frags] for frags in job["clips"][0]["frags"]],
-                         [[20000], [70000], [89000]])
-        video = self.video("only.mp4")
-        self.assertEqual((video["only"], video["filter"].get("unshown")), ("kills", "only"))
-        window.only_unshown.setChecked(False)
-        self.assertTrue(window.unshown.isEnabled())
-        self.assertTrue(window.specced.isEnabled())
-
     def test_record_specced_frags(self):
-        """Specced frags: the filter's frags are those of the players
-        followed, neither the recorder's nor all those shown."""
+        """Specced: those of the players followed, not the recorder's."""
         self.add_demo("followed", followed_demo())
         window = self.window()
         self.ready(window, "followed")
@@ -1855,23 +1784,24 @@ class TestRecording(FakeGameCase):
             dialog.choices["kills"].setChecked(True)
             dialog.pattern.setText("specced")
         dialog = self.record(window, setup)
-        self.assertEqual(list(dialog.choices), ["kills", "everything"])
-        self.assertEqual(dialog.choices["kills"].text(), "The 2 frags while specced, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 2 frags listed, under a minute")
         job, = self.done(window)
-        self.assertEqual(job["item"].text(1), "followed, frags while specced")
+        self.assertEqual(job["item"].text(1), "followed, frags from specced")
         video = self.video("specced.mp4")
         self.assertEqual((video["only"], video["filter"].get("specced")), ("kills", True))
 
     def test_last_choice_remembered(self):
+        self.short_demos()
+        self.add_demo("first", dict(DEMO, duration=20000))
         window = self.window()
         self.ready(window)
-        dialog = self.record(window, lambda d: (d.choices["shownkills"].setChecked(True), d.pattern.setText("a")))
+        self.record(window, lambda d: (d.choices["everything"].setChecked(True), d.pattern.setText("a")))
         self.done(window)
         # offered: chosen again, else the first
         dialog = self.record(window, lambda d: d.pattern.setText("b"))
-        self.assertTrue(dialog.choices["shownkills"].isChecked())
+        self.assertTrue(dialog.choices["everything"].isChecked())
         self.done(window, 2)
-        self.assertEqual(self.video("b.mp4")["only"], "shownkills")
+        self.assertEqual(self.video("b.mp4")["only"], "")
         # not offered any more, as nothing's there to record: a stretch
         with mock.patch.object(self.settings, "value", lambda key, default=None, s=self.settings.value: (
                 "kills" if key == "rec/what" else s(key, default))):
@@ -2080,7 +2010,7 @@ class TestRecording(FakeGameCase):
             dialog.join.setChecked(True)
             dialog.pattern.setText("{player} in {demo}")
         dialog = self.record(window, setup, window.record_demos)
-        self.assertEqual(dialog.choices["kills"].text(), "The 6 frags by t-, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 6 frags listed, in 2 demos, under a minute")
         job, = self.done(window)
         self.assertEqual(job["status"], "done", job["item"].toolTip(2))
         self.assertEqual(job["item"].text(1), "2 demos, frags by t-")
@@ -2089,7 +2019,9 @@ class TestRecording(FakeGameCase):
         self.assertEqual([(p["only"], p["player"], p["filter"]["killers"]) for p in parts],
                          [("kills", "", ["t-"]), ("kills", "", ["t-"])])
 
-    def test_frags_shown_in_several_demos(self):
+    def test_frags_from_in_several_demos(self):
+        """Who they're from in each demo: only those with some are in the
+        video, one for all or one each."""
         self.add_demo("followed", followed_demo())
         # t-, shown till 5:00, kills only after
         self.add_demo("unseen", dict(DEMO, kills=[k for k in DEMO["kills"] if k["time"] > 100000]))
@@ -2098,89 +2030,45 @@ class TestRecording(FakeGameCase):
         window.filter.setText("t-")
         for name in ("first", "followed", "unseen"):
             window.demo_items[name].setSelected(True)
+        self.choose(window, recorder=True, specced=True)
 
         def setup(dialog):
-            dialog.choices["shownkills"].setChecked(True)
+            dialog.choices["kills"].setChecked(True)
             dialog.join.setChecked(True)
             dialog.pattern.setText("{demo} {player}")
-        dialog = self.record(window, setup, window.record_demos)
-        self.assertEqual(dialog.choices["kills"].text(), "The 11 frags, about 1 min")
-        self.assertEqual(dialog.choices["shownkills"].text(), "The 8 frags shown: the recorder's and the players "
-                         "they follow, in 2 of the 3 demos, under a minute")
+        dialog = self.record(window, setup)
+        self.assertEqual(dialog.choices["kills"].text(), "The 8 frags listed, in 2 demos, under a minute")
         job, = self.done(window)
         self.assertEqual(job["status"], "done", job["item"].toolTip(2))
-        self.assertEqual(job["item"].text(1), "2 demos, frags shown")
-        # whoever is shown, not a killer
+        self.assertEqual(job["item"].text(1), "2 demos, frags from the recorder and specced")
         parts = self.video("2 demos.mp4")["joined"]
-        self.assertEqual([(p["only"], p["player"]) for p in parts], [("shownkills", ""), ("shownkills", "")])
+        self.assertEqual([(p["only"], p["player"], p["filter"]["specced"]) for p in parts],
+                         [("kills", "", True), ("kills", "", True)])
 
         def each(dialog):
-            dialog.choices["shownkills"].setChecked(True)
+            dialog.choices["kills"].setChecked(True)
             dialog.join.setChecked(False)
             dialog.pattern.setText("{demo} each")
-        self.record(window, each, window.record_demos)
+        self.record(window, each)
         jobs = self.done(window, 3)
         self.assertEqual(sorted(job["item"].text(1) for job in jobs[1:]),
-                         ["first, frags shown", "followed, frags shown"])
+                         ["first, frags from the recorder and specced", "followed, frags from the recorder and specced"])
         self.assertEqual(sorted(n for n in os.listdir(self.videos) if "each" in n),
                          ["first each.mp4", "followed each.mp4"])
-        self.assertEqual(self.video("followed each.mp4")["only"], "shownkills")
 
-        # whoever is shown in Killer, with a weapon: those of the demos listed
-        self.choose(window, shown=True, weapons=["sniper"])
+        # with a weapon: only the demos listed
+        self.choose(window, weapons=["sniper"])
         self.assertEqual(TestWindow.shown(self, window), ["followed"])
         self.assertEqual(window.demo_items["followed"].text(mohreplay.COL_PLAYER), "^1Phil (1)")
         window.demos.clearSelection()
         window.demo_items["followed"].setSelected(True)
-
-        def sniper(dialog):
-            dialog.pattern.setText("{demo} sniper")
-        dialog = self.record(window, sniper, window.record_demos)
-        self.assertEqual(list(dialog.choices), ["kills", "recorderkills", "everything"])
-        self.assertEqual(dialog.choices["kills"].text(), "The frag shown with sniper: the recorder's and the players "
-                         "they follow, under a minute")
+        dialog = self.record(window, lambda d: d.pattern.setText("{demo} sniper"))
+        self.assertEqual(list(dialog.choices), ["kills", "everything"])
+        self.assertEqual(dialog.choices["kills"].text(), "The frag listed, under a minute")
         self.assertTrue(dialog.choices["kills"].isChecked())
-        self.assertFalse(dialog.choices["recorderkills"].isEnabled())
         self.done(window, 4)
         video = self.video("followed sniper.mp4")
-        self.assertEqual((video["only"], video["filter"]["shown"], video["filter"]["weapons"]), ("kills", True, ["sniper"]))
-
-    def test_record_demos_recorder_frags(self):
-        self.add_demo("followed", followed_demo())
-        self.add_demo("unseen", dict(DEMO, kills=[k for k in DEMO["kills"] if k["time"] > 100000]))
-        window = self.window()
-        TestLibrary.indexed(self, window, ("first", "followed", "unseen"))
-        window.filter.setText("t-")
-        for name in ("first", "followed", "unseen"):
-            window.demo_items[name].setSelected(True)
-
-        def setup(dialog):
-            dialog.choices["recorderkills"].setChecked(True)
-            dialog.join.setChecked(True)
-            dialog.pattern.setText("{demo} {player}")
-        dialog = self.record(window, setup, window.record_demos)
-        self.assertEqual(dialog.choices["kills"].text(), "The 11 frags, about 1 min")
-        self.assertEqual(dialog.choices["recorderkills"].text(),
-                         "The 6 recorder frags, in 2 of the 3 demos, under a minute")
-        job, = self.done(window)
-        self.assertEqual(job["status"], "done", job["item"].toolTip(2))
-        self.assertEqual(job["item"].text(1), "2 demos, recorder frags")
-        # only the recorder's kills, excluding followed players
-        parts = self.video("2 demos.mp4")["joined"]
-        self.assertEqual([(p["only"], p["player"]) for p in parts], [("kills", "t-"), ("kills", "t-")])
-
-        def each(dialog):
-            dialog.choices["recorderkills"].setChecked(True)
-            dialog.join.setChecked(False)
-            dialog.pattern.setText("{demo} each")
-        self.record(window, each, window.record_demos)
-        jobs = self.done(window, 3)
-        self.assertEqual(sorted(job["item"].text(1) for job in jobs[1:]),
-                         ["first, recorder frags", "followed, recorder frags"])
-        self.assertEqual(sorted(n for n in os.listdir(self.videos) if "each" in n),
-                         ["first each.mp4", "followed each.mp4"])
-        self.assertEqual(self.video("followed each.mp4")["only"], "kills")
-        self.assertEqual(self.video("followed each.mp4")["player"], "t-")
+        self.assertEqual((video["only"], video["filter"]["weapons"]), ("kills", ["sniper"]))
 
     def test_numbered_clips(self):
         self.add_demo("followed", followed_demo())
@@ -2188,9 +2076,10 @@ class TestRecording(FakeGameCase):
         TestLibrary.indexed(self, window, ("first", "followed"))
         for name in ("first", "followed"):
             window.demo_items[name].setSelected(True)
+        self.choose(window, recorder=True)
 
         def setup(dialog):
-            dialog.choices["recorderkills"].setChecked(True)
+            dialog.choices["kills"].setChecked(True)
             dialog.join.setChecked(True)
             dialog.numbers.setChecked(True)
             dialog.pattern.setText("{demo} numbered")
@@ -2234,7 +2123,7 @@ class TestRecording(FakeGameCase):
             dialog.pattern.setText("{demo}")
         dialog = self.record(window, setup, window.record_demos)
         self.assertEqual(dialog.choices["everything"].text(), "All of the demo, under a minute")
-        self.assertEqual(dialog.choices["kills"].text(), "The 4 frags, under a minute")
+        self.assertEqual(dialog.choices["kills"].text(), "The 4 frags listed, under a minute")
         job, = self.done(window)
         self.assertEqual(job["item"].text(1), "second")
         video = self.video("second.mp4")
@@ -2509,8 +2398,8 @@ class TestRealGame(FakeGameCase):
         Record plans them."""
         window = self.window()
         index = self.real_demo(window)
-        kill_filter = mohreplay.KillFilter(shown=True)
-        frags = mohreplay.planned_kills(index, "kills", "", kill_filter)[0]
+        kill_filter = mohreplay.KillFilter(recorder=True, specced=True)
+        frags = mohreplay.planned_kills(index, kill_filter)[0]
         spans = [mohreplay.kill_span(index, k, start, end) for k, start, end in frags]
         clips = mohreplay.demoonly_plan(index, "kills", kill_filter=kill_filter)[1]
         # from the kill before the first one by a player the recorder follows
@@ -2546,17 +2435,19 @@ class TestRealGame(FakeGameCase):
         # killed by whoever is shown
         victim = most([k["victimName"] for k, _, _ in mohreplay.shown_kills(index) if k in frags and k["victimName"]
                        and not mohreplay.same_player(k["victimName"], k["killerName"])])
-        cases = ((dict(killer=recorder[:3], weapons=[weapon]), ), (dict(shown=True, victim=victim), ),
-                 (dict(weapons=["mg", "sniper"]), ))
+        cases = ((dict(killer=recorder[:3], weapons=[weapon]), ), (dict(recorder=True, specced=True, victim=victim), ),
+                 (dict(weapons=["mg", "sniper"]), ), (dict(recorder=True), ), (dict(specced=True), ), (dict(unshown=True), ),
+                 (dict(recorder=True, unshown=True), ), (dict(specced=True, unshown=True), ),
+                 (dict(recorder=True, specced=True, unshown=True), ))
         if any(mohreplay.OBJ_LEVELS in m["map"].lower() for m in index["maps"]):
             cases += ((dict(killer=recorder[:3], obj=True), ), )
         if any(mohreplay.slow_snipe(k) for k in frags):
             cases += ((dict(weapons=["sniper"], great=True), ), )
         state = lambda: self.game_state(window)
         for case, in cases:
-            self.choose(window, **{"killer": "", "victim": "", "weapons": [], "shown": False, "obj": False,
-                                   "great": False, **case})
-            planned = mohreplay.planned_kills(index, "kills", "", window.kill_filter())[0]
+            self.choose(window, **{"killer": "", "victim": "", "weapons": [], "recorder": False, "specced": False,
+                                   "unshown": False, "obj": False, "great": False, **case})
+            planned = mohreplay.planned_kills(index, window.kill_filter())[0]
             starts = [mohreplay.kill_span(index, k, start, end)[0] for k, start, end in planned]
             self.assertTrue(starts, case)
             # as demonextkill goes, from the start: the next more than 0.1 s on

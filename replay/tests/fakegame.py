@@ -169,6 +169,8 @@ class FakeGame:
                 self.filter.setdefault("levels", []).append(arg.strip('"'))
             elif what == "great":
                 self.filter["great"] = [int(x) for x in arg.split()]
+            elif what == "recorder":
+                self.filter["recorder"] = True
             elif what == "specced":
                 self.filter["specced"] = True
             elif what == "unshown":
