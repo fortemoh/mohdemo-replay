@@ -17,7 +17,8 @@ them, and the videos being made. The demos and player names are made up.*
 
 - **Find demos.** The list shows each demo's date, length, recorder, levels
   and rules: default or realism servers, told apart by how fast the recorder
-  runs with each weapon. Demos under 5 minutes are left out. Show only
+  runs with each weapon. Demos under 5 minutes are left out, unless they
+  have frags and Short demos is ticked. Show only
   default or realism demos, or those recorded by some players, and search
   by demo name, level or player: type a name to see every demo that player
   is in, with their frags. Words separated by spaces must all match, and

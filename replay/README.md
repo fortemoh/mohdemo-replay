@@ -12,7 +12,7 @@ with `main/Pak0.pk3`), then it asks for the folder with the demos, chosen after
 that with its button, whose folders are looked in too: the list shows them in their folders, which tell how many of
 their demos are shown, and a demo there is named by its path in the folder
 of demos (the search finds a folder's name too). The list shows each
-demo's length (demos under 5 minutes aren't listed), recorder, levels and rules (default or realism servers, told by the
+demo's length (demos under 5 minutes aren't listed, unless they have frags and Short demos is ticked), recorder, levels and rules (default or realism servers, told by the
 recorder's speeds with each weapon; blank when they spectated or played
 too little), Rules shows only default or realism
 demos, Recorder only the demos recorded by the players named (parts of

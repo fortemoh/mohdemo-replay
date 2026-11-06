@@ -1526,6 +1526,38 @@ class TestLibrary(FakeGameCase):
         window.filter.setText("t-")
         self.assertNotIn("short", self.shown(window))
 
+    def test_short_demos_box(self):
+        self.add_demo("short", dict(DEMO, duration=mohreplay.MIN_LENGTH - 1))
+        self.add_demo("no frags", dict(DEMO, duration=mohreplay.MIN_LENGTH - 1, kills=[]))
+        self.add_demo("cant be read", {"maps": [], "duration": 0, "kills": []})
+        window = self.window()
+        names = ("first", "other", "short", "no frags", "cant be read")
+        self.indexed(window, names)
+        self.assertEqual(self.shown(window), ["broken", "first", "other"])
+        self.assertIn("3 shorter than 5 minutes aren't listed", window.demo_count.toolTip())
+
+        # those with frags too, not the others
+        window.short_demos.setChecked(True)
+        self.assertEqual(self.shown(window), ["broken", "first", "other", "short"])
+        self.assertIn("2 shorter than 5 minutes with no frags aren't listed", window.demo_count.toolTip())
+        self.assertEqual(window.record_button.text(), "Record 4 demos…")
+        # the other filters still apply
+        window.filter.setText("short")
+        self.assertEqual(self.shown(window), ["short"])
+        window.filter.setText("no frags")
+        self.assertEqual(self.shown(window), [])
+        window.filter.setText("")
+
+        # remembered
+        again = self.window()
+        self.indexed(again, names)
+        self.assertTrue(again.short_demos.isChecked())
+        self.assertEqual(self.shown(again), ["broken", "first", "other", "short"])
+
+        again.short_demos.setChecked(False)
+        self.assertEqual(self.shown(again), ["broken", "first", "other"])
+        self.assertEqual(self.settings.value("short_demos"), "0")
+
     def test_sort_by_length(self):
         window = self.window()
         self.indexed(window)

@@ -2504,6 +2504,11 @@ class Window(QMainWindow):
         self.recorded_by = NamesField("Demos recorded by players whose names have one of these, separated by commas",
                                       menu_tip="The recorders of the demos, those of the most first")
         self.recorded_by.edited.connect(self.filter_demos)
+        self.short_demos = QCheckBox("Short demos")
+        self.short_demos.setToolTip(f"Lists the demos under {MIN_LENGTH // 60000} minutes that have frags too")
+        self.short_demos.setChecked(is_on(settings.value("short_demos", "0")))
+        self.short_demos.toggled.connect(lambda on: self.settings.setValue("short_demos", "1" if on else "0"))
+        self.short_demos.toggled.connect(self.filter_demos)
         self.demos = self.make_list(DEMO_COLUMNS, fit=False)
         self.demos.setSortingEnabled(True)
         self.demos.sortByColumn(COL_DATE, Qt.DescendingOrder)
@@ -2587,6 +2592,8 @@ class Window(QMainWindow):
         row.addSpacing(6)
         row.addWidget(QLabel("Rules"))
         row.addWidget(self.rules)
+        row.addSpacing(6)
+        row.addWidget(self.short_demos)
         row.addSpacing(6)
         row.addWidget(settings_button)
         filters.addLayout(row, 0, 1)
@@ -2901,12 +2908,19 @@ class Window(QMainWindow):
         self.filter_demos()
         self.game.send(*self.kill_filter().commands())
 
+    def long_enough(self, summary):
+        """Whether its length doesn't leave a demo out: under MIN_LENGTH it's
+        listed only when short demos are asked for and it has frags, so not
+        those the game can't read. One of unknown length is."""
+        return (summary.get("duration", MIN_LENGTH) >= MIN_LENGTH
+                or (self.short_demos.isChecked() and bool(summary.get("kills"))))
+
     def filter_demos(self):
         """Shows the demos with each word of one of the searches (separated
         by commas) in the name, a map or a player's name, and the players
         found; with the kill filter, only those with kills it keeps, and
         their killers; only those recorded by the recorders named, and of the
-        rules chosen, if any, and not those shorter than MIN_LENGTH."""
+        rules chosen, if any, and not those long_enough doesn't let in."""
         searches = search_parts(self.filter.text())
         rules = self.rules.currentData()
         recorders = [clean_name(name) for name in self.recorded_by.names()]
@@ -2916,7 +2930,7 @@ class Window(QMainWindow):
         for name, item in self.demo_items.items():
             summary = self.library.demos.get(name) or {}
             found, shown = {}, not rules or summary.get("rules") in (rules, "both")
-            shown = shown and summary.get("duration", MIN_LENGTH) >= MIN_LENGTH
+            shown = shown and self.long_enough(summary)
             if shown and recorders:
                 recorder = clean_name(summary.get("recorder", ""))
                 shown = bool(recorder) and any(has_part(recorder, part) for part in recorders)
@@ -2963,7 +2977,7 @@ class Window(QMainWindow):
         listed = sum(not item.isHidden() for item in self.demo_items.values())
         summaries = [self.library.demos.get(name) for name in self.demo_items]
         indexed = sum(summary is not None for summary in summaries)
-        short = sum(summary is not None and summary["duration"] < MIN_LENGTH for summary in summaries)
+        short = sum(summary is not None and not self.long_enough(summary) for summary in summaries)
         if self.demos.selectedItems():
             text = f"{len(chosen):,} of the {listed:,} demos selected"
         else:
@@ -2978,7 +2992,8 @@ class Window(QMainWindow):
         if found > indexed:
             tip.append(f"{found - indexed:,} couldn't be indexed")
         if short:
-            tip.append(f"{short:,} shorter than {MIN_LENGTH // 60000} minutes aren't listed")
+            without = " with no frags" if self.short_demos.isChecked() else ""
+            tip.append(f"{short:,} shorter than {MIN_LENGTH // 60000} minutes{without} aren't listed")
         if found - short - listed > 0:
             tip.append(f"{found - short - listed:,} left out by the search and the filters")
         self.demo_count.setToolTip("; ".join(tip))
