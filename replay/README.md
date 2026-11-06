@@ -69,32 +69,17 @@ shows someone else. The list then shows only the demos with such frags, with
 how many of each fragger.
 
 Double-click a demo to watch it in the game, with the keys below.
-Settings also sets how long
-each frag plays before and after it (4 and 2 seconds) and the words
-Censor stars out of the players' names and the messages, in the game and
-in videos (on, with words a video can be flagged for, which you can change):
-however they're spelled, any case, letters repeated, look-alike digits and
-signs (n1gg3r, f@g), accents, anything between the letters (n.i.g.g.e.r) or
-letters spaced out (g a y), in each word but not across words, a letter a
-word has twice having to be there twice ("Nigeria" stays); Viewmodel and
-Force models, in the toolbar, show the gun in the player's hands and show
-everyone as an airborne soldier or a winter German, whatever they wore.
-Followed player, next to them, chooses the model of the player the demo
-spectates, and only them (the camera that follows them is behind them),
-one when they're Allies and one when they're Axis, from that team's player
-models in the game files, or as in the demo; videos have them too
-(`cg_followedModel`, `cg_followedGermanModel`).
 
 Record makes MP4s of the demos selected, or in the folders selected, or of
 all those listed when none is, as its button tells ("Record 148 demos…"):
 the frags chosen, the recorder's, the frags shown, or all of each demo, in one
 video or one each, and of one demo, a stretch of time too. Only the choices with something to record are offered; each tells how many
 frags it holds and how long the video will be, and the last one is chosen
-again next time. Clips, Number them, puts a number on each clip of the
+again next time. Number the clips puts a number on each clip of the
 video (#1, #2 and on through all of its demos, at the bottom of the
 screen), and the list of the clips next to it, a `.csv` of the same name:
 each one's number, start in the video and demo, and the time, fragger,
-victim and weapon of each of its frags. Parts, Split into parts of at most
+victim and weapon of each of its frags. Split into parts of at most
 (60 min, say), records a longer video as "<name> part 1.mp4", "<name> part
 2.mp4" and on, each at most that long, cut between frags (a stretch longer
 than a part, as all of a long demo, is cut in it), the clip numbers going on
@@ -119,14 +104,28 @@ opens again (in `queue.json`, next to its settings). Only the first window
 open keeps them: another one doesn't write over its list, and asks before
 closing with videos left, which aren't kept. A video records from the
 folder of demos it was queued from, also when another folder is opened
-before its turn. Each lands in the
-folder chosen, named from a pattern (`{demo}`, the demo's file name,
-`{start}`, `{player}`, `{date}`), with each frag played from how long before
-it to how long after. The size, frames per second, quality, codec (H.264,
-H.265 or the graphics card's H.264 encoder, with VAAPI), sound and its bitrate, the viewmodel and the models forced are in
-the Videos tab of Settings, which the Record dialog sums up in a line, with
-Change… to set them there, and the Advanced box takes FFmpeg output options
-instead. Motion blur is the renderer's: what moves blurs
+before its turn. Each lands in the folder chosen, named from a pattern
+(`{demo}`, the demo's file name, `{start}`, `{player}`, `{date}`), with each
+frag played from how long before it to how long after.
+
+How it looks, in Record, is what the videos show: the cameras of the recorder
+and of the player they follow, the model of the player followed, and only them,
+one when they're Allies and one when they're Axis, from that team's player
+models in the game files, or as in the demo (`cg_followedModel`,
+`cg_followedGermanModel`), the gun in the player's hands, and Force models,
+everyone as an airborne soldier or a winter German, whatever they wore. A demo
+watched in the game looks the same.
+
+Settings has what's rarely touched. The words Censor stars out of the players'
+names and the messages, in the game and in videos (on, with words a video can
+be flagged for, which you can change): however they're spelled, any case,
+letters repeated, look-alike digits and signs (n1gg3r, f@g), accents, anything
+between the letters (n.i.g.g.e.r) or letters spaced out (g a y), in each word
+but not across words, a letter a word has twice having to be there twice
+("Nigeria" stays). The size, frames per second, quality, codec (H.264, H.265 or
+the graphics card's H.264 encoder, with VAAPI), sound and its bitrate are in
+the Videos tab, which the Record dialog sums up in a line, with Change… to set
+them there, and the Advanced box takes FFmpeg output options instead. Motion blur is the renderer's: what moves blurs
 over all of a frame's time, as with a camera, along each pixel's motion.
 Motion looks smoother, a cut between two frags stays clean, and recording
 takes about 1.7 times as long with the graphics card's encoder, 1.1 times
@@ -225,7 +224,7 @@ game puts the eye, and the demo has the start of each shot). The other way,
 the camera following a player is, as a spectator following them sees them:
 without their scope, crosshair, weapons, ammo or hits on the screen, and with
 their health as theirs. Both have the name of who is shown on the left, with
-their health, as a spectator has. Camera, in the toolbar, chooses both, for
+their health, as a spectator has. Record chooses both, for
 videos too.
 
 Demos don't show the server's messages about players coming and going

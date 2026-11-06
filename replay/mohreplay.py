@@ -31,12 +31,12 @@ from PySide6.QtCore import (
     QDateTime, QElapsedTimer, QFileSystemWatcher, QLockFile, QObject, QProcess, QProcessEnvironment,
     QSettings, QStandardPaths, Qt, QTimer, QUrl, Signal,
 )
-from PySide6.QtGui import QActionGroup, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSlider,
-    QSpinBox, QSplitter, QStyle, QTabWidget, QToolBar, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QSpinBox, QSplitter, QStyle, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
     QWidgetAction,
 )
 
@@ -151,14 +151,19 @@ def find_ffmpeg():
 def player_models(game):
     """The player models in the game files, by name in lower case as the
     game takes any, sorted: the models/player/*.tik in its main folder's
-    pk3s or on their own, but the first-person arms (_fps)."""
+    pk3s or on their own, but the first-person arms (_fps). Read again when
+    a file is added to its main folder."""
     main = os.path.join(game or "", "main")
-    names = []
     try:
-        files = sorted(os.listdir(main))
+        return read_player_models(main, os.stat(main).st_mtime_ns)
     except OSError:
         return []
-    for file in files:
+
+
+@functools.lru_cache(maxsize=2)
+def read_player_models(main, _changed):
+    names = []
+    for file in sorted(os.listdir(main)):
         if file.lower().endswith(".pk3"):
             try:
                 with zipfile.ZipFile(os.path.join(main, file)) as pk3:
@@ -1288,8 +1293,8 @@ def video_settings(settings):
 
 
 def video_summary(settings):
-    """The video settings in a line: "1920x1080, 60 fps, H.264 (CRF 20),
-    sound 192k"."""
+    """What Settings sets for videos in a line: "1920x1080, 60 fps, H.264
+    (CRF 20), sound 192k"."""
     parts = [settings.value("rec/size", "1920x1080"), settings.value("rec/fps", "60") + " fps"
              + (" with motion blur" if settings.value("rec/blur", "false") == "true" else "")]
     if settings.value("rec/advanced", "").strip():
@@ -1298,19 +1303,8 @@ def video_summary(settings):
         parts.append(f"{settings.value('rec/codec', 'H.264')} (CRF {settings.value('rec/crf', 20)})")
         parts.append(f"sound {settings.value('rec/bitrate', '192k')}" if settings.value("rec/sound", "true") == "true"
                      else "no sound")
-    if not is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))):
-        parts.append("no viewmodel")
-    if is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))):
-        parts.append("models forced")
-    allies, axis = followed_models(settings)
-    if allies or axis:
-        parts.append(f"the player followed as {allies or 'theirs'} / {axis or 'theirs'}")
     if censored_words(settings):
         parts.append("words censored")
-    recorder, followed = cameras(settings)
-    if (recorder, followed) != ("eyes", "behind"):
-        parts.append(f"the recorder {RECORDER_CAMERAS[recorder][0].lower()}, "
-                     f"the player followed {FOLLOWED_CAMERAS[followed][0].lower()}")
     return ", ".join(parts)
 
 
@@ -1368,14 +1362,6 @@ class VideoSettings(QWidget):
         row.addWidget(self.bitrate)
         row.addStretch(1)
         form.addRow("Audio", row)
-        self.viewmodel = QCheckBox("The gun in the player's hands (viewmodel)")
-        self.viewmodel.setChecked(is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))))
-        self.forcemodel = QCheckBox("Everyone as an airborne soldier or a winter German")
-        self.forcemodel.setChecked(is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))))
-        shown = QVBoxLayout()
-        shown.addWidget(self.viewmodel)
-        shown.addWidget(self.forcemodel)
-        form.addRow("Show", shown)
         self.advanced = QLineEdit(settings.value("rec/advanced", ""))
         self.advanced.setPlaceholderText("FFmpeg output options, instead of the ones above")
         form.addRow("Advanced", self.advanced)
@@ -1395,8 +1381,6 @@ class VideoSettings(QWidget):
                            ("crf", self.quality.value()), ("codec", self.codec.currentText()),
                            ("sound", "true" if self.sound.isChecked() else "false"),
                            ("bitrate", self.bitrate.currentText()),
-                           ("viewmodel", "1" if self.viewmodel.isChecked() else "0"),
-                           ("forcemodel", "1" if self.forcemodel.isChecked() else "0"),
                            ("advanced", self.advanced.text().strip()), ("ffmpeg", self.ffmpeg.text().strip())):
             self.settings.setValue("rec/" + key, value)
 
@@ -1717,8 +1701,31 @@ def length(spans):
     return sum(end - start for start, end in spans)
 
 
+def camera_menu(choices, chosen):
+    """A menu of cameras (RECORDER_CAMERAS or FOLLOWED_CAMERAS)."""
+    menu = QComboBox()
+    for key, (label, _) in choices.items():
+        menu.addItem(label, key)
+    menu.setCurrentIndex(menu.findData(chosen))
+    return menu
+
+
+def model_menu(models, axis, chosen):
+    """A menu of the models of a team, Axis if axis, for the player followed;
+    one chosen that isn't among them, as one no more in the game files, stays
+    there, to change it."""
+    own = team_models(models, axis)
+    menu = QComboBox()
+    menu.addItem("As in the demo", "")
+    for model in [*own, *([chosen] if chosen and chosen not in own else [])]:
+        menu.addItem(model, model)
+    menu.setCurrentIndex(menu.findData(chosen))
+    return menu
+
+
 class RecordDialog(QDialog):
-    """What to record and how, kept in the settings.
+    """All about the videos of a Record: what to record, how long, how it looks
+    and where it goes, kept in the settings, with what Settings sets in a line.
 
     choices: [(key, label, enabled)], what can be recorded, and a stretch of
     time from time when it isn't None. join: offer one video for all.
@@ -1728,29 +1735,34 @@ class RecordDialog(QDialog):
     def __init__(self, settings, choices, time=None, join=False, parent=None, relabel=None):
         super().__init__(parent)
         self.setWindowTitle("Record a video")
+        self.setMinimumWidth(780)
         self.settings = settings
-        form = QFormLayout(self)
+        box = QVBoxLayout(self)
+        box.setSpacing(4)
 
+        left = QVBoxLayout()
+        left.setSpacing(4)
+        left.addWidget(heading("What to record"))
         group = QButtonGroup(self)
-        what = QVBoxLayout()
         self.choices = {}
         for key, label, enabled in choices:
             button = self.choices[key] = QRadioButton(label)
             group.addButton(button)
-            what.addWidget(button)
+            left.addWidget(button)
         self.range = None
         if time is not None:
             self.range = QRadioButton("From")
-            self.start = QLineEdit(clock(time))
-            self.end = QLineEdit(clock(time + 30000))
+            self.start = QLineEdit(clock(time), maximumWidth=70)
+            self.end = QLineEdit(clock(time + 30000), maximumWidth=70)
             row = QHBoxLayout()
             for widget in (self.range, self.start, QLabel("to"), self.end):
                 row.addWidget(widget)
-            what.addLayout(row)
+            row.addStretch(1)
+            left.addLayout(row)
             group.addButton(self.range)
         # only what there is to record
         self.nothing = QLabel("Nothing to record")
-        what.addWidget(self.nothing)
+        left.addWidget(self.nothing)
         self.relabel(choices)
         # the last choice, if it's offered
         last = self.range if settings.value("rec/what") == "range" else self.choices.get(settings.value("rec/what"))
@@ -1759,25 +1771,29 @@ class RecordDialog(QDialog):
             last.setChecked(True)
         elif first:
             first.setChecked(True)
-        form.addRow("Record", what)
         self.join = QCheckBox("One video for all")
         self.join.setChecked(settings.value("rec/join", "true") == "true")
         self.offers_join = join
         if join:
-            form.addRow("", self.join)
+            left.addWidget(self.join)
         else:
             self.join.hide()
 
+        left.addSpacing(12)
+        left.addWidget(heading("How long"))
         self.kill_before = seconds_box(settings, "rec/kill_before", 4.0,
                                        "Time recorded before each frag (cl_demoKillBefore)", "kill_before")
         self.kill_after = seconds_box(settings, "rec/kill_after", 2.0,
                                       "Time recorded after each frag (cl_demoKillAfter)", "kill_after")
-        form.addRow("Each frag", lead_row(self.kill_before, self.kill_after, "it"))
-        self.numbers = QCheckBox("Number them")
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Each frag"))
+        row.addLayout(lead_row(self.kill_before, self.kill_after, "it"), 1)
+        left.addLayout(row)
+        self.numbers = QCheckBox("Number the clips")
         self.numbers.setToolTip("A number on each clip of the video, and next to it the list of the clips with "
                                 "their frags (a .csv of the same name)")
         self.numbers.setChecked(settings.value("rec/numbers", "false") == "true")
-        form.addRow("Clips", self.numbers)
+        left.addWidget(self.numbers)
         self.split = QCheckBox("Split into parts of at most")
         self.split.setToolTip("A video longer than this is recorded in parts, \"<name> part 1.mp4\", \"<name> part "
                               "2.mp4\"…, cut between frags; a stretch longer than a part, as all of a long demo, is "
@@ -1793,7 +1809,8 @@ class RecordDialog(QDialog):
         row.addWidget(self.split)
         row.addWidget(self.split_minutes)
         row.addStretch(1)
-        form.addRow("Parts", row)
+        left.addLayout(row)
+        left.addStretch(1)
         if relabel:
             # once they stop changing, as a choice of many demos takes a while
             timer = QTimer(self, singleShot=True, interval=150)
@@ -1801,26 +1818,70 @@ class RecordDialog(QDialog):
             self.kill_before.valueChanged.connect(lambda _: timer.start())
             self.kill_after.valueChanged.connect(lambda _: timer.start())
 
+        right = QVBoxLayout()
+        right.setSpacing(4)
+        right.addWidget(heading("How it looks"))
+        recorder, followed = cameras(settings)
+        self.recorder_camera = camera_menu(RECORDER_CAMERAS, recorder)
+        self.recorder_camera.setToolTip("In their eyes as recorded, or behind them as when following a player")
+        self.followed_camera = camera_menu(FOLLOWED_CAMERAS, followed)
+        self.followed_camera.setToolTip("Behind them, in their eyes (made from their gun and body, as their own view "
+                                        "isn't recorded) or as the server showed them")
+        models = player_models(settings.value("game", ""))
+        allies, axis = followed_models(settings)
+        self.followed_allies = model_menu(models, False, allies)
+        self.followed_axis = model_menu(models, True, axis)
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.addRow("Recorder's camera", self.recorder_camera)
+        form.addRow("Followed player's camera", self.followed_camera)
+        form.addRow("Their skin as Allies", self.followed_allies)
+        form.addRow("Their skin as Axis", self.followed_axis)
+        right.addLayout(form)
+        self.viewmodel = QCheckBox("Gun in the player's hands")
+        self.viewmodel.setChecked(is_on(settings.value("rec/viewmodel", settings.value("viewmodel", "1"))))
+        self.forcemodel = QCheckBox("Force models (airborne, winter German)")
+        self.forcemodel.setToolTip("Everyone as an airborne soldier or a winter German, whatever they wore")
+        self.forcemodel.setChecked(is_on(settings.value("rec/forcemodel", settings.value("forcemodel", "1"))))
+        right.addWidget(self.viewmodel)
+        right.addWidget(self.forcemodel)
+        right.addStretch(1)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(28)
+        columns.addLayout(left, 1)
+        columns.addLayout(right, 1)
+        box.addLayout(columns)
+
+        box.addSpacing(12)
+        box.addWidget(heading("Where it goes"))
+        form = QFormLayout()
         self.pattern = QLineEdit(settings.value("rec/pattern", "{demo} {start}"))
         self.pattern.setToolTip("{demo} (the demo's file name), {start}, {player} and {date} are replaced")
         form.addRow("File name", self.pattern)
         self.folder = QLineEdit(settings.value("rec/folder", os.path.expanduser("~/Videos")))
         form.addRow("Folder", browse_row(self.folder, self.browse))
+        box.addLayout(form)
+
+        box.addSpacing(12)
         self.summary = QLabel(video_summary(settings))
         self.summary.setWordWrap(True)
         change = QPushButton("Change…")
         change.setToolTip("The video settings, also in Settings")
         change.clicked.connect(self.change_video)
         row = QHBoxLayout()
+        row.addWidget(heading("Video"))
+        row.addSpacing(6)
         row.addWidget(self.summary, 1)
         row.addWidget(change)
-        form.addRow("Video", row)
+        box.addLayout(row)
 
+        box.addSpacing(12)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
         buttons.addButton("Record", QDialogButtonBox.AcceptRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
+        box.addWidget(buttons)
 
     def browse(self):
         path = QFileDialog.getExistingDirectory(self, "Choose a folder", self.folder.text())
@@ -1866,8 +1927,13 @@ class RecordDialog(QDialog):
                            ("kill_after", str(self.kill_after.value())),
                            ("numbers", "true" if self.numbers.isChecked() else "false"),
                            ("split", "true" if self.split.isChecked() else "false"),
-                           ("split_minutes", str(self.split_minutes.value()))):
+                           ("split_minutes", str(self.split_minutes.value())),
+                           ("viewmodel", "1" if self.viewmodel.isChecked() else "0"),
+                           ("forcemodel", "1" if self.forcemodel.isChecked() else "0")):
             self.settings.setValue("rec/" + key, value)
+        for key, menu in (("camera_recorder", self.recorder_camera), ("camera_followed", self.followed_camera),
+                          ("followed_allies", self.followed_allies), ("followed_axis", self.followed_axis)):
+            self.settings.setValue(key, menu.currentData())
         if self.offers_join:
             self.settings.setValue("rec/join", "true" if self.join.isChecked() else "false")
         if self.range or len(self.choices) > 1:
@@ -2336,9 +2402,19 @@ class Window(QMainWindow):
         filters = QGridLayout()
         filters.setHorizontalSpacing(8)
         filters.setVerticalSpacing(6)
+        self.folder_button = QToolButton()
+        self.folder_button.setIcon(theme_icon("folder-open", QStyle.SP_DirOpenIcon))
+        self.folder_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.folder_button.clicked.connect(self.choose_folder)
+        settings_button = QToolButton()
+        settings_button.setIcon(theme_icon("configure", QStyle.SP_FileDialogDetailedView))
+        settings_button.setText("Settings…")
+        settings_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        settings_button.clicked.connect(lambda: self.edit_settings())
         filters.addWidget(heading("Demos"), 0, 0)
         row = QHBoxLayout()
         row.setSpacing(6)
+        row.addWidget(self.folder_button)
         row.addWidget(self.filter, 4)
         row.addSpacing(6)
         row.addWidget(QLabel("Recorder"))
@@ -2346,6 +2422,8 @@ class Window(QMainWindow):
         row.addSpacing(6)
         row.addWidget(QLabel("Rules"))
         row.addWidget(self.rules)
+        row.addSpacing(6)
+        row.addWidget(settings_button)
         filters.addLayout(row, 0, 1)
         filters.addWidget(heading("Frags"), 1, 0)
         row = QHBoxLayout()
@@ -2441,43 +2519,6 @@ class Window(QMainWindow):
         box.addWidget(splitter, 1)
         self.setCentralWidget(central)
 
-        toolbar = QToolBar("Toolbar")
-        toolbar.setObjectName("toolbar")
-        toolbar.setMovable(False)
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.addToolBar(toolbar)
-        self.folder_action = toolbar.addAction(theme_icon("folder-open", QStyle.SP_DirOpenIcon), "")
-        self.folder_action.triggered.connect(self.choose_folder)
-        toolbar.addSeparator()
-        self.viewmodel_action = toolbar.addAction("Viewmodel")
-        self.viewmodel_action.setToolTip("The gun in the player's hands")
-        self.viewmodel_action.setCheckable(True)
-        self.viewmodel_action.setChecked(is_on(settings.value("viewmodel", "1")))
-        self.viewmodel_action.toggled.connect(self.toggle_viewmodel)
-        self.forcemodel_action = toolbar.addAction("Force models")
-        self.forcemodel_action.setToolTip("Everyone as an airborne soldier or a winter German")
-        self.forcemodel_action.setCheckable(True)
-        self.forcemodel_action.setChecked(is_on(settings.value("forcemodel", "1")))
-        self.forcemodel_action.toggled.connect(self.toggle_forcemodel)
-        self.followed_button = QToolButton()
-        self.followed_button.setText("Followed player")
-        self.followed_button.setPopupMode(QToolButton.InstantPopup)
-        self.followed_button.setMenu(QMenu(self.followed_button))
-        self.followed_button.menu().aboutToShow.connect(self.fill_followed_menu)
-        self.show_followed()
-        toolbar.addWidget(self.followed_button)
-        self.camera_button = QToolButton()
-        self.camera_button.setText("Camera")
-        self.camera_button.setPopupMode(QToolButton.InstantPopup)
-        self.camera_button.setMenu(QMenu(self.camera_button))
-        self.camera_button.menu().aboutToShow.connect(self.fill_camera_menu)
-        self.show_camera()
-        toolbar.addWidget(self.camera_button)
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        toolbar.addWidget(spacer)
-        settings_action = toolbar.addAction(theme_icon("configure", QStyle.SP_FileDialogDetailedView), "Settings…")
-        settings_action.triggered.connect(lambda: self.edit_settings())
         self.show_folder()
 
         self.filter.setFocus()
@@ -2534,8 +2575,8 @@ class Window(QMainWindow):
 
     def show_folder(self):
         folder = self.settings.value("demos", "")
-        self.folder_action.setText(os.path.basename(folder.rstrip("/\\")) or "Choose the demos folder")
-        self.folder_action.setToolTip((folder + "\n" if folder else "") + "Choose another folder of demos")
+        self.folder_button.setText(os.path.basename(folder.rstrip("/\\")) or "Choose the demos folder")
+        self.folder_button.setToolTip((folder + "\n" if folder else "") + "Choose another folder of demos")
 
     def choose_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Choose the demos folder", self.settings.value("demos", ""))
@@ -2547,85 +2588,6 @@ class Window(QMainWindow):
         self.library.open(folder, self.settings.value("exe", ""))
         # the game has the folder it started with
         self.game.stop()
-
-    def toggle_viewmodel(self, checked):
-        val = "1" if checked else "0"
-        self.settings.setValue("viewmodel", val)
-        if self.game.running():
-            self.game.send(f"set cg_drawviewmodel {val}")
-        self.tell(f"Viewmodel: {'ON' if checked else 'OFF'}", 2000)
-
-    def toggle_forcemodel(self, checked):
-        val = "1" if checked else "0"
-        self.settings.setValue("forcemodel", val)
-        if self.game.running():
-            self.game.send(f"set cg_forceModel {val}")
-        self.tell(f"Force models: {'ON' if checked else 'OFF'} (Airborne / Winter 1)", 2000)
-
-    def fill_followed_menu(self):
-        """The models of the game files for the player followed, allies and
-        axis, each with their team's only, the one chosen checked."""
-        menu = self.followed_button.menu()
-        menu.clear()
-        models = player_models(self.settings.value("game", ""))
-        for team, (key, chosen) in zip(("Allies", "Axis"), zip(("followed_allies", "followed_axis"),
-                                                               followed_models(self.settings))):
-            sub = menu.addMenu(team)
-            group = QActionGroup(sub)
-            own = team_models(models, team == "Axis")
-            for model in ["", *own, *([chosen] if chosen and chosen not in own else [])]:
-                action = sub.addAction(model or "As in the demo")
-                action.setCheckable(True)
-                action.setChecked(model == chosen)
-                group.addAction(action)
-                action.triggered.connect(lambda _=False, key=key, model=model: self.choose_followed(key, model))
-
-    def choose_followed(self, key, model):
-        self.settings.setValue(key, model)
-        allies, axis = followed_models(self.settings)
-        if self.game.running():
-            self.game.send(f'set cg_followedModel "{allies}"', f'set cg_followedGermanModel "{axis}"')
-        self.show_followed()
-        self.tell(f"The player followed: {allies or 'theirs'} / {axis or 'theirs'}", 3000)
-
-    def fill_camera_menu(self):
-        """Where the camera is for the recorder and for the player followed,
-        the one chosen checked."""
-        menu = self.camera_button.menu()
-        menu.clear()
-        recorder, followed = cameras(self.settings)
-        for title, key, choices, chosen in (("Recorder", "camera_recorder", RECORDER_CAMERAS, recorder),
-                                            ("Player followed", "camera_followed", FOLLOWED_CAMERAS, followed)):
-            menu.addSection(title)
-            group = QActionGroup(menu)
-            for choice, (label, _) in choices.items():
-                action = menu.addAction(label)
-                action.setCheckable(True)
-                action.setChecked(choice == chosen)
-                group.addAction(action)
-                action.triggered.connect(lambda _=False, key=key, choice=choice: self.choose_camera(key, choice))
-
-    def choose_camera(self, key, choice):
-        self.settings.setValue(key, choice)
-        if self.game.running():
-            self.game.send(*(f"set {cvar} {value}" for cvar, value in camera_cvars(cameras(self.settings))))
-        self.show_camera()
-        recorder, followed = cameras(self.settings)
-        self.tell(f"The recorder {RECORDER_CAMERAS[recorder][0].lower()}, the player followed "
-                  f"{FOLLOWED_CAMERAS[followed][0].lower()}", 3000)
-
-    def show_camera(self):
-        recorder, followed = cameras(self.settings)
-        self.camera_button.setToolTip(
-            "Where the camera is, in videos too: for the recorder, in their eyes as recorded or behind them as when "
-            "following a player; for the player they follow, behind them, in their eyes (made from their gun and "
-            f"body, as their own view isn't recorded) or as the server showed them. Now: the recorder "
-            f"{RECORDER_CAMERAS[recorder][0].lower()}, the player followed {FOLLOWED_CAMERAS[followed][0].lower()}")
-
-    def show_followed(self):
-        allies, axis = followed_models(self.settings)
-        self.followed_button.setToolTip("The models of the player you spectate, and only them, when they're allies "
-                                        f"and axis, in videos too: now {allies or 'theirs'} / {axis or 'theirs'}")
 
     def get_rec_kill_times(self):
         """Pre-kill and post-kill times in msec from settings for recording."""
@@ -2656,14 +2618,12 @@ class Window(QMainWindow):
             width, height = (int(v) for v in self.settings.value("size", "1280x720").split("x"))
         except ValueError:
             width, height = 1280, 720
-        vm = self.settings.value("viewmodel", "1")
-        fm = self.settings.value("forcemodel", "1")
-        kb = self.settings.value("kill_before", "4.0")
-        ka = self.settings.value("kill_after", "2.0")
+        # as the videos are
+        video = video_settings(self.settings)
+        before, after = self.get_rec_kill_times()
         self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height,
-                        viewmodel=vm, forcemodel=fm, kill_before=kb, kill_after=ka,
-                        followed=followed_models(self.settings), censor=censored_words(self.settings),
-                        camera=cameras(self.settings))
+                        viewmodel=video["viewmodel"], forcemodel=video["forcemodel"], kill_before=before / 1000,
+                        kill_after=after / 1000, followed=video["followed"], censor=video["censor"], camera=video["camera"])
         self.tell("Starting the game…", 5000)
         # for its keys that go to frags
         self.game.send(*self.kill_filter().commands())

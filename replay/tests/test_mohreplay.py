@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 try:
     from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
     from PySide6.QtGui import QMouseEvent
-    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QStatusBar, QToolBar
 except ImportError:
     if __name__ == "__main__":
         print("Skipped: PySide6 isn't installed")
@@ -848,96 +848,16 @@ class TestGame(FakeGameCase):
 
 
 class TestWindow(FakeGameCase):
-    def test_viewmodel_and_forcemodel_toggles(self):
-        window = self.window()
-        self.assertTrue(window.viewmodel_action.isChecked())
-        self.assertTrue(window.forcemodel_action.isChecked())
-        window.viewmodel_action.trigger()
-        self.assertFalse(window.viewmodel_action.isChecked())
-        self.assertEqual(self.settings.value("viewmodel"), "0")
-        window.forcemodel_action.trigger()
-        self.assertFalse(window.forcemodel_action.isChecked())
-        self.assertEqual(self.settings.value("forcemodel"), "0")
-        window.viewmodel_action.trigger()
-        self.assertTrue(window.viewmodel_action.isChecked())
-        self.assertEqual(self.settings.value("viewmodel"), "1")
-        # kept
-        self.assertFalse(self.window().forcemodel_action.isChecked())
-
-    def menu_texts(self, menu):
-        return [(a.text(), a.isChecked()) for a in menu.actions()]
-
-    def test_followed_models(self):
-        """The models of the player followed, when allies and axis, from
-        the game files, set in the game at once and kept."""
-        os.makedirs(os.path.join(self.game_dir, "main"))
-        with zipfile.ZipFile(os.path.join(self.game_dir, "main", "pak0.pk3"), "w") as pk3:
-            pk3.writestr("models/player/allied_pilot.tik", "")
-            pk3.writestr("models/player/american_army.tik", "")
-            pk3.writestr("models/player/german_scientist.tik", "")
-            pk3.writestr("models/player/IT_soldier.tik", "")
-            pk3.writestr("models/player/own_skin.tik", "")
-        window = self.window()
-        self.playing(window)
-        window.fill_followed_menu()
-        allies, axis = window.followed_button.menu().actions()
-        self.assertEqual((allies.text(), axis.text()), ("Allies", "Axis"))
-        # each team's only, and someone's own in both
-        self.assertEqual(self.menu_texts(allies.menu()), [("As in the demo", True), ("allied_pilot", False),
-                                                          ("american_army", False), ("own_skin", False)])
-        self.assertEqual(self.menu_texts(axis.menu()), [("As in the demo", True), ("german_scientist", False),
-                                                        ("it_soldier", False), ("own_skin", False)])
-        axis.menu().actions()[1].trigger()
-        self.assertEqual(self.settings.value("followed_axis"), "german_scientist")
-        self.assertTrue(wait_until(lambda: 'set cg_followedGermanModel "german_scientist"' in self.commands(window.game)))
-        self.assertIn('set cg_followedModel ""', self.commands(window.game))
-        self.assertIn("now theirs / german_scientist", window.followed_button.toolTip())
-        # one chosen before for the other team still shows, to change it
-        self.settings.setValue("followed_axis", "allied_pilot")
-        window.fill_followed_menu()
-        axis = window.followed_button.menu().actions()[1]
-        self.assertEqual(self.menu_texts(axis.menu())[-1], ("allied_pilot", True))
-        self.settings.setValue("followed_axis", "german_scientist")
-        # kept, one of the game files no more still shown
-        self.settings.setValue("followed_allies", "my_own")
-        window.fill_followed_menu()
-        allies = window.followed_button.menu().actions()[0]
-        self.assertEqual(self.menu_texts(allies.menu())[-1], ("my_own", True))
-        self.assertEqual(mohreplay.video_summary(self.settings).split(", ")[-2],
-                         "the player followed as my_own / german_scientist")
-
-    def test_camera_menu(self):
-        """Where the camera is for the recorder and for the player followed,
-        set in the game at once and kept."""
-        window = self.window()
-        self.playing(window)
-        window.fill_camera_menu()
-        actions = window.camera_button.menu().actions()
-        self.assertEqual([(a.text(), a.isChecked()) for a in actions],
-                         [("Recorder", False), ("In their eyes", True), ("Behind them", False),
-                          ("Player followed", False), ("Behind them", True), ("In their eyes", False),
-                          ("As the server shows them", False)])
-        actions[2].trigger()
-        actions[5].trigger()
-        self.assertEqual(mohreplay.cameras(self.settings), ["behind", "eyes"])
-        self.assertTrue(wait_until(lambda: "set cg_followcamera 2" in self.commands(window.game)))
-        self.assertIn("set cg_recordercamera 1", self.commands(window.game))
-        self.assertIn("Now: the recorder behind them, the player followed in their eyes",
-                      window.camera_button.toolTip())
-        self.assertEqual(mohreplay.video_summary(self.settings).split(", ")[-2:],
-                         ["the recorder behind them", "the player followed in their eyes"])
-        self.assertEqual(mohreplay.cameras(self.window().settings), ["behind", "eyes"])
-
     def test_choose_folder(self):
         window = self.window()
-        self.assertEqual(window.folder_action.text(), "demos")
+        self.assertEqual(window.folder_button.text(), "demos")
         other = os.path.join(self.tmp, "more demos")
         os.makedirs(other)
         shutil.copyfile(os.path.join(self.demos, "first.dm3"), os.path.join(other, "again.dm3"))
         with mock.patch.object(mohreplay.QFileDialog, "getExistingDirectory", lambda *args: other):
             window.choose_folder()
         self.assertEqual(self.settings.value("demos"), other)
-        self.assertEqual(window.folder_action.text(), "more demos")
+        self.assertEqual(window.folder_button.text(), "more demos")
         self.assertTrue(wait_until(lambda: list(window.demo_items) == ["again"]))
 
     def test_double_click_plays(self):
@@ -970,7 +890,7 @@ class TestWindow(FakeGameCase):
         labels = {label.text() for label in window.findChildren(mohreplay.QLabel)}
         self.assertTrue({"Demos", "Frags", "Recorder", "Rules", "Fragger", "Victim", "Weapon"} <= labels)
         self.assertFalse(hasattr(window, "slider") or hasattr(window, "kills") or hasattr(window, "tabs"))
-        self.assertIs(window.statusBar().isVisible(), False)
+        self.assertEqual(window.findChildren(QToolBar) + window.findChildren(QStatusBar), [])
 
     def shown(self, window):
         """The names of the demos shown, in folders shown."""
@@ -1023,7 +943,7 @@ class TestSettings(FakeGameCase):
         self.assertEqual(self.settings.value("kill_before"), "6.0")
         self.assertEqual((self.settings.value("rec/size"), self.settings.value("rec/blur")), ("1280x720", "true"))
         self.assertEqual(mohreplay.video_summary(self.settings),
-                         "1280x720, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced, words censored")
+                         "1280x720, 60 fps with motion blur, H.264 (CRF 20), sound 192k, words censored")
         again = mohreplay.SettingsDialog(self.settings, window)
         self.assertEqual(again.tabs.currentIndex(), 0)
         self.assertTrue(again.videos.blur.isChecked())
@@ -1056,7 +976,6 @@ class TestSettings(FakeGameCase):
         # watching without the gun: videos too, unless they're told otherwise
         self.settings.setValue("viewmodel", "0")
         self.assertEqual(mohreplay.video_settings(self.settings)["viewmodel"], "0")
-        self.assertIn("no viewmodel", mohreplay.video_summary(self.settings))
         self.settings.setValue("rec/viewmodel", "1")
         self.assertEqual(mohreplay.video_settings(self.settings)["viewmodel"], "1")
 
@@ -1575,13 +1494,11 @@ class TestRecording(FakeGameCase):
         self.ready(window)
 
         def setup(dialog):
-            self.assertEqual(dialog.summary.text(),
-                             "1920x1080, 60 fps, H.264 (CRF 20), sound 192k, models forced, words censored")
+            self.assertEqual(dialog.summary.text(), "1920x1080, 60 fps, H.264 (CRF 20), sound 192k, words censored")
             self.change_video(dialog, lambda videos: (self.assertFalse(videos.blur.isChecked()),
                                                       videos.blur.setChecked(True)))
             self.assertEqual(dialog.summary.text(),
-                             "1920x1080, 60 fps with motion blur, H.264 (CRF 20), sound 192k, models forced, "
-                             "words censored")
+                             "1920x1080, 60 fps with motion blur, H.264 (CRF 20), sound 192k, words censored")
             dialog.pattern.setText("blur")
         self.record(window, setup)
         self.done(window)
@@ -2188,6 +2105,65 @@ class TestRecording(FakeGameCase):
         self.assertTrue(third.keeps_queue)
         self.assertEqual(self.labels(third), ["first.mp4"])
 
+    def test_how_it_looks(self):
+        """Record has the cameras, the models of the player followed, each
+        team's only, the gun and the models forced; videos have them, and
+        they're kept."""
+        os.makedirs(os.path.join(self.game_dir, "main"))
+        with zipfile.ZipFile(os.path.join(self.game_dir, "main", "pak0.pk3"), "w") as pk3:
+            for model in ("allied_pilot", "american_army", "german_scientist", "IT_soldier", "own_skin"):
+                pk3.writestr(f"models/player/{model}.tik", "")
+        window = self.window()
+        self.ready(window)
+        items = lambda menu: [menu.itemText(i) for i in range(menu.count())]
+
+        def setup(dialog):
+            self.assertEqual(items(dialog.recorder_camera), ["In their eyes", "Behind them"])
+            self.assertEqual(items(dialog.followed_camera), ["Behind them", "In their eyes", "As the server shows them"])
+            self.assertEqual((dialog.recorder_camera.currentData(), dialog.followed_camera.currentData()), ("eyes", "behind"))
+            # someone's own in both
+            self.assertEqual(items(dialog.followed_allies), ["As in the demo", "allied_pilot", "american_army", "own_skin"])
+            self.assertEqual(items(dialog.followed_axis), ["As in the demo", "german_scientist", "it_soldier", "own_skin"])
+            self.assertEqual((dialog.followed_allies.currentData(), dialog.followed_axis.currentData()), ("", ""))
+            self.assertTrue(dialog.viewmodel.isChecked() and dialog.forcemodel.isChecked())
+            dialog.recorder_camera.setCurrentIndex(1)
+            dialog.followed_camera.setCurrentIndex(1)
+            dialog.followed_axis.setCurrentText("german_scientist")
+            dialog.viewmodel.setChecked(False)
+            dialog.forcemodel.setChecked(False)
+            dialog.pattern.setText("looks")
+            # not in the line of what Settings sets
+            self.assertEqual(dialog.summary.text(), "1920x1080, 60 fps, H.264 (CRF 20), sound 192k, words censored")
+        self.record(window, setup)
+        self.done(window)
+        cvars = self.video("looks.mp4")["cvars"]
+        self.assertEqual([cvars[name] for name in ("cg_recordercamera", "cg_followcamera", "cg_followedGermanModel",
+                                                   "cg_drawviewmodel", "cg_forceModel")],
+                         ["1", "2", "german_scientist", "0", "0"])
+        self.assertNotIn("cg_followedModel", cvars)
+        self.assertEqual(mohreplay.cameras(self.settings), ["behind", "eyes"])
+        self.assertEqual(mohreplay.followed_models(self.settings), ["", "german_scientist"])
+
+        # kept; one of the other team or no more in the game files still shows
+        self.settings.setValue("followed_allies", "my_own")
+        self.settings.setValue("followed_axis", "allied_pilot")
+        dialogs = []
+        with mock.patch.object(mohreplay.RecordDialog, "exec", lambda dialog: dialogs.append(dialog) or 0):
+            window.record_button.click()
+        dialog = dialogs[0]
+        self.assertEqual((dialog.recorder_camera.currentData(), dialog.followed_camera.currentData()), ("behind", "eyes"))
+        self.assertEqual((items(dialog.followed_allies)[-1], dialog.followed_allies.currentData()), ("my_own", "my_own"))
+        self.assertEqual((items(dialog.followed_axis)[-1], dialog.followed_axis.currentData()), ("allied_pilot", "allied_pilot"))
+        self.assertFalse(dialog.viewmodel.isChecked() or dialog.forcemodel.isChecked())
+
+        # a game watching a demo looks the same
+        self.settings.setValue("rec/kill_before", "3.0")
+        self.playing(window)
+        args = window.game.args
+        self.assertEqual([args[args.index(name) + 1] for name in ("cg_recordercamera", "cg_followcamera", "cg_drawviewmodel",
+                                                                  "cg_forceModel", "cl_demoKillBefore")],
+                         ["1", "2", "0", "0", "3.0"])
+
     def test_cameras_recorded(self):
         """A video has the cameras chosen when it was queued; by default, the
         recorder in their eyes and the player followed behind them."""
@@ -2198,7 +2174,7 @@ class TestRecording(FakeGameCase):
             self.settings.setValue("camera_recorder", "behind")
             self.settings.setValue("camera_followed", "eyes")
             self.stretch(window, "1:10", "chosen")
-            window.choose_camera("camera_followed", "server")
+            self.settings.setValue("camera_followed", "server")
             self.done(window, 2)
         cvars = [self.video(name)["cvars"] for name in ("default.mp4", "chosen.mp4")]
         self.assertEqual([(c["cg_recordercamera"], c["cg_followcamera"]) for c in cvars], [("0", "1"), ("1", "2")])
@@ -2212,7 +2188,7 @@ class TestRecording(FakeGameCase):
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
             self.stretch(window, "1:00", "a")
             self.stretch(window, "1:10", "b")
-            window.choose_followed("followed_axis", "")
+            self.settings.setValue("followed_axis", "")
             self.done(window, 2)
         for name in ("a.mp4", "b.mp4"):
             cvars = self.video(name)["cvars"]
