@@ -1142,7 +1142,10 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     VectorSubtract(vMins, vMaxs, vTmp);
     model.radius = VectorLength(vTmp) * 0.5;
 
-    if (s1->number == cg.snap->ps.clientNum) {
+    // Changed in OPM
+    //  A recorder shown from behind is drawn as any other player: their torso
+    //  and head would turn only with each snapshot
+    if (s1->number == cg.snap->ps.clientNum && !(CG_RecorderBehind() && cg_recordersmooth->integer)) {
         if (!bThirdPerson) {
             PmoveAdjustAngleSettings_Client(
                 cg.refdefViewAngles, cent->lerpAngles, &cg.predicted_player_state, &cent->currentState
