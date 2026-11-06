@@ -5235,10 +5235,12 @@ void UI_AddHud_f(void)
     Menu *hud = menuManager.FindMenu(Cmd_Argv(1));
 
     // Added in OPM
-    //  A demo shows no score or time left, top right
+    //  A demo shows no score or time left, top right, or the stopwatch the
+    //  recorder gets while planting or defusing a bomb, whoever is shown
     if (hud && clc.demoplaying
         && (!Q_stricmp(Cmd_Argv(1), "hud_score") || !Q_stricmp(Cmd_Argv(1), "hud_fraglimit")
-            || !Q_stricmp(Cmd_Argv(1), "hud_timelimit"))) {
+            || !Q_stricmp(Cmd_Argv(1), "hud_timelimit") || !Q_stricmp(Cmd_Argv(1), "hud_stopwatch")
+            || !Q_stricmp(Cmd_Argv(1), "hud_fuse") || !Q_stricmp(Cmd_Argv(1), "hud_fuse_wet"))) {
         hud->ForceHide();
         hudList.RemoveObject(hud);
         return;
