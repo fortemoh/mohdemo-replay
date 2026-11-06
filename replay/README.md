@@ -11,12 +11,12 @@ built in `.cmake/RelWithDebInfo/`) and the folder with the game files (the one
 with `main/Pak0.pk3`), then it asks for the folder with the demos, chosen after
 that with its button, whose folders are looked in too: the list shows them in their folders, which tell how many of
 their demos are shown, and a demo there is named by its path in the folder
-of demos (the filter finds a folder's name too). The list shows each
+of demos (the search finds a folder's name too). The list shows each
 demo's length (demos under 5 minutes aren't listed), recorder, levels and rules (default or realism servers, told by the
 recorder's speeds with each weapon; blank when they spectated or played
 too little), Rules shows only default or realism
 demos, Recorder only the demos recorded by the players named (parts of
-names separated by commas, as the filter takes them; its menu lists the
+names separated by commas, as the search takes them; its menu lists the
 recorders, those of the most demos first), and the search finds demos by
 name, level or player, those with all of its words, and commas separate
 searches (`pstn v2, tommeh` finds pstN's demos on v2 and tommeh's demos):
@@ -33,7 +33,7 @@ aren't listed.
 
 Fragger, Victim and Weapon, under the search, choose the frags, those of
 the demos listed, each on its own or together:
-Fragger and Victim take parts of names, separated by commas, as the filter does
+Fragger and Victim take parts of names, separated by commas, as the search does
 (`pstn, tommeh` finds pstN's frags under any clan tag, and tommeh's), and
 their menus add the players of the demos listed, those with the most frags
 first. A player is who they are,
@@ -72,8 +72,8 @@ Double-click a demo to watch it in the game, with the keys below.
 
 Record makes MP4s of the demos selected, or in the folders selected, or of
 all those listed when none is, as its button tells ("Record 148 demos…"):
-the frags chosen, the recorder's, the frags shown, or all of each demo, in one
-video or one each, and of one demo, a stretch of time too. Only the choices with something to record are offered; each tells how many
+the frags chosen, or all of each demo, in one video or one each, and of one
+demo, a stretch of time too. Only the choices with something to record are offered; each tells how many
 frags it holds and how long the video will be, and the last one is chosen
 again next time. Number the clips puts a number on each clip of the
 video (#1, #2 and on through all of its demos, at the bottom of the
@@ -85,7 +85,7 @@ victim and weapon of each of its frags. Split into parts of at most
 than a part, as all of a long demo, is cut in it), the clip numbers going on
 from one part to the next, each with its list. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
-Linux and faster than real time, while you keep watching; FFmpeg joins the
+Linux and faster than real time; FFmpeg joins the
 clips of a video without encoding them again. A clip the game doesn't
 record, as its demo's map isn't installed or the game quits in it, is tried
 again once in a new game, then left out, the video going on without it
@@ -137,8 +137,8 @@ The game built here, on MoHAA Reloaded's Vulkan port, runs on Linux only:
 that port has no macOS build.
 
 The app starts the game with a throwaway home folder, sends it console
-commands through its pipe (`com_pipefile`) and shows what the game reports
-in `demoindex.json` and `demostate.json` (`cl_demoFiles 1`). On Linux it
+commands through its pipe (`com_pipefile`) and reads what the game reports
+in `demostate.json` (`cl_demoFiles 1`). On Linux it
 asks for Wayland first, then XWayland. The settings changed in the game (its
 options, the console, key binds) are kept for the next games in the game
 folder, as `main/configs/omconfig.cfg` and `main/omconfig.cfg`, which are

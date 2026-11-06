@@ -1,45 +1,40 @@
 # MoH Demo Replay
 
-Rewatch and record **Medal of Honor: Allied Assault** multiplayer demos. A
-small desktop app lists your demos and what happens in them (kills and
-rounds), jumps straight to any moment, and records MP4 videos
-with sound. It runs on a modified [OpenMoHAA](https://github.com/openmoh/openmohaa),
+Make videos of the frags in **Medal of Honor: Allied Assault** multiplayer
+demos. A small desktop app lists your demos, filters them down to the frags you
+want, and records MP4 videos with sound, in batches, in the background. It runs
+on a modified [OpenMoHAA](https://github.com/openmoh/openmohaa),
 the open-source engine for the game, here the Vulkan port of
 [MoHAA Reloaded](https://github.com/pstngh/MoHAA-Reloaded/tree/vulkan),
 which does the work through new console commands.
 
-![The app with a 52-minute demo of The Hunt: the demos where Mako plays, and the multi-kills of this one](replay/screenshot.png)
+![The app: the frags of a player across the demos, and the videos being made of them](replay/screenshot.png)
 
-*The demos where Mako plays, and the multi-kills of the one playing. The
-player names are made up.*
+*The frags of one player across the demos, while specced or seen from behind
+them, and the videos being made. The demos and player names are made up.*
 
 ## What it does
 
 - **Find demos.** The list shows each demo's date, length, recorder, levels
   and rules: default or realism servers, told apart by how fast the recorder
   runs with each weapon. Demos under 5 minutes are left out. Show only
-  default or realism demos, or those recorded by some players, and filter
+  default or realism demos, or those recorded by some players, and search
   by demo name, level or player: type a name to see every demo that player
   is in, with their frags. Words separated by spaces must all match, and
   commas separate searches: `pstn, tommeh` finds the demos of either.
 - **Choose the frags.** By fragger, by victim and by weapon (sniper, rifle,
   SMG, StG / BAR, shotgun, pistol, bazooka, melee), several of each, on
-  the objective maps only, and great ones only (no slow scoped snipes), on
-  their own or together: the list shows only the demos with such frags, and
-  the demo playing lists, plays and records only those.
-- **Move around a demo.** Its frags and rounds are listed and
-  marked on the time slider. A click jumps there, 4 seconds before a frag.
-  Pause, skip 10 seconds, go to the next or previous frag or round, play
-  from 0.25× to 4×.
-- **Watch only what matters.** Play only the frags chosen, of
-  everyone, of some players (while the demo shows them) or of whoever is
-  shown (the recorder's frags and those of the players they follow), or
-  only while a player is watched. The rest is skipped.
-- **Record videos.** MP4 with sound, at the size and frame rate you choose,
-  recorded in the background faster than real time while you keep watching.
-  Record a stretch of time, the kills, the kills you select,
-  or the frags chosen or the frags shown across many demos, in one video or
-  one each. Videos wait in a queue.
+  the objective maps only, and great ones only (no slow scoped snipes). And who
+  they're from, any of these together: the recorder, the players they spectate,
+  or players nobody watched, seen from behind them. The list shows only the
+  demos with such frags, how many each fragger has, and how many in all.
+- **Record videos.** Of the demos selected, or all those listed: the frags
+  chosen, or all of each demo, in one video or one each, in parts of at most
+  some minutes if you like; of one demo, a stretch of time too. MP4 with sound,
+  at the size and frame rate you choose, recorded in the background faster than
+  real time, with the cameras, the skins of the player followed and clip
+  numbers you choose. Videos wait in a queue you can pause and reorder, kept
+  when the app closes.
 - **No app needed.** Everything is a game console command (`demoseek`,
   `demonextkill`, `demoonly`, `demovideo`…), so it all works with key binds
   too.
@@ -92,10 +87,12 @@ python3 replay/mohreplay.py
 ```
 
 The first time, Settings asks for the game program (found by itself in
-`.cmake/RelWithDebInfo`), the game files folder and the demos folder. The
-demos are then indexed in the background, once: about two minutes for 700.
-Double-click a demo to play it. The game plays it in its own window next to
-the app; Wayland doesn't let one program show another's window inside its
+`.cmake/RelWithDebInfo`) and the game files folder, then the app asks for the
+demos folder. The demos are then indexed in the background, once: about two
+minutes for 700. Choose the frags, then Record.
+
+To watch a demo, double-click it: the game plays it in its own window next to
+the app, as Wayland doesn't let one program show another's window inside its
 own.
 
 The folders can also be given on the command line, with a demo to play:
@@ -111,7 +108,7 @@ keys:
 | --- | --- |
 | Pause | pause or play |
 | Left / Right | back or forward 5 seconds |
-| Down / Up | previous or next kill |
+| Down / Up | previous or next of the frags chosen |
 | PgDn / PgUp | previous or next round |
 
 [replay/README.md](replay/README.md) has the details of the app, the console
@@ -120,9 +117,9 @@ commands and their settings, and recording.
 ## How it works
 
 - The app starts the game with a throwaway home folder, sends it console
-  commands through a pipe (`com_pipefile`) and shows what the game reports
-  in two files, `demostate.json` and `demoindex.json`. It never waits on the
-  game, and copes with it quitting or crashing.
+  commands through a pipe (`com_pipefile`) and reads what the game reports in
+  `demostate.json`. It never waits on the game, and copes with it quitting or
+  crashing.
 - A demo only plays forward, so going back replays it from the start
   without drawing, up to the exact time asked.
 - `mohdemoindex` reads a demo the way the game does and lists its kills,
