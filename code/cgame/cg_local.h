@@ -536,6 +536,7 @@ extern "C" {
     extern cvar_t *cg_followcamera;
     extern cvar_t *cg_recordercamera;
     extern cvar_t *cl_demoBehind;
+    extern cvar_t *cg_demoguns;
     extern cvar_t *cg_followedModel;
     extern cvar_t *cg_followedGermanModel;
     extern cvar_t *cg_precache;
@@ -638,6 +639,9 @@ extern "C" {
     //  set on a snapshot made as if the player followed recorded it
 #define SNAPFLAG_FOLLOWED_FROM_EYES 0x100
     void CG_FollowFromEyes(snapshot_t *snap);
+    qboolean CG_FollowedGun(const entityState_t *es, const entityState_t *body);
+    dtiki_t *CG_FollowedBodyTiki(const entityState_t *body);
+    void CG_DemoGuns(snapshot_t *snap);
     void CG_FollowedKill(const char *text);
 
     void  CG_EyePosition(vec3_t *o_vPos);

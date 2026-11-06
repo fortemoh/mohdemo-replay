@@ -126,6 +126,7 @@ cvar_t *cg_followplayer;
 cvar_t *cg_followcamera;
 cvar_t *cg_recordercamera;
 cvar_t *cl_demoBehind;
+cvar_t *cg_demoguns;
 cvar_t *cg_followedModel;
 cvar_t *cg_followedGermanModel;
 cvar_t *cg_precache;
@@ -237,6 +238,7 @@ void CG_RegisterCvars(void)
     cg_recordercamera = cgi.Cvar_Get("cg_recordercamera", "0", CVAR_ARCHIVE);
     // the client's: the player demoonly shows from behind (demofilter unshown)
     cl_demoBehind = cgi.Cvar_Get("cl_demoBehind", "-1", CVAR_ROM);
+    cg_demoguns   = cgi.Cvar_Get("cg_demoguns", "1", 0);
     // the models of the player followed, by their team, theirs when empty
     cg_followedModel = cgi.Cvar_Get("cg_followedModel", "", 0);
     cg_followedGermanModel = cgi.Cvar_Get("cg_followedGermanModel", "", 0);

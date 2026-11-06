@@ -62,7 +62,10 @@ frags, while they play; Specced those of the players the recorder spectated,
 while they followed them; Unspecced those made while the demo shows someone
 else, filmed from behind the fragger, when the demo has them for 3 s before and
 their victim in view then (about half of those frags): the server only sends
-the players the recorder could see. The HUD of those is a spectator's, with
+the players the recorder could see. It may send a player without the gun in
+their hand, so that one is worked out from what their body is doing, with its
+shots and their sound: the gun last seen with those animations, else their
+team's. The HUD of those is a spectator's, with
 their name but no health. A door the demo doesn't have
 there is drawn closed, from the map, until the demo has it. With none of them,
 it's anyone's frags, as the demo shows them; with a Fragger, those made while

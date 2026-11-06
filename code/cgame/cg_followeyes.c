@@ -120,7 +120,7 @@ The model of the body of the player followed, or the default one when
 theirs isn't in the game files: all have the same skeleton and animations
 ===============
 */
-static dtiki_t *CG_FollowedBodyTiki(const entityState_t *body)
+dtiki_t *CG_FollowedBodyTiki(const entityState_t *body)
 {
     dtiki_t *tiki = cgi.R_Model_GetHandle(cgs.model_draw[body->modelindex]);
 
@@ -137,7 +137,7 @@ CG_FollowedGun
 Whether es is a gun in the hand of the player whose body is body
 ===============
 */
-static qboolean CG_FollowedGun(const entityState_t *es, const entityState_t *body)
+qboolean CG_FollowedGun(const entityState_t *es, const entityState_t *body)
 {
     dtiki_t    *tiki;
     const char *tag;
