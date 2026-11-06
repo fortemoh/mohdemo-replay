@@ -219,9 +219,13 @@ class FakeGameCase(unittest.TestCase):
         except (OSError, TypeError):
             return []
 
+    def game_state(self, window):
+        """What the game playing a demo tells."""
+        return window.game.read_json("demostate.json") or {}
+
     def playing(self, window, name="first"):
         window.play_demo(name)
-        self.assertTrue(wait_until(lambda: window.state.get("demo") == name and window.index), "the demo didn't load")
+        self.assertTrue(wait_until(lambda: self.game_state(window).get("demo") == name), "the demo didn't load")
 
     def choose(self, window, killer=None, victim=None, weapons=None, shown=None, obj=None, great=None, specced=None):
         """The kill filter, as typed and ticked, applied at once."""
@@ -255,10 +259,6 @@ class FakeGameCase(unittest.TestCase):
         """The players in the menu of a names field, and those ticked."""
         items = [field.list.item(i) for i in range(field.list.count())]
         return [i.text() for i in items], [i.text() for i in items if i.checkState() == Qt.Checked]
-
-    def listed(self, window):
-        """The times of the kills listed."""
-        return [window.kills.topLevelItem(i).text(0) for i in range(window.kills.topLevelItemCount())]
 
 
 class TestFunctions(unittest.TestCase):
@@ -768,52 +768,6 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.stretches(spans, [14500]), [(0, 1500), (6000, 14000), (14800, 20000), (25000, 32000)])
 
 
-class TestTimeline(unittest.TestCase):
-    def setUp(self):
-        self.slider = mohreplay.Timeline()
-        self.slider.resize(600, self.slider.minimumHeight())
-        self.slider.setMaximum(600000)
-        self.slider.show()
-        app.processEvents()
-
-    def tearDown(self):
-        self.slider.close()
-
-    def test_positions(self):
-        slider = self.slider
-        self.assertLess(slider.x_of(0), slider.x_of(300000))
-        self.assertLess(slider.x_of(300000), slider.x_of(600000))
-        # one pixel is about 1 second here
-        self.assertAlmostEqual(slider.value_at(slider.x_of(300000)), 300000, delta=1100)
-
-    def test_marks(self):
-        slider = self.slider
-        slider.set_marks([(10000, "a"), (11000, "b"), (400000, "c")], [(195000, "Round 2")])
-        bottom, top = slider.height() - 2, 1
-        self.assertEqual(slider.mark_at(slider.x_of(400000), bottom), "6:40  c")
-        self.assertEqual(slider.mark_at(slider.x_of(195000), top), "3:15  Round 2")
-        self.assertIsNone(slider.mark_at(slider.x_of(195000), bottom))
-        self.assertIsNone(slider.mark_at(slider.x_of(300000), bottom))
-        # kills a second apart: both
-        self.assertEqual(slider.mark_at(slider.x_of(10500), bottom), "0:10  a\n0:11  b")
-        slider.grab()  # paints them
-
-    def click(self, x):
-        y = self.slider.height() // 2
-        for kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
-            event = QMouseEvent(kind, QPointF(x, y), self.slider.mapToGlobal(QPointF(x, y)),
-                                Qt.LeftButton, Qt.LeftButton if kind == QEvent.MouseButtonPress else Qt.NoButton,
-                                Qt.NoModifier)
-            QApplication.sendEvent(self.slider, event)
-
-    def test_click_jumps_there(self):
-        released = []
-        self.slider.sliderReleased.connect(lambda: released.append(self.slider.value()))
-        self.click(self.slider.x_of(450000))
-        self.assertEqual(len(released), 1)
-        self.assertAlmostEqual(released[0], 450000, delta=1100)
-
-
 class TestGame(FakeGameCase):
     def start(self, driver=None):
         self.output, self.exits = [], []
@@ -1017,115 +971,22 @@ class TestWindow(FakeGameCase):
         self.assertEqual(window.folder_action.text(), "more demos")
         self.assertTrue(wait_until(lambda: list(window.demo_items) == ["again"]))
 
-    def test_play_fills_the_lists(self):
+    def test_double_click_plays(self):
+        """A demo plays in the game, told the filter, for its keys that go to
+        frags; a folder doesn't."""
         window = self.window()
-        self.playing(window)
-        # not t-'s death at 3:20 while shown, nor Phil's at 6:40 while followed
-        self.assertEqual(self.listed(window), ["0:10", "0:12", "0:14", "4:10"])
-        self.assertEqual(window.rounds.topLevelItemCount(), 3)
-        self.assertEqual(window.rounds.topLevelItem(0).text(2), "Axis win!")
-        self.assertEqual(window.slider.maximum(), 600000)
-        self.assertEqual(window.title.text(), "first")
-        self.assertIn("obj/obj_team1", window.info.text())
-        self.assertIn("recorded by t-", window.info.text())
-        self.assertEqual([window.tabs.tabText(i) for i in range(window.tabs.count())], ["Frags (4)", "Rounds (3)"])
-        # with what, and how in the tooltip, as the game told it
-        self.assertEqual([window.kills.headerItem().text(i) for i in range(4)], ["Time", "Fragger", "Victim", "Weapon"])
-        self.assertTrue({"Fragger", "Victim", "Weapon"} <= {label.text() for label in window.findChildren(mohreplay.QLabel)})
-        self.assertEqual(window.only_kills_button.text(), "These frags")
-        self.assertEqual([window.kills.topLevelItem(i).text(3) for i in range(4)], ["Rifle", "Rifle", "Other", "Other"])
-        self.assertIn("was", window.kills.topLevelItem(0).toolTip(2))
-        # the players to choose from
-        self.assertEqual(window.killer.players, ["^1Phil", "Al", "Bob", "t-"])
-        self.assertEqual(window.victim.players, window.killer.players)
-        # the game is told the filter
-        self.assertTrue(wait_until(lambda: "demofilter clear" in self.commands(window.game)))
+        self.choose(window, killer="t-")
+        window.demos.itemActivated.emit(window.demo_items["first"], 0)
+        self.assertTrue(wait_until(lambda: self.game_state(window).get("demo") == "first"))
+        self.assertEqual(self.commands(window.game)[:3], ["demofilter clear", 'demofilter killer "t-"', 'demo "first"'])
+        self.assertEqual((mohreplay.BINDS["UPARROW"], mohreplay.BINDS["DOWNARROW"]), ("demonextkill", "demoprevkill"))
+        # told when it changes too
+        self.choose(window, killer="bob")
+        self.assertTrue(wait_until(lambda: self.commands(window.game)[-2:] == ["demofilter clear", 'demofilter killer "bob"']))
 
-    def test_killers(self):
+    def test_weapon_menu(self):
+        """It takes several, and any."""
         window = self.window()
-        self.playing(window)
-        self.assertEqual(len(window.slider.kills), 4)
-        self.assertEqual(window.slider.rounds, [(195000, "Round 2"), (420000, "Round 3")])
-        # only the kills made while the player is shown: Phil's at 3:20 is
-        # while t- is, t-'s at 6:40 while Phil is
-        self.choose(window, killer="phil")
-        self.assertEqual(self.listed(window), [])
-        self.assertEqual(window.slider.kills, [])
-        self.assertEqual(window.tabs.tabText(0), "Frags (0 of 4)")
-        self.choose(window, killer="T")
-        self.assertEqual(self.listed(window), ["0:10", "0:12", "0:14"])
-        self.assertEqual(len(window.slider.kills), 3)
-        # several
-        self.choose(window, killer="phil, t-")
-        self.assertEqual(self.listed(window), ["0:10", "0:12", "0:14"])
-        self.assertEqual(window.tabs.tabText(0), "Frags (3 of 4)")
-        self.assertTrue(wait_until(lambda: self.commands(window.game)[-3:] == [
-            "demofilter clear", 'demofilter killer "phil"', 'demofilter killer "t-"']))
-
-    def test_victims_and_weapons(self):
-        window = self.window()
-        # no demo, no kills of none
-        self.choose(window, weapons=["rifle"])
-        self.assertEqual(window.tabs.tabText(0), "Frags (0)")
-        self.playing(window)
-        # anyone's, whoever is shown: Bob's suicide too
-        self.choose(window, victim="bob", weapons=[])
-        self.assertEqual(self.listed(window), ["0:12", "4:10"])
-        self.choose(window, victim="", weapons=["rifle"])
-        self.assertEqual(self.listed(window), ["0:10", "0:12"])
-        self.assertEqual(window.weapon.text(), "Rifle")
-        self.choose(window, weapons=["rifle", "other"])
-        self.assertEqual(self.listed(window), ["0:10", "0:12", "0:14", "4:10"])
-        self.assertEqual(window.weapon.text(), "Rifle, Other")
-        # all together
-        self.choose(window, killer="t-", victim="al, phil", weapons=["other"])
-        self.assertEqual(self.listed(window), ["0:14"])
-        self.assertTrue(wait_until(lambda: self.commands(window.game)[-5:] == [
-            "demofilter clear", 'demofilter killer "t-"', 'demofilter victim "al"', 'demofilter victim "phil"',
-            "demofilter weapon other"]))
-        self.choose(window, killer="", victim="", weapons=[])
-        self.assertEqual(window.weapon.text(), "Any weapon")
-        self.assertEqual(window.tabs.tabText(0), "Frags (4)")
-
-    def test_filter_fields(self):
-        window = self.window()
-        self.playing(window)
-        # applied once typing stops
-        window.killer.setText("ph")
-        window.killer.setText("phil")
-        self.assertEqual(self.listed(window), ["0:10", "0:12", "0:14", "4:10"])
-        self.assertTrue(wait_until(lambda: self.listed(window) == [], 2))
-        # the menu adds and takes off the players of the demo playing, a
-        # click on one at a time, staying open
-        window.killer.open_menu()
-        self.assertEqual(self.players(window.killer), (["^1Phil", "Al", "Bob", "t-"], ["^1Phil"]))
-        self.tick(window.killer, "t-")
-        self.assertEqual(window.killer.text(), "phil, t-")
-        self.tick(window.killer, "^1Phil")
-        self.assertEqual(window.killer.text(), "t-")
-        self.assertEqual(self.players(window.killer)[1], ["t-"])
-        self.assertTrue(window.killer.menu.isVisible())
-        window.killer.menu.close()
-        # whoever is shown instead of names, and names instead of it
-        window.killer.shown_action.trigger()
-        self.assertTrue(window.killer.shown())
-        self.assertEqual((window.killer.text(), window.killer.placeholderText()), ("", "Whoever is shown"))
-        self.assertTrue(window.kill_filter().shown)
-        window.killer.setText("bob")
-        self.assertFalse(window.killer.shown())
-        self.assertEqual(window.killer.placeholderText(), "Anyone")
-        # Victim's has no whoever is shown
-        window.victim.open_menu()
-        self.assertEqual(len(window.victim.menu.actions()), 1)
-        self.assertEqual(self.players(window.victim), (["^1Phil", "Al", "Bob", "t-"], []))
-        window.victim.menu.close()
-        # a long list scrolls instead of leaving the screen
-        window.victim.players = [f"player {n}" for n in range(100)]
-        window.victim.open_menu()
-        self.assertEqual(window.victim.list.height(), mohreplay.NamesField.ROWS * window.victim.list.sizeHintForRow(0))
-        self.assertLess(window.victim.menu.sizeHint().height(), 600)
-        window.victim.menu.close()
-        # Weapon's menu takes several, and any
         menu = window.weapon.menu()
         self.assertEqual([a.text() for a in menu.actions() if a.text()], list(mohreplay.WEAPONS.values()) + ["Any weapon"])
         window.weapon_actions["sniper"].trigger()
@@ -1134,141 +995,13 @@ class TestWindow(FakeGameCase):
         next(a for a in menu.actions() if a.text() == "Any weapon").trigger()
         self.assertEqual(window.weapon.text(), "Any weapon")
 
-    def test_kills_while_shown(self):
-        demo = json.loads(json.dumps(DEMO))
-        # Phil is shown from a second before his kill to a second after it,
-        # then t-, who kills under another name at 6:40
-        demo["watched"] = [{"time": 0, "client": 0, "name": "t-"}, {"time": 199000, "client": 1, "name": "^1Phil"},
-                           {"time": 201000, "client": 0, "name": "t-"}]
-        demo["kills"][5]["killerName"] = "t-.fi"
-        self.add_demo("shown", demo)
+    def test_no_panels_left(self):
+        """A list of demos to make videos of: nothing to watch them with."""
         window = self.window()
-        self.playing(window, "shown")
-        self.choose(window, killer="phil")
-        item = window.kills.topLevelItem(0)
-        self.assertEqual(window.kills.topLevelItemCount(), 1)
-        # only while he's shown
-        self.assertEqual(item.data(1, Qt.UserRole), [(199000, 201000)])
-        window.only_kills()
-        self.assertTrue(wait_until(lambda: self.commands(window.game)[-4:] == [
-            "demofilter clear", 'demofilter killer "phil"', "demoseek 199.000", "demoonly kills"]))
-        # the same client under another name
-        self.choose(window, killer="t-.fi")
-        self.assertEqual(self.listed(window), ["6:40"])
-        # all the kills, whoever is shown
-        self.choose(window, killer="")
-        self.assertEqual(window.kills.topLevelItemCount(), 6)
-
-    def test_whoever_is_shown(self):
-        self.add_demo("followed", followed_demo())
-        window = self.window()
-        self.playing(window, "followed")
-        self.choose(window, shown=True)
-        # t-'s while he plays and Phil's while he's followed, not Phil's at
-        # 3:20 (t- is shown) or t-'s at 6:40 (Phil is)
-        rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
-        self.assertEqual([(row.text(0), row.text(1)) for row in rows],
-                         [("0:10", "t-"), ("0:12", "t-"), ("0:14", "t-"), ("5:01", "^1Phil"), ("5:03", "^1Phil")])
-        self.assertEqual(rows[3].data(1, Qt.UserRole), [(300000, 303000)])
-        self.assertEqual([m[0] for m in window.slider.kills], [10000, 12000, 14500, 301000, 303500])
-        window.only_kills()
-        self.assertTrue(wait_until(lambda: window.state.get("only") == "kills"))
-        self.assertEqual(self.commands(window.game)[-4:], ["demofilter clear", "demofilter shown", "demoseek 6.000",
-                                                          "demoonly kills"])
-        self.assertTrue(wait_until(lambda: "Playing only the frags of whoever is shown" in window.info.text()))
-
-        # from the one selected
-        window.kills.setCurrentItem(rows[3])
-        window.only_kills()
-        self.assertTrue(wait_until(lambda: self.commands(window.game)[-2:] == ["demoseek 300.000", "demoonly kills"]))
-
-        # with a weapon
-        self.choose(window, weapons=["sniper"])
-        self.assertEqual(self.listed(window), ["5:03"])
-        self.assertTrue(wait_until(lambda: "Playing only the frags of whoever is shown with sniper" in window.info.text()))
-
-        window.only_watched()
-        self.assertEqual(self.messages.shown[-1], ("Only while watched", "Type a fragger first."))
-        # still chosen in the next demo
-        self.playing(window)
-        self.assertTrue(window.killer.shown())
-        self.assertEqual(window.kills.topLevelItemCount(), 0)
-        self.choose(window, weapons=[])
-        self.assertEqual(window.kills.topLevelItemCount(), 3)
-
-    def test_slider_click_seeks(self):
-        window = self.window()
-        self.playing(window)
-        window.show()
-        slider = window.slider
-        y = slider.height() // 2
-        x = slider.x_of(300000)
-        for kind, buttons in ((QEvent.MouseButtonPress, Qt.LeftButton), (QEvent.MouseButtonRelease, Qt.NoButton)):
-            QApplication.sendEvent(slider, QMouseEvent(kind, QPointF(x, y), slider.mapToGlobal(QPointF(x, y)),
-                                                       Qt.LeftButton, buttons, Qt.NoModifier))
-        self.assertTrue(wait_until(lambda: any(c.startswith(("demoseek 29", "demoseek 30"))
-                                               for c in self.commands(window.game))))
-
-    def test_kill_click_seeks_before_it(self):
-        window = self.window()
-        self.playing(window)
-        window.jump_to_item(window.kills.topLevelItem(1))
-        window.jump_to_item(window.kills.topLevelItem(1))  # a double-click: one seek
-        self.assertTrue(wait_until(lambda: "demoseek 8.000" in self.commands(window.game)))
-        self.assertEqual(self.commands(window.game).count("demoseek 8.000"), 1)
-
-    def test_only_kills_of_a_player(self):
-        window = self.window()
-        self.playing(window)
-        self.choose(window, killer="t-")
-        self.assertTrue(window.everything_button.isChecked())
-        window.only_kills_button.click()
-        self.assertTrue(window.only_kills_button.isChecked())
-        self.assertTrue(wait_until(lambda: window.state.get("only") == "kills"))
-        self.assertEqual(self.commands(window.game)[-4:], ["demofilter clear", 'demofilter killer "t-"', "demoseek 6.000",
-                                                          "demoonly kills"])
-        self.assertIn("only the frags by t-", window.info.text())
-        self.assertTrue(wait_until(lambda: window.only_kills_button.isChecked(), 2))
-        window.everything_button.click()
-        self.assertTrue(wait_until(lambda: window.state.get("only") == ""))
-        self.assertTrue(wait_until(lambda: window.everything_button.isChecked(), 2))
-
-    def test_only_watched(self):
-        window = self.window()
-        self.playing(window)
-        window.watched_button.click()
-        self.assertEqual(self.messages.shown[-1], ("Only while watched", "Type a fragger first."))
-        # nothing plays otherwise
-        self.assertTrue(window.everything_button.isChecked())
-        self.choose(window, killer="bob")
-        window.only_watched()
-        self.assertEqual(self.messages.shown[-1], ("Only while watched", "bob isn't watched in this demo."))
-        self.choose(window, killer="bob, PHIL")
-        window.only_watched()
-        self.assertTrue(wait_until(lambda: self.commands(window.game)[-2:] == ["demoseek 300.000", "demoonly watched"]))
-        self.assertTrue(wait_until(lambda: "only while bob or PHIL is watched" in window.info.text()))
-
-    def test_buttons_send_commands(self):
-        window = self.window()
-        self.playing(window)
-        window.play.click()
-        self.assertTrue(wait_until(lambda: window.state.get("paused")))
-        window.speed.setCurrentText("2×")
-        self.assertTrue(wait_until(lambda: "timescale 2" in self.commands(window.game)))
-
-    def test_kill_buttons_and_keys_go_to_the_kills_listed(self):
-        window = self.window()
-        self.playing(window)
-        buttons = {button.toolTip(): button for button in window.findChildren(mohreplay.QToolButton)}
-        # the keys run demonextkill and demoprevkill, which go to the
-        # filter's kills; the buttons tell it first, in case
-        self.assertEqual((mohreplay.BINDS["UPARROW"], mohreplay.BINDS["DOWNARROW"]), ("demonextkill", "demoprevkill"))
-        for killer, told in (("t-", ["demofilter clear", 'demofilter killer "t-"']), ("", ["demofilter clear"])):
-            self.choose(window, killer=killer)
-            buttons["Next frag listed (Up)"].click()
-            buttons["Previous frag listed (Down)"].click()
-            self.assertTrue(wait_until(lambda: self.commands(window.game)[-2 * len(told) - 2:] == [
-                *told, "demonextkill", *told, "demoprevkill"]), killer)
+        labels = {label.text() for label in window.findChildren(mohreplay.QLabel)}
+        self.assertTrue({"Demos", "Frags", "Recorder", "Rules", "Fragger", "Victim", "Weapon"} <= labels)
+        self.assertFalse(hasattr(window, "slider") or hasattr(window, "kills") or hasattr(window, "tabs"))
+        self.assertIs(window.statusBar().isVisible(), False)
 
     def shown(self, window):
         """The names of the demos shown, in folders shown."""
@@ -1287,14 +1020,13 @@ class TestWindow(FakeGameCase):
         window = self.window()
         window.start_game()
         window.game.send('demo "nothing"')
-        self.assertTrue(wait_until(lambda: "Couldn't load" in window.statusBar().currentMessage()))
+        self.assertTrue(wait_until(lambda: "Couldn't load" in window.message.text()))
 
     def test_game_quitting(self):
         window = self.window()
         self.playing(window)
         window.game.send("quit")
-        self.assertTrue(wait_until(lambda: "The game quit" in window.statusBar().currentMessage()))
-        self.assertEqual(window.time.text(), "0:00 / 0:00")
+        self.assertTrue(wait_until(lambda: "The game quit" in window.message.text()))
         # and it starts again with a demo
         self.playing(window)
 
@@ -1395,12 +1127,15 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["broken"].text(mohreplay.COL_LENGTH), "")
         self.assertIn("broken", window.library.failed)
         # how many there are, and how many are listed
-        self.assertEqual(window.demo_count.text(), "3 demos")
+        self.assertEqual(window.demo_count.text(), "3 demos, 8 frags, about 1 min")
         self.assertEqual(window.demo_count.toolTip(), "3 demos in the folder, 2 of them indexed; 1 couldn't be indexed")
         window.filter.setText("mohdm6")
-        self.assertEqual(window.demo_count.text(), "1 of 3 demos listed")
+        self.assertEqual(window.demo_count.text(), "1 of 3 demos listed, 4 frags, under a minute")
         self.assertIn("2 left out by the search and the filters", window.demo_count.toolTip())
         window.filter.clear()
+        window.demo_items["other"].setSelected(True)
+        self.assertEqual(window.demo_count.text(), "1 of the 3 demos selected, 4 frags, under a minute")
+        window.demos.clearSelection()
         summary = window.library.demos["first"]
         self.assertEqual(summary["maps"], ["obj/obj_team1"])
         # the kills made while they're shown
@@ -1550,14 +1285,6 @@ class TestLibrary(FakeGameCase):
         again = self.window()
         self.assertEqual(again.rules.currentData(), "default")
 
-    def test_rules_of_the_demo_playing(self):
-        realism = json.loads(json.dumps(DEMO))
-        realism["maps"] = [{"time": 0, "map": "obj/obj_team1", "rules": "realism"}]
-        self.add_demo("first", realism)
-        window = self.window()
-        self.playing(window)
-        self.assertIn("obj/obj_team1 (realism)", window.info.text())
-
     def test_old_indexes(self):
         # indexes made before the rules were: no rules, as unknown
         self.assertEqual(mohreplay.summarize(DEMO)["rules"], "")
@@ -1600,8 +1327,8 @@ class TestLibrary(FakeGameCase):
         self.assertTrue(window.demos.isColumnHidden(mohreplay.COL_PLAYER))
 
     def test_great_frags(self):
-        """Great frags, in the list and the demo playing: snipes has two
-        slow snipes of t-'s 3 frags, 10 s apart."""
+        """Great frags, in the list: snipes has two slow snipes of t-'s 3
+        frags, 10 s apart."""
         snipes = json.loads(json.dumps(DEMO))
         for kill, time, scope in zip(snipes["kills"], (10000, 20000, 30000), (1500, 2500, 400)):
             kill.update(time=time, weapon="sniper", scope=scope, speed=0)
@@ -1616,30 +1343,68 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_PLAYER), "t- (3)")
         self.choose(window, weapons=["sniper"])
         self.assertEqual(self.shown(window), ["snipes"])
-        self.playing(window, "snipes")
-        self.assertEqual(window.kills.topLevelItemCount(), 1)
-        self.assertTrue(wait_until(lambda: "demofilter great 1000 30 5000 5000" in self.commands(window.game)))
-        self.choose(window, great=False)
-        self.assertEqual(window.kills.topLevelItemCount(), 3)
 
     def test_specced_frags(self):
-        """Specced frags, in the list and the demo playing: Phil's two in
-        followed, while the recorder follows him."""
+        """Specced frags, in the list: Phil's two in followed, while the
+        recorder follows him."""
         self.add_demo("followed", followed_demo())
         window = self.window()
         self.indexed(window, ("first", "other", "followed"))
         self.choose(window, specced=True)
         self.assertEqual(self.shown(window), ["followed"])
         self.assertEqual(window.demo_items["followed"].text(mohreplay.COL_PLAYER), "^1Phil (2)")
-        self.playing(window, "followed")
-        self.assertEqual([window.kills.topLevelItem(i).text(0) for i in range(window.kills.topLevelItemCount())],
-                         ["5:01", "5:03"])
-        self.assertTrue(wait_until(lambda: "demofilter specced" in self.commands(window.game)))
-        self.choose(window, weapons=["sniper"])
-        self.assertEqual(window.kills.topLevelItemCount(), 1)
-        # all of them, t-'s too
-        self.choose(window, weapons=[], specced=False)
-        self.assertEqual(window.kills.topLevelItemCount(), 6)
+
+    def test_filter_fields(self):
+        window = self.window()
+        self.indexed(window)
+        # applied once typing stops
+        window.killer.setText("ph")
+        window.killer.setText("phil")
+        self.assertEqual(self.shown(window), ["broken", "first", "other"])
+        self.assertTrue(wait_until(lambda: self.shown(window) == [], 2))
+        window.killer.setText("")
+        self.assertTrue(wait_until(lambda: self.shown(window) == ["broken", "first", "other"], 2))
+        # the menu adds and takes off the players of the demos listed, those
+        # with the most frags first, a click on one at a time, staying open
+        window.killer.open_menu()
+        everyone = ["<KoS>Bob (3)", "t- (3)", "^1Phil (0)", "Al (0)", "Bob (0)"]
+        self.assertEqual(self.players(window.killer), (everyone, []))
+        self.tick(window.killer, "t- (3)")
+        self.assertEqual(window.killer.text(), "t-")
+        self.tick(window.killer, "^1Phil (0)")
+        self.assertEqual(window.killer.text(), "t-, ^1Phil")
+        self.tick(window.killer, "^1Phil (0)")
+        self.assertEqual(window.killer.text(), "t-")
+        self.assertEqual(self.players(window.killer)[1], ["t- (3)"])
+        self.assertTrue(window.killer.menu.isVisible())
+        window.killer.menu.close()
+        # only those of the demos listed then
+        self.assertTrue(wait_until(lambda: self.shown(window) == ["first"], 2))
+        window.victim.open_menu()
+        self.assertEqual(self.players(window.victim), (["t- (3)", "^1Phil (0)", "Al (0)", "Bob (0)"], []))
+        self.assertEqual(len(window.victim.menu.actions()), 1)
+        window.victim.menu.close()
+        # whoever is shown instead of names, and names instead of it
+        window.killer.open_menu()
+        window.killer.shown_action.trigger()
+        window.killer.menu.close()
+        self.assertTrue(window.killer.shown())
+        self.assertEqual((window.killer.text(), window.killer.placeholderText()), ("", "Whoever is shown"))
+        self.assertTrue(window.kill_filter().shown)
+        window.killer.setText("bob")
+        self.assertFalse(window.killer.shown())
+        self.assertEqual(window.killer.placeholderText(), "Anyone")
+        # a long list scrolls instead of leaving the screen
+        window.victim.fill = lambda: ([f"player {n}" for n in range(100)], {})
+        window.victim.open_menu()
+        self.assertEqual(window.victim.list.height(), mohreplay.NamesField.ROWS * window.victim.list.sizeHintForRow(0))
+        self.assertLess(window.victim.menu.sizeHint().height(), 600)
+        window.victim.menu.close()
+        # no demos indexed: nothing to choose
+        window.victim.fill = lambda: ([], {})
+        window.victim.open_menu()
+        self.assertEqual([a.text() for a in window.victim.menu.actions()], ["No demos indexed yet"])
+        window.victim.menu.close()
 
     def test_filter_by_recorder(self):
         bobs = json.loads(json.dumps(DEMO))
@@ -1755,7 +1520,8 @@ class TestRecording(FakeGameCase):
         self.assertEqual((cvars["r_customwidth"], cvars["r_customheight"]), ("1920", "1080"))
         self.assertIn("-crf 20", cvars["cl_aviPipeFormat"])
         self.assertNotIn("r_motionBlur", cvars)
-        self.assertIn("Recorded", window.statusBar().currentMessage())
+        self.assertIn("Recorded", window.message.text())
+        self.assertEqual(window.message.toolTip(), window.message.text())
         self.assertIsNone(window.recorder)
 
     def test_record_a_demo_in_a_folder(self):
@@ -2149,7 +1915,7 @@ class TestRecording(FakeGameCase):
         self.assertEqual(job["status"], "failed")
         self.assertTrue(job["item"].text(2).startswith("Failed: "))
         self.assertIn("no FFmpeg", job["item"].toolTip(2))
-        self.assertIn("Couldn't record", window.statusBar().currentMessage())
+        self.assertIn("Couldn't record", window.message.text())
         self.assertIsNone(window.recorder)
 
     def test_ffmpeg_quitting_midway(self):
@@ -2511,7 +2277,7 @@ class TestRecording(FakeGameCase):
             self.stretch(first, "1:00", "first")
             second = self.window()
             self.assertFalse(second.keeps_queue)
-            self.assertIn("Another window keeps", second.statusBar().currentMessage())
+            self.assertIn("Another window keeps", second.message.text())
             self.ready(second)
             self.stretch(second, "2:00", "second")
             with open(first.queue_file()) as f:
@@ -2731,45 +2497,45 @@ class TestRealGame(FakeGameCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def test_frags_shown(self):
-        """Only these kills of whoever is shown plays inside their clips."""
-        window = self.window()
+    def real_demo(self, window):
+        """Plays the demo: its index."""
         window.play_demo(self.demo)
-        self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))
-        self.choose(window, shown=True)
-        self.assertEqual(window.kills.topLevelItemCount(),
-                         len([k for k, _, _ in mohreplay.shown_kills(window.index)
-                              if not k.get("teamKill") and not mohreplay.is_grenade(k)]))
-        rows = [window.kills.topLevelItem(i) for i in range(window.kills.topLevelItemCount())]
-        clips = mohreplay.stretches([span for row in rows for span in row.data(1, Qt.UserRole)],
-                                    [w["time"] for w in window.index["watched"]])
+        self.assertTrue(wait_until(lambda: self.game_state(window).get("demo") == self.demo
+                                   and (window.game.read_json("demoindex.json") or {}).get("demo") == self.demo, 60))
+        return window.game.read_json("demoindex.json")
+
+    def test_frags_shown(self):
+        """Only these kills of whoever is shown plays inside their clips, as
+        Record plans them."""
+        window = self.window()
+        index = self.real_demo(window)
+        kill_filter = mohreplay.KillFilter(shown=True)
+        frags = mohreplay.planned_kills(index, "kills", "", kill_filter)[0]
+        spans = [mohreplay.kill_span(index, k, start, end) for k, start, end in frags]
+        clips = mohreplay.demoonly_plan(index, "kills", kill_filter=kill_filter)[1]
         # from the kill before the first one by a player the recorder follows
-        recorder = window.index["recorder"]["name"]
-        followed = next(i for i, row in enumerate(rows) if not mohreplay.same_player(row.text(1), recorder))
-        window.kills.setCurrentItem(rows[max(0, followed - 1)])
-        window.speed.setCurrentText("4×")
-        window.only_kills()
+        recorder = index["recorder"]["name"]
+        followed = next(i for i, (k, _, _) in enumerate(frags) if not mohreplay.same_player(k["killerName"], recorder))
+        window.game.send(*kill_filter.commands(), "timescale 4", "demoseek " + mohreplay.seconds(spans[max(0, followed - 1)][0]),
+                         "demoonly kills")
         samples, end = [], time.monotonic() + 20
         while time.monotonic() < end:
-            app.processEvents()
-            state = window.state
+            state = self.game_state(window)
             if state.get("only") == "kills" and not state.get("seeking") and not state.get("paused"):
                 samples.append(state["time"])
             time.sleep(0.02)
         self.assertGreater(len(set(samples)), 20)
         # a frame may be drawn past a clip before demoonly jumps
         self.assertEqual([t for t in samples if not any(s - 150 <= t <= e + 150 for s, e in clips)], [])
-        start, stop = rows[followed].data(1, Qt.UserRole)[0]
+        start, stop = spans[followed]
         self.assertTrue(any(start <= t <= stop for t in samples), "the followed player's kill wasn't played")
 
     def test_kill_filter(self):
-        """demonextkill goes where each kill listed starts, with the filter's
-        killers, victims and weapons."""
+        """demonextkill goes where Record plans each kill to start, with the
+        filter's killers, victims and weapons."""
         window = self.window()
-        window.play_demo(self.demo)
-        self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))
+        index = self.real_demo(window)
         window.game.send("demopause 1")
-        index = window.index
         frags = [k for k in index["kills"] if not k.get("teamKill") and not k.get("grenade")]
         self.assertTrue(all(k.get("weapon") for k in frags), "kills without a weapon")
 
@@ -2786,10 +2552,12 @@ class TestRealGame(FakeGameCase):
             cases += ((dict(killer=recorder[:3], obj=True), ), )
         if any(mohreplay.slow_snipe(k) for k in frags):
             cases += ((dict(weapons=["sniper"], great=True), ), )
+        state = lambda: self.game_state(window)
         for case, in cases:
             self.choose(window, **{"killer": "", "victim": "", "weapons": [], "shown": False, "obj": False,
                                    "great": False, **case})
-            starts = [window.kills.topLevelItem(i).data(0, Qt.UserRole) for i in range(window.kills.topLevelItemCount())]
+            planned = mohreplay.planned_kills(index, "kills", "", window.kill_filter())[0]
+            starts = [mohreplay.kill_span(index, k, start, end)[0] for k, start, end in planned]
             self.assertTrue(starts, case)
             # as demonextkill goes, from the start: the next more than 0.1 s on
             wanted, now = [], 0
@@ -2799,27 +2567,25 @@ class TestRealGame(FakeGameCase):
                     now = start
             wanted = wanted[:8]
             window.game.send("demoseek 0")
-            self.assertTrue(wait_until(lambda: window.state.get("time", 1) < 500 and not window.state.get("seeking"), 30))
+            self.assertTrue(wait_until(lambda: state().get("time", 1) < 500 and not state().get("seeking"), 30))
             landed = []
             for _ in wanted:
-                last = window.state["time"]
+                last = state()["time"]
                 window.game.send("demonextkill")
                 # each more than 0.1 s on
-                self.assertTrue(wait_until(lambda: not window.state.get("seeking") and window.state["time"] > last + 100, 30),
+                self.assertTrue(wait_until(lambda: not state().get("seeking") and state()["time"] > last + 100, 30),
                                 (case, landed))
-                landed.append(window.state["time"])
+                landed.append(state()["time"])
             # the game's time comes in snapshots
             self.assertEqual(len(landed), len(wanted))
             self.assertTrue(all(abs(a - b) <= 100 for a, b in zip(landed, wanted)), (case, landed, wanted))
 
     def test_play_seek_and_record(self):
         window = self.window()
-        window.play_demo(self.demo)
-        self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))
-        self.assertGreater(window.kills.topLevelItemCount(), 0)
+        self.real_demo(window)
         window.game.send("demoseek 2:00")
-        self.assertTrue(wait_until(lambda: 120000 <= window.state.get("time", 0) < 125000
-                                   and not window.state.get("seeking"), 30))
+        self.assertTrue(wait_until(lambda: 120000 <= self.game_state(window).get("time", 0) < 125000
+                                   and not self.game_state(window).get("seeking"), 30))
 
         self.settings.setValue("rec/size", "640x360")
 
@@ -2846,8 +2612,7 @@ class TestRealGame(FakeGameCase):
         """The renderer blurs, the game drawing the video's 60 frames a
         second."""
         window = self.window()
-        window.play_demo(self.demo)
-        self.assertTrue(wait_until(lambda: window.state.get("demo") == self.demo and window.index, 60))
+        self.real_demo(window)
 
         for key, value in (("size", "640x360"), ("fps", "60"), ("blur", "true")):
             self.settings.setValue("rec/" + key, value)

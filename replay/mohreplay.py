@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""mohdemo-replay: rewatch Medal of Honor: Allied Assault demos with buttons.
+"""mohdemo-replay: makes videos of the frags in Medal of Honor: Allied Assault
+demos, from a list of demos with filters.
 
-Starts the game (OpenMoHAA built from this repository) with a throwaway home
-folder, sends it console commands through its pipe (com_pipefile) and shows
-what it reports in demoindex.json and demostate.json. Everything the buttons
-do is a console command, so it all works with key binds too.
+Records with the game (OpenMoHAA built from this repository), started with a
+throwaway home folder, sending it console commands through its pipe
+(com_pipefile) and reading what it reports in demostate.json. A double-click
+on a demo plays it in the game, with the keys of BINDS.
 
     python3 mohreplay.py [--exe PATH] [--game FOLDER] [--demos FOLDER] [DEMO]
 """
@@ -25,19 +26,18 @@ import shutil
 import sys
 import zipfile
 import tempfile
-from time import monotonic
 
 from PySide6.QtCore import (
-    QDateTime, QElapsedTimer, QEvent, QFileSystemWatcher, QLockFile, QObject, QProcess, QProcessEnvironment,
+    QDateTime, QElapsedTimer, QFileSystemWatcher, QLockFile, QObject, QProcess, QProcessEnvironment,
     QSettings, QStandardPaths, Qt, QTimer, QUrl, Signal,
 )
-from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProxyStyle, QPushButton, QRadioButton, QSizePolicy, QSlider,
-    QSpinBox, QSplitter, QStyle, QStyleOptionSlider, QTabWidget, QToolBar, QToolButton, QToolTip, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction,
+    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSlider,
+    QSpinBox, QStyle, QTabWidget, QToolBar, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QWidgetAction,
 )
 
 PIPE = "replay_pipe"
@@ -79,7 +79,6 @@ COL_DEMO, COL_PLAYER, COL_LENGTH, COL_MAP, COL_RECORDER, COL_RULES, COL_DATE = r
 # the rules of a demo's levels, from mohdemoindex: realism servers change
 # the speeds and the damage of weapons
 RULES = {"default": "Default", "realism": "Realism", "both": "Both"}
-SPEEDS = ["0.25", "0.5", "1", "2", "4"]
 # keys above 127 only: during a demo, the others only run +buttons
 BINDS = {
     "PAUSE": "demopause",
@@ -1113,92 +1112,26 @@ def record_icon():
     return QIcon(pixmap)
 
 
+def heading(text):
+    """A label in bold."""
+    label = QLabel(text)
+    font = label.font()
+    font.setBold(True)
+    label.setFont(font)
+    return label
+
+
+def faint(label):
+    """label, in the color of placeholder text."""
+    palette = label.palette()
+    palette.setColor(QPalette.WindowText, palette.color(QPalette.PlaceholderText))
+    label.setPalette(palette)
+    return label
+
+
 def plain_tip(text):
     """A tooltip showing text as it is: names like <KoS>Bob aren't HTML."""
     return "<p style='white-space:pre'>" + html.escape(text) + "</p>"
-
-
-class ClickStyle(QProxyStyle):
-    """Sliders jump where they're clicked, instead of a page at a time."""
-
-    def styleHint(self, hint, option=None, widget=None, data=None):
-        if hint == QStyle.SH_Slider_AbsoluteSetButtons:
-            return Qt.LeftButton.value
-        return super().styleHint(hint, option, widget, data)
-
-
-class Timeline(QSlider):
-    """The time slider, with the kills listed marked under it and the rounds
-    above it. Hovering tells what a mark is, or the time there."""
-
-    MARK = 4  # pixels: how near a mark the mouse has to be
-
-    def __init__(self):
-        super().__init__(Qt.Horizontal)
-        self.click_style = ClickStyle()
-        self.setStyle(self.click_style)
-        self.setMinimumHeight(self.sizeHint().height() + 2 * self.MARK + 4)
-        self.kills = []  # (msec, text)
-        self.rounds = []
-
-    def set_marks(self, kills, rounds):
-        self.kills, self.rounds = kills, rounds
-        self.update()
-
-    def geometry_of_values(self):
-        """Where the minimum is and how many pixels the values span."""
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        style = self.style()
-        groove = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
-        handle = style.subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
-        return groove.x() + handle.width() // 2, max(1, groove.width() - handle.width())
-
-    def x_of(self, msec):
-        left, span = self.geometry_of_values()
-        return left + QStyle.sliderPositionFromValue(self.minimum(), self.maximum(), msec, span)
-
-    def value_at(self, x):
-        left, span = self.geometry_of_values()
-        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), x - left, span)
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self.maximum() <= self.minimum():
-            return
-        painter = QPainter(self)
-        palette = self.palette()
-        height = self.height()
-        painter.setPen(QPen(palette.highlight().color(), 1))
-        for msec, _ in self.kills:
-            x = self.x_of(msec)
-            painter.drawLine(x, height - self.MARK - 1, x, height - 1)
-        painter.setPen(QPen(palette.windowText().color(), 2))
-        for msec, _ in self.rounds:
-            x = self.x_of(msec)
-            painter.drawLine(x, 0, x, self.MARK)
-
-    def mark_at(self, x, y):
-        """The text of the nearest mark on that side, None if none is near."""
-        marks = self.rounds if y < self.height() // 2 else self.kills
-        near = [(abs(self.x_of(msec) - x), msec, text) for msec, text in marks]
-        near = [mark for mark in near if mark[0] <= self.MARK]
-        if not near:
-            return None
-        # several kills close together: all of them
-        best = min(near)[0]
-        return "\n".join(f"{clock(msec)}  {text}" for distance, msec, text in sorted(near, key=lambda m: m[1])
-                         if distance <= best + 1)
-
-    def event(self, event):
-        if event.type() == QEvent.ToolTip:
-            if self.maximum() > self.minimum():
-                position = event.position().toPoint() if hasattr(event, "position") else event.pos()
-                text = self.mark_at(position.x(), position.y()) or clock(self.value_at(position.x()))
-                # names like <KoS>Bob aren't HTML
-                QToolTip.showText(event.globalPos(), "<p style='white-space:pre'>" + html.escape(text) + "</p>", self)
-            return True
-        return super().event(event)
 
 
 class StayOpenMenu(QMenu):
@@ -1214,21 +1147,21 @@ class StayOpenMenu(QMenu):
 
 class NamesField(QLineEdit):
     """Parts of players' names, separated by commas, anyone if none. Its menu
-    adds or takes off players (those of the demo playing by default, with
-    labels if given), in a list that scrolls, and whoever is shown instead
-    of names, if offered."""
+    adds or takes off players (with labels if given, from fill() when it opens
+    if given, as (players, labels)), in a list that scrolls, and whoever is
+    shown instead of names, if offered."""
 
     edited = Signal()
     ROWS = 15  # players the menu shows at once: a long list fits the screen
 
-    def __init__(self, tip, offer_shown=False, menu_tip="The players of the demo playing",
-                 empty="Play a demo to choose its players"):
+    def __init__(self, tip, offer_shown=False, menu_tip="", empty="No demos indexed yet", fill=None):
         super().__init__(placeholderText="Anyone")
         self.setClearButtonEnabled(True)
         self.setToolTip(tip)
         self.players = []
         self.labels = {}  # player: what the menu shows
         self.empty = empty
+        self.fill = fill
         self.menu = StayOpenMenu(self)
         self.shown_action = None
         if offer_shown:
@@ -1265,6 +1198,8 @@ class NamesField(QLineEdit):
         self.edited.emit()
 
     def open_menu(self):
+        if self.fill:
+            self.players, self.labels = self.fill()
         self.menu.clear()
         if self.shown_action:
             self.menu.addAction(self.shown_action)
@@ -2338,43 +2273,38 @@ class Recorder(QObject):
 
 
 class Window(QMainWindow):
+    MOST_PLAYERS = 1000  # the most the menus of Fragger and Victim list
+
     def __init__(self, settings):
         super().__init__()
         self.settings = settings
         self.game = Game(self.game_output, self.game_exited)
-        self.state = {}
-        self.index = None
         self.pending_demo = None
-        self.seeking_slider = False
         self.recorder = None
         self.jobs = []
-        self.last_jump = (None, 0)
-        self.play_mode_asked = -1
-        self.round_marks = self.kill_marks = []
         self.library = Library(self.library_changed, self)
         self.demo_items = {}  # name: item
         self.folder_items = {}  # folder in the demos folder: item
+        self.demo_frags = {}  # name of a demo listed: how many frags the filter keeps in it
 
         self.setWindowTitle("MoH Demo Replay")
         self.resize(1200, 720)
-        style = self.style()
 
         # demos
-        self.filter = QLineEdit(placeholderText="Filter demos by name, map or player")
+        self.filter = QLineEdit(placeholderText="Search demos by name, map or player")
         self.filter.setClearButtonEnabled(True)
         self.filter.setToolTip("Demos with all of these words in their name, a level or a player's name; commas "
                                "separate searches, so \"pstn, tommeh\" finds the demos of either")
         self.filter.textChanged.connect(self.filter_demos)
         self.rules = QComboBox()
-        self.rules.addItem("All demos", "")
+        self.rules.addItem("All", "")
         self.rules.addItem("Default", "default")
         self.rules.addItem("Realism", "realism")
         self.rules.setToolTip("Default or realism servers, told by the speeds of the recorder's weapons")
         self.rules.setCurrentIndex(max(0, self.rules.findData(settings.value("rules", ""))))
         self.rules.currentIndexChanged.connect(self.rules_changed)
         self.recorded_by = NamesField("Demos recorded by players whose names have one of these, separated by commas",
-                                   menu_tip="The recorders of the demos, those of the most first",
-                                   empty="No demos indexed yet")
+                                      menu_tip="The recorders of the demos, those of the most first")
         self.recorded_by.edited.connect(self.filter_demos)
         self.demos = self.make_list(DEMO_COLUMNS, fit=False)
         self.demos.setSortingEnabled(True)
@@ -2382,11 +2312,16 @@ class Window(QMainWindow):
         self.demos.itemActivated.connect(lambda item: item.data(COL_DEMO, Qt.UserRole)
                                          and self.play_demo(item.data(COL_DEMO, Qt.UserRole)))
         self.demos.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.demos.itemSelectionChanged.connect(self.show_record_button)
-        # the kills of the demos listed and of the demo playing
+        self.demos.itemSelectionChanged.connect(self.show_demo_count)
+        self.demos.header().setStretchLastSection(False)
+        self.demos.header().setSectionResizeMode(COL_DEMO, QHeaderView.Stretch)
+        # the kills of the demos listed
+        menu_tip = "The players of the demos listed, those with the most frags first"
         self.killer = NamesField("Frags by players whose names have one of these, separated by commas, while "
-                                 "they're shown, or by whoever is shown", offer_shown=True)
-        self.victim = NamesField("Frags of players whose names have one of these, separated by commas")
+                                 "they're shown, or by whoever is shown", offer_shown=True, menu_tip=menu_tip,
+                                 fill=self.players_listed)
+        self.victim = NamesField("Frags of players whose names have one of these, separated by commas",
+                                 menu_tip=menu_tip, fill=self.players_listed)
         self.weapon = QToolButton()
         self.weapon.setPopupMode(QToolButton.InstantPopup)
         self.weapon.setToolTip("Frags made with these weapons, as the death messages tell")
@@ -2406,11 +2341,11 @@ class Window(QMainWindow):
         self.killer.edited.connect(self.kill_filter_timer.start)
         self.victim.edited.connect(self.kill_filter_timer.start)
         self.weapons_changed()
-        self.obj = QCheckBox("Obj maps only")
+        self.obj = QCheckBox("Obj maps")
         self.obj.setToolTip("Only the frags made on the objective maps (obj/, as obj_team4 or harbor), "
                             "not on the deathmatch ones (dm/)")
         self.obj.toggled.connect(self.kill_filter_timer.start)
-        self.great = QCheckBox("Great frags")
+        self.great = QCheckBox("Great")
         self.great.setToolTip("Leaves out the sniper frags made with the scope on for over a second while standing "
                               "still, as the fragger's view shows them: no-scopes, quick scopes, shots on the move and "
                               "streaks (frags at most 5 s apart) stay, and so do the frags of other weapons and those "
@@ -2432,132 +2367,51 @@ class Window(QMainWindow):
         self.only_unshown.toggled.connect(self.kill_filter_timer.start)
         self.only_unshown.toggled.connect(lambda only: (self.unshown.setEnabled(not only),
                                                         self.specced.setEnabled(not only)))
-        left = QWidget()
-        box = QVBoxLayout(left)
-        box.setContentsMargins(0, 0, 0, 0)
+        filters = QGridLayout()
+        filters.setHorizontalSpacing(8)
+        filters.setVerticalSpacing(6)
+        filters.addWidget(heading("Demos"), 0, 0)
         row = QHBoxLayout()
-        row.addWidget(self.filter, 2)
+        row.setSpacing(6)
+        row.addWidget(self.filter, 4)
+        row.addSpacing(6)
         row.addWidget(QLabel("Recorder"))
-        row.addWidget(self.recorded_by, 1)
+        row.addWidget(self.recorded_by, 2)
+        row.addSpacing(6)
+        row.addWidget(QLabel("Rules"))
         row.addWidget(self.rules)
-        row.addWidget(self.obj)
-        box.addLayout(row)
+        filters.addLayout(row, 0, 1)
+        filters.addWidget(heading("Frags"), 1, 0)
         row = QHBoxLayout()
+        row.setSpacing(6)
         for label, widget, stretch in (("Fragger", self.killer, 3), ("Victim", self.victim, 2), ("Weapon", self.weapon, 0)):
             row.addWidget(QLabel(label))
             row.addWidget(widget, stretch)
-        row.addWidget(self.great)
-        row.addWidget(self.specced)
-        row.addWidget(self.unshown)
-        row.addWidget(self.only_unshown)
-        box.addLayout(row)
-        box.addWidget(self.demos)
+            row.addSpacing(6)
+        for widget in (self.great, self.obj, self.specced, self.unshown, self.only_unshown):
+            row.addWidget(widget)
+        filters.addLayout(row, 1, 1)
 
-        # what's in the demo: its name, what it is and what plays
-        self.title = QLabel("No demo")
-        font = self.title.font()
-        font.setPointSizeF(font.pointSizeF() * 1.3)
-        font.setBold(True)
-        self.title.setFont(font)
-        self.title.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.info = QLabel("Double-click a demo to play it")
-        self.info.setWordWrap(True)
-        palette = self.info.palette()
-        palette.setColor(QPalette.WindowText, palette.color(QPalette.PlaceholderText))
-        self.info.setPalette(palette)
-        # what plays: one of three, as the game tells
-        self.play_modes = QButtonGroup(self)
-        self.everything_button = QPushButton("Everything")
-        self.only_kills_button = QPushButton("These frags")
-        self.watched_button = QPushButton("While watched")
-        modes = QHBoxLayout()
-        modes.setSpacing(0)
-        for button, text, action in (
-                (self.everything_button, "Play all of the demo", lambda: self.game.send("demoonly") or True),
-                (self.only_kills_button, "Play only the frags listed, from the one selected or the first",
-                 self.only_kills),
-                (self.watched_button, "Play only while one of the fraggers is shown, from the first time",
-                 self.only_watched)):
-            button.setCheckable(True)
-            button.setToolTip(text)
-            button.clicked.connect(lambda _=False, a=action: self.play_mode_clicked(a))
-            self.play_modes.addButton(button)
-            modes.addWidget(button)
-        self.everything_button.setChecked(True)
-        players = QHBoxLayout()
-        players.addWidget(QLabel("Play"))
-        players.addLayout(modes)
-        players.addStretch(1)
-
-        self.kills = self.make_list(["Time", "Fragger", "Victim", "Weapon"])
-        self.rounds = self.make_list(["Time", "Round", "Result"])
-        # a click jumps, so does Enter
-        for tree in (self.kills, self.rounds):
-            tree.itemClicked.connect(self.jump_to_item)
-            tree.itemActivated.connect(self.jump_to_item)
-        self.tabs = tabs = QTabWidget()
-        tabs.addTab(self.kills, "Frags")
-        tabs.addTab(self.rounds, "Rounds")
-        tabs.currentChanged.connect(self.tab_changed)
-        right = QWidget()
-        box = QVBoxLayout(right)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.addWidget(self.title)
-        box.addWidget(self.info)
-        box.addSpacing(4)
-        box.addLayout(players)
-        box.addWidget(tabs)
-
-        splitter = QSplitter()
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([560, 640])
-
-        # playback
-        self.slider = Timeline()
-        self.slider.sliderPressed.connect(lambda: setattr(self, "seeking_slider", True))
-        self.slider.sliderReleased.connect(self.slider_released)
-        self.slider.sliderMoved.connect(lambda v: self.time.setText(f"{clock(v)} / {clock(self.slider.maximum())}"))
-        self.time = QLabel("0:00 / 0:00")
-        self.play = self.make_button(QStyle.SP_MediaPause, "Pause or play (Pause key)", lambda: self.game.send("demopause"))
-        self.speed = QComboBox()
-        self.speed.addItems([s + "×" for s in SPEEDS])
-        self.speed.setCurrentText("1×")
-        self.speed.setToolTip("Playback speed")
-        self.speed.currentTextChanged.connect(lambda s: self.game.send("timescale " + s.rstrip("×")))
-        controls = QHBoxLayout()
-        controls.setSpacing(2)
-        # the kill buttons go to the kills listed
-        for icon, tip, command in ((QStyle.SP_MediaSkipBackward, "Previous round (PgDn)", "demoprevround"),
-                                   (QStyle.SP_MediaSeekBackward, "Previous frag listed (Down)",
-                                    lambda: self.kill_commands("demoprevkill")),
-                                   (None, "Back 10 seconds (Left: 5)", "demoskip -10")):
-            controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
-                *(c() if callable(c) else [c])), "-10 s"))
-        controls.addWidget(self.play)
-        for icon, tip, command in ((None, "Forward 10 seconds (Right: 5)", "demoskip 10"),
-                                   (QStyle.SP_MediaSeekForward, "Next frag listed (Up)",
-                                    lambda: self.kill_commands("demonextkill")),
-                                   (QStyle.SP_MediaSkipForward, "Next round (PgUp)", "demonextround")):
-            controls.addWidget(self.make_button(icon, tip, lambda _=False, c=command: self.game.send(
-                *(c() if callable(c) else [c])), "+10 s"))
-        controls.addSpacing(8)
-        controls.addWidget(self.slider, 1)
-        controls.addSpacing(8)
-        controls.addWidget(self.time)
-        controls.addSpacing(8)
-        controls.addWidget(self.speed)
-        controls.addSpacing(8)
+        # how many there are, what's going on, and recording them
+        self.demo_count = QLabel()
+        self.message = faint(QLabel())
+        # a long one doesn't make the window wider
+        self.message.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.message_timer = QTimer(self, singleShot=True, timeout=self.message.clear)
         self.record_button = QPushButton(theme_icon("media-record", record_icon()), "Record…")
         self.record_button.setToolTip("The demos selected, or all those listed if none is")
         self.record_button.clicked.connect(self.record_demos)
-        controls.addWidget(self.record_button)
+        footer = QHBoxLayout()
+        footer.addWidget(self.demo_count)
+        footer.addSpacing(12)
+        footer.addWidget(self.message, 1)
+        footer.addWidget(self.record_button)
 
         central = QWidget()
         box = QVBoxLayout(central)
-        box.addWidget(splitter, 1)
-        box.addLayout(controls)
+        box.addLayout(filters)
+        box.addWidget(self.demos, 1)
+        box.addLayout(footer)
         self.setCentralWidget(central)
 
         # the videos recorded and to record
@@ -2600,9 +2454,6 @@ class Window(QMainWindow):
         self.addToolBar(toolbar)
         self.folder_action = toolbar.addAction(theme_icon("folder-open", QStyle.SP_DirOpenIcon), "")
         self.folder_action.triggered.connect(self.choose_folder)
-        self.restart_action = toolbar.addAction(theme_icon("view-refresh", QStyle.SP_BrowserReload), "Restart game")
-        self.restart_action.setToolTip("Start the game again, with the demo playing")
-        self.restart_action.triggered.connect(self.start_game)
         toolbar.addSeparator()
         self.viewmodel_action = toolbar.addAction("Viewmodel")
         self.viewmodel_action.setToolTip("The gun in the player's hands")
@@ -2636,16 +2487,10 @@ class Window(QMainWindow):
         toolbar.addAction(videos_action)
         settings_action = toolbar.addAction(theme_icon("configure", QStyle.SP_FileDialogDetailedView), "Settings…")
         settings_action.triggered.connect(lambda: self.edit_settings())
-        # how many demos there are and how many are listed, or how far
-        # indexing them is
-        self.demo_count = QLabel()
-        self.statusBar().addPermanentWidget(self.demo_count)
         self.show_folder()
 
         self.filter.setFocus()
 
-        self.poller = QTimer(interval=100, timeout=self.poll)
-        self.poller.start()
         self.fill_demos()
         # once the window is up: the indexes kept take a moment to load
         self.library_opener = QTimer(self, singleShot=True, interval=0, timeout=lambda: self.library.open(
@@ -2662,8 +2507,7 @@ class Window(QMainWindow):
         if self.keeps_queue:
             self.load_queue()
         else:
-            self.statusBar().showMessage("Another window keeps the videos to record: this one's aren't kept when "
-                                         "it closes")
+            self.tell("Another window keeps the videos to record: this one's aren't kept when it closes")
 
     def make_list(self, columns, fit=True):
         """fit: columns fit their contents, which costs a look at every row
@@ -2677,18 +2521,19 @@ class Window(QMainWindow):
         return tree
 
     def fit_columns(self, tree):
-        for column in range(tree.columnCount() - 1):
+        """The columns fit their contents, but the first, which takes what's
+        left."""
+        for column in range(1, tree.columnCount()):
             tree.resizeColumnToContents(column)
 
-    def make_button(self, icon, tip, action, text=""):
-        button = QToolButton()
-        if icon is not None:
-            button.setIcon(self.style().standardIcon(icon))
+    def tell(self, text, msec=0):
+        """Shows text under the demos, for msec if given."""
+        self.message.setText(text)
+        self.message.setToolTip(text)
+        if msec:
+            self.message_timer.start(msec)
         else:
-            button.setText(text)
-        button.setToolTip(tip)
-        button.clicked.connect(action)
-        return button
+            self.message_timer.stop()
 
     # settings and game
 
@@ -2710,22 +2555,21 @@ class Window(QMainWindow):
         self.fill_demos()
         self.library.open(folder, self.settings.value("exe", ""))
         # the game has the folder it started with
-        if self.ready() and self.game.running():
-            self.start_game()
+        self.game.stop()
 
     def toggle_viewmodel(self, checked):
         val = "1" if checked else "0"
         self.settings.setValue("viewmodel", val)
         if self.game.running():
             self.game.send(f"set cg_drawviewmodel {val}")
-        self.statusBar().showMessage(f"Viewmodel: {'ON' if checked else 'OFF'}", 2000)
+        self.tell(f"Viewmodel: {'ON' if checked else 'OFF'}", 2000)
 
     def toggle_forcemodel(self, checked):
         val = "1" if checked else "0"
         self.settings.setValue("forcemodel", val)
         if self.game.running():
             self.game.send(f"set cg_forceModel {val}")
-        self.statusBar().showMessage(f"Force models: {'ON' if checked else 'OFF'} (Airborne / Winter 1)", 2000)
+        self.tell(f"Force models: {'ON' if checked else 'OFF'} (Airborne / Winter 1)", 2000)
 
     def fill_followed_menu(self):
         """The models of the game files for the player followed, allies and
@@ -2751,7 +2595,7 @@ class Window(QMainWindow):
         if self.game.running():
             self.game.send(f'set cg_followedModel "{allies}"', f'set cg_followedGermanModel "{axis}"')
         self.show_followed()
-        self.statusBar().showMessage(f"The player followed: {allies or 'theirs'} / {axis or 'theirs'}", 3000)
+        self.tell(f"The player followed: {allies or 'theirs'} / {axis or 'theirs'}", 3000)
 
     def fill_camera_menu(self):
         """Where the camera is for the recorder and for the player followed,
@@ -2776,8 +2620,8 @@ class Window(QMainWindow):
             self.game.send(*(f"set {cvar} {value}" for cvar, value in camera_cvars(cameras(self.settings))))
         self.show_camera()
         recorder, followed = cameras(self.settings)
-        self.statusBar().showMessage(f"The recorder {RECORDER_CAMERAS[recorder][0].lower()}, the player followed "
-                                     f"{FOLLOWED_CAMERAS[followed][0].lower()}", 3000)
+        self.tell(f"The recorder {RECORDER_CAMERAS[recorder][0].lower()}, the player followed "
+                  f"{FOLLOWED_CAMERAS[followed][0].lower()}", 3000)
 
     def show_camera(self):
         recorder, followed = cameras(self.settings)
@@ -2791,18 +2635,6 @@ class Window(QMainWindow):
         allies, axis = followed_models(self.settings)
         self.followed_button.setToolTip("The models of the player you spectate, and only them, when they're allies "
                                         f"and axis, in videos too: now {allies or 'theirs'} / {axis or 'theirs'}")
-
-    def get_kill_times(self):
-        """Pre-kill and post-kill times in msec from settings for playback."""
-        try:
-            kb = int(float(self.settings.value("kill_before", 4.0)) * 1000)
-        except (ValueError, TypeError):
-            kb = KILL_BEFORE
-        try:
-            ka = int(float(self.settings.value("kill_after", 2.0)) * 1000)
-        except (ValueError, TypeError):
-            ka = KILL_AFTER
-        return max(500, kb), max(500, ka)
 
     def get_rec_kill_times(self):
         """Pre-kill and post-kill times in msec from settings for recording."""
@@ -2820,18 +2652,13 @@ class Window(QMainWindow):
         if SettingsDialog(self.settings, self, tab).exec():
             self.show_folder()
             self.fill_demos()
-            self.fill_kills()
-            kb = self.settings.value("kill_before", "4.0")
-            ka = self.settings.value("kill_after", "2.0")
-            if self.game.running():
-                self.game.send(f"seta cl_demoKillBefore {kb}", f"seta cl_demoKillAfter {ka}")
             self.library.open(self.settings.value("demos", ""), self.settings.value("exe", ""))
-            if self.ready() and self.game.running():
-                self.start_game()
+            # the next one starts with them
+            self.game.stop()
 
     def start_game(self):
         if not self.ready():
-            self.statusBar().showMessage("Set the game program, game files and demos folders in Settings")
+            self.tell("Set the game program, game files and demos folders in Settings")
             return
         self.game.stop()
         try:
@@ -2846,18 +2673,18 @@ class Window(QMainWindow):
                         viewmodel=vm, forcemodel=fm, kill_before=kb, kill_after=ka,
                         followed=followed_models(self.settings), censor=censored_words(self.settings),
                         camera=cameras(self.settings))
-        self.statusBar().showMessage("Starting the game…")
+        self.tell("Starting the game…", 5000)
+        # for its keys that go to frags
+        self.game.send(*self.kill_filter().commands())
         if self.pending_demo:
             self.game.send("demo " + quoted(self.pending_demo))
 
     def game_output(self, line):
         if line.startswith("ERROR:") or "Couldn't load" in line or line.startswith("The game didn't start"):
-            self.statusBar().showMessage(line.replace("ERROR: ", ""))
+            self.tell(line.replace("ERROR: ", ""))
 
     def game_exited(self):
-        self.statusBar().showMessage("The game quit. Double-click a demo or use Restart game to start it again.")
-        self.state = {}
-        self.show_state()
+        self.tell("The game quit. Double-click a demo to start it again.", 5000)
 
     # demos
 
@@ -2951,12 +2778,11 @@ class Window(QMainWindow):
                           self.unshown.isChecked(), self.only_unshown.isChecked())
 
     def apply_kill_filter(self):
-        """The demos with kills the filter keeps, and those of the demo
-        playing."""
+        """The demos with kills the filter keeps. The game playing one is told
+        it too, for its keys that go to frags."""
         self.kill_filter_timer.stop()
         self.filter_demos()
-        self.fill_kills()
-        self.show_state()
+        self.game.send(*self.kill_filter().commands())
 
     def filter_demos(self):
         """Shows the demos with each word of one of the searches (separated
@@ -2969,6 +2795,7 @@ class Window(QMainWindow):
         recorders = [clean_name(name) for name in self.recorded_by.names()]
         kill_filter = self.kill_filter()
         found_any = False
+        self.demo_frags = {}
         for name, item in self.demo_items.items():
             summary = self.library.demos.get(name) or {}
             found, shown = {}, not rules or summary.get("rules") in (rules, "both")
@@ -2979,10 +2806,13 @@ class Window(QMainWindow):
             if shown and searches:
                 hits = search_demo(name, summary, searches)
                 shown, found = hits is not None, hits or {}
+            count = len(summary.get("kills", []))
             if shown and kill_filter:
                 count, found = filter_kills(summary, kill_filter)
                 shown = count > 0
             item.setHidden(not shown)
+            if shown:
+                self.demo_frags[name] = count
             best = sorted(found.values(), key=lambda p: (-p[1], p[0].lower()))
             item.setText(COL_PLAYER, ", ".join(player_kills(p) for p in best))
             found_any |= shown and bool(best)
@@ -3000,9 +2830,13 @@ class Window(QMainWindow):
         self.demos.setColumnHidden(COL_PLAYER, not found_any)
         self.fit_columns(self.demos)
         self.show_demo_count()
-        self.show_record_button()
 
     def show_demo_count(self):
+        """How many demos there are, how many are listed and their frags, or
+        how far indexing them is; what Record is for."""
+        chosen = self.chosen_demos()
+        self.record_button.setText(f"Record {len(chosen):,} demo{'s' if len(chosen) != 1 else ''}…" if chosen else "Record…")
+        self.record_button.setEnabled(bool(chosen))
         progress = self.library.progress()
         if progress:
             self.demo_count.setText(f"Indexing demos: {progress[0]:,} of {progress[1]:,}")
@@ -3013,7 +2847,16 @@ class Window(QMainWindow):
         summaries = [self.library.demos.get(name) for name in self.demo_items]
         indexed = sum(summary is not None for summary in summaries)
         short = sum(summary is not None and summary["duration"] < MIN_LENGTH for summary in summaries)
-        self.demo_count.setText(f"{found:,} demos" if listed == found else f"{listed:,} of {found:,} demos listed")
+        if self.demos.selectedItems():
+            text = f"{len(chosen):,} of the {listed:,} demos selected"
+        else:
+            text = f"{found:,} demo{'s' if found != 1 else ''}" if listed == found else f"{listed:,} of {found:,} demos listed"
+        # at most what the clips take, as those of frags close together are one
+        frags = sum(self.demo_frags.get(name, 0) for name in chosen)
+        if frags:
+            before, after = self.get_rec_kill_times()
+            text += f", {frags:,} frag{'s' if frags != 1 else ''}, {about(frags * (before + after))}"
+        self.demo_count.setText(text)
         tip = [f"{found:,} demos in the folder, {indexed:,} of them indexed"]
         if found > indexed:
             tip.append(f"{found - indexed:,} couldn't be indexed")
@@ -3030,10 +2873,15 @@ class Window(QMainWindow):
         return (self.demos_of(self.demos.selectedItems())
                 or self.demos_of(root.child(i) for i in range(root.childCount())))
 
-    def show_record_button(self):
-        count = len(self.chosen_demos())
-        self.record_button.setText(f"Record {count:,} demo{'s' if count != 1 else ''}…" if count else "Record…")
-        self.record_button.setEnabled(bool(count))
+    def players_listed(self):
+        """The players of the demos listed, those with the most frags first,
+        for the menus of Fragger and Victim: (players, labels)."""
+        players = {}
+        for name in self.demo_frags:
+            for key, (player, kills) in (self.library.demos.get(name) or {}).get("players", {}).items():
+                players.setdefault(key, [player, 0])[1] += kills
+        ranked = sorted(players.values(), key=lambda p: (-p[1], p[0].lower()))[:self.MOST_PLAYERS]
+        return [player for player, _ in ranked], {player: f"{player} ({kills})" for player, kills in ranked}
 
     def library_changed(self):
         # those who recorded the most first
@@ -3052,215 +2900,7 @@ class Window(QMainWindow):
             self.game.send("demo " + quoted(name))
         else:
             self.start_game()
-        self.statusBar().showMessage("Loading " + name + "…")
-
-    # what the game reports
-
-    def poll(self):
-        state = self.game.read_json("demostate.json") if self.game.running() else None
-        if state is None or state == self.state:
-            return
-        if state.get("demo") and state.get("demo") != self.state.get("demo"):
-            self.load_index(state["demo"])
-        self.state = state
-        self.show_state()
-
-    def load_index(self, demo):
-        index = self.game.read_json("demoindex.json")
-        self.index = kill_specced(kill_streaks(kill_levels(index))) if index and index.get("demo") == demo else None
-        self.pending_demo = None
-        self.statusBar().showMessage("Playing " + demo)
-        self.fill_index()
-
-    def show_state(self):
-        demo = self.state.get("demo")
-        duration = self.state.get("duration", 0) if demo else 0
-        time = self.state.get("time", 0) if demo else 0
-        paused = self.state.get("paused", False)
-        self.play.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay if paused else QStyle.SP_MediaPause))
-        if not self.seeking_slider:
-            self.slider.setMaximum(duration)
-            self.slider.setValue(time)
-            self.time.setText(f"{clock(time)} / {clock(duration)}")
-        only = self.state.get("only")
-        player = self.state.get("player", "")
-        kill_filter = self.kill_filter()
-        # of the kill filter, without a player
-        others = kill_filter.words(killers=False)
-        if only in ("kills", "multikills"):
-            mode = ("only the frags" if only == "kills" else "only the multi-kills") + (
-                " by " + player + others if player else " of whoever is shown" + others if kill_filter.shown
-                else kill_filter.words())
-        elif only in ("shownkills", "shownmultikills"):
-            mode = ("only the frags" if only == "shownkills" else "only the multi-kills") + " of whoever is shown" + others
-        elif only == "watched":
-            mode = "only while " + (player or or_list(kill_filter.names)) + " is watched"
-        else:
-            mode = ""
-        self.show_play_mode()
-        if not demo:
-            self.title.setText("No demo")
-            self.info.setText("Double-click a demo to play it")
-            if not self.pending_demo:
-                self.index = None
-                self.fill_index()
-        elif self.index:
-            # its file name, and the folders it's in with the rest
-            folder, _, name = demo.rpartition("/")
-            self.title.setText(name)
-            maps = ", ".join(m["map"] + (f" ({m['rules']})" if m.get("rules") in ("realism", "default") else "")
-                             for m in self.index["maps"])
-            recorder = self.index["recorder"]["name"]
-            parts = [folder.replace("/", " › ")] if folder else []
-            parts += [maps, clock(duration)] + ([f"recorded by {recorder}"] if recorder else [])
-            text = html.escape(" · ".join(parts)) + (" (truncated)" if self.index.get("truncated") else "")
-            text += f"<br>Playing {html.escape(mode)}" if mode else ""
-            text += " — paused" if paused else ""
-            self.info.setText(text)
-
-    def play_mode_clicked(self, action):
-        if action():
-            # checked until the game tells it plays that
-            self.play_mode_asked = monotonic()
-        else:
-            self.show_play_mode(True)
-
-    def show_play_mode(self, now=False):
-        """The Play button of what the game plays, but for a second after
-        one is clicked."""
-        if not now and monotonic() - self.play_mode_asked < 1:
-            return
-        only = self.state.get("only") or ""
-        (self.watched_button if only == "watched" else self.only_kills_button if only
-         else self.everything_button).setChecked(True)
-
-    def fill_index(self):
-        index = self.index or {}
-        names = {}
-        for kill in index.get("kills", []):
-            names.update((clean_name(n), n) for n in (kill["killerName"], kill["victimName"]) if n)
-        # for the menus of Killer and Victim
-        self.killer.players = self.victim.players = sorted(names.values(), key=str.lower)
-
-        self.rounds.clear()
-        ends = index.get("roundEnds", [])
-        starts = [0] + [r["time"] for r in index.get("rounds", [])]
-        for number, start in enumerate(starts, 1):
-            end = starts[number] if number < len(starts) else index.get("duration", 0) + 1
-            result = next((e["text"] for e in ends if start <= e["time"] < end), "")
-            item = QTreeWidgetItem([clock(start), str(number), result])
-            item.setData(0, Qt.UserRole, start)
-            self.rounds.addTopLevelItem(item)
-        self.round_marks = [(start, f"Round {number}") for number, start in enumerate(starts, 1) if number > 1]
-        self.fill_kills()
-
-    def listed_kills(self, kill_filter):
-        """The kills to list, as {id(kill): (kill, from, to)} in order, with when
-        they can be played, as demoonly kills plays them: those of the
-        filter's killers, or whoever's is shown, while they're shown, else
-        anyone's. Team kills too, for the clips of the kills near them; the
-        filter's victims and weapons aren't looked at."""
-        index = self.index or {}
-        if not kill_filter.by_shown():
-            return {id(k): (k, 0, index.get("duration", 0) + KILL_AFTER) for k in index.get("kills", [])}
-        return {id(k): (k, start, end) for k, start, end in filter_shown_kills(index, kill_filter)
-                if kill_filter.has_killer(clean_name(k["killerName"]))}
-
-    def kill_commands(self, command):
-        """To the next or previous kill listed (demonextkill or demoprevkill),
-        telling the game the kill filter first, which it may not have yet."""
-        return [*self.kill_filter().commands(), command]
-
-    def switches(self):
-        """When the player shown changes: the kills of a player or of whoever
-        is shown aren't joined across it, all the kills are."""
-        return [w["time"] for w in (self.index or {}).get("watched", [])] if self.kill_filter().by_shown() else []
-
-    def fill_kills(self):
-        """The kills the filter keeps, listed, each item with when it starts
-        and its clips: the stretches demoonly plays. Team kills aren't kills:
-        they're only in the clips of a kill of their killer near them, as
-        demoonly plays. Nor are the deaths of the player shown. The game is
-        told the filter, for the kill keys and demoonly."""
-        kill_filter = self.kill_filter()
-        kills = list(self.listed_kills(kill_filter).values())
-        kb, ka = self.get_kill_times()
-        spans = {id(kill): kill_span(self.index or {}, kill, start, end, kb, ka) for kill, start, end in kills}
-        switches = self.switches()
-        # items keep their kills by place in the index: Qt gives copies back
-        place = {id(kill): i for i, kill in enumerate((self.index or {}).get("kills", []))}
-        deaths = deaths_shown(self.index or {})
-        self.kills.clear()
-        self.kill_marks = []
-        for kill, _, _ in kills:
-            if kill.get("teamKill") or is_grenade(kill) or id(kill) in deaths or not kill_filter.keeps(kill, killer=False):
-                continue
-            killer, victim, how = kill["killerName"], kill["victimName"], kill["text"]
-            span = spans[id(kill)]
-            clips = stretches([span] + [spans[id(k)] for k, _, _ in team_kills_with(kills, [kill])], switches)
-            item = QTreeWidgetItem([clock(kill["time"]), killer, victim, WEAPONS[weapon_of(kill)]])
-            for column in range(4):
-                item.setToolTip(column, plain_tip(how))
-            item.setData(0, Qt.UserRole, span[0])
-            item.setData(1, Qt.UserRole, clips)
-            item.setData(2, Qt.UserRole, [place[id(kill)]])
-            self.kills.addTopLevelItem(item)
-            self.kill_marks.append((kill["time"], how))
-        # of all those of the demo playing, when some are left out
-        listed = self.kills.topLevelItemCount()
-        if kill_filter and self.index:
-            every = sum(1 for kill in (self.index or {}).get("kills", [])
-                        if not kill.get("teamKill") and not is_grenade(kill) and id(kill) not in deaths)
-            self.tabs.setTabText(0, f"Frags ({listed} of {every})")
-        else:
-            self.tabs.setTabText(0, f"Frags ({listed})")
-        self.tabs.setTabText(1, f"Rounds ({self.rounds.topLevelItemCount()})")
-        # for Up and Down too
-        self.game.send(*kill_filter.commands())
-        self.tab_changed()
-
-    def tab_changed(self):
-        """The slider marks the kills listed and the rounds."""
-        self.slider.set_marks(self.kill_marks, self.round_marks)
-
-    # actions
-
-    def jump_to_item(self, item):
-        # a double-click also activates the item: one jump is enough
-        if item is self.last_jump[0] and monotonic() - self.last_jump[1] < 1:
-            return
-        self.last_jump = (item, monotonic())
-        self.game.send("demoseek " + seconds(item.data(0, Qt.UserRole)))
-
-    def slider_released(self):
-        self.seeking_slider = False
-        self.game.send("demoseek " + seconds(self.slider.value()))
-
-    def only_kills(self):
-        """Plays the kills listed, from the one selected or the first; False
-        if there are none."""
-        item = self.kills.currentItem() or self.kills.topLevelItem(0)
-        if not item:
-            QMessageBox.information(self, "Only these frags", "There are no frags to play.")
-            return False
-        self.game.send(*self.kill_filter().commands(), "demoseek " + seconds(item.data(0, Qt.UserRole)),
-                       "demoonly kills")
-        return True
-
-    def only_watched(self):
-        """Plays while one of the filter's killers is watched, from the first
-        time; False if none is."""
-        kill_filter = self.kill_filter()
-        if not kill_filter.killers:
-            QMessageBox.information(self, "Only while watched", "Type a fragger first.")
-            return False
-        watched = (self.index or {}).get("watched", [])
-        start = next((w["time"] for w in watched if kill_filter.has_killer(clean_name(w["name"]))), None)
-        if start is None:
-            QMessageBox.information(self, "Only while watched", or_list(kill_filter.names) + " isn't watched in this demo.")
-            return False
-        self.game.send(*kill_filter.commands(), "demoseek " + seconds(start), "demoonly watched")
-        return True
+        self.tell("Playing " + name, 5000)
 
     # recording
 
@@ -3416,7 +3056,7 @@ class Window(QMainWindow):
                 json.dump([{key: value for key, value in job.items() if key != "item"} for job in self.jobs], f)
             os.replace(path + ".new", path)
         except OSError as e:
-            self.statusBar().showMessage(f"Couldn't keep the videos to record: {e}")
+            self.tell(f"Couldn't keep the videos to record: {e}")
 
     def load_queue(self):
         """The videos kept: the one recording goes on, in its turn."""
@@ -3449,17 +3089,17 @@ class Window(QMainWindow):
         self.recorder = None
         if video:
             job["status"], job["output"] = "done", video
-            self.statusBar().showMessage("Recorded " + video)
+            self.tell("Recorded " + video)
             if job.get("numbers"):
                 try:
                     write_clip_list(job["clips"], video)
                 except OSError as e:
-                    self.statusBar().showMessage(f"Recorded {video}, but couldn't write its list of clips: {e}")
+                    self.tell(f"Recorded {video}, but couldn't write its list of clips: {e}")
         elif error in ("paused", "canceled"):
             job["status"] = error
         else:
             job["status"], job["error"] = "failed", error
-            self.statusBar().showMessage(f"Couldn't record {os.path.basename(job['output'])}: {error.splitlines()[0]}")
+            self.tell(f"Couldn't record {os.path.basename(job['output'])}: {error.splitlines()[0]}")
         self.show_job(job)
         self.save_queue()
         self.next_job()
@@ -3562,7 +3202,6 @@ class Window(QMainWindow):
             event.ignore()
             return
         self.closing = True
-        self.poller.stop()
         self.library_opener.stop()
         self.library.stop()
         if self.recorder and self.keeps_queue:

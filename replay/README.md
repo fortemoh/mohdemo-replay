@@ -1,9 +1,8 @@
 # MoH Demo Replay
 
-Rewatch Medal of Honor: Allied Assault demos (`.dm3`) with buttons: the list
-of demos, their frags and rounds, play/pause, speed and seeking. It needs
-OpenMoHAA built from this repository, which adds the demo commands, Python 3
-and PySide6.
+Make videos of the frags in Medal of Honor: Allied Assault demos (`.dm3`): a
+list of demos, filters for the frags you want, and Record. It needs OpenMoHAA
+built from this repository, which adds the demo commands, Python 3 and PySide6.
 
     python3 replay/mohreplay.py [--exe PATH] [--game FOLDER] [--demos FOLDER] [DEMO]
 
@@ -15,10 +14,10 @@ their demos are shown, and a demo there is named by its path in the folder
 of demos (the filter finds a folder's name too). The list shows each
 demo's length (demos under 5 minutes aren't listed), recorder, levels and rules (default or realism servers, told by the
 recorder's speeds with each weapon; blank when they spectated or played
-too little), the menu next to the filter shows only default or realism
+too little), Rules shows only default or realism
 demos, Recorder only the demos recorded by the players named (parts of
 names separated by commas, as the filter takes them; its menu lists the
-recorders, those of the most demos first), and the filter finds demos by
+recorders, those of the most demos first), and the search finds demos by
 name, level or player, those with all of its words, and commas separate
 searches (`pstn v2, tommeh` finds pstN's demos on v2 and tommeh's demos):
 for a player, it shows their frags in each demo. In all of these, a `*`
@@ -26,25 +25,28 @@ stands for any one character: `gr*m` finds Grim and Gr1m (not Grm or
 Grimm), as Fragger and Victim below and the game's `demofilter` take it. For that, `mohdemoindex`, built next to the
 game, indexes the demos in the background the first time (about two minutes
 for 700, and again once after it changes), and the indexes are kept in
-`~/.cache/mohdemo-replay`. The bottom right tells how far indexing is, then
-how many demos there are and how many are listed ("53 of 5,139 demos
-listed"), its tip why the others aren't.
+`~/.cache/mohdemo-replay`. Under the list, it tells how far indexing is, then
+how many demos there are and how many are listed, with their frags and about
+how long a video of them is ("53 of 5,139 demos listed, 412 frags, about 34
+min", at most, as frags close together share a clip), its tip why the others
+aren't listed.
 
-Fragger, Victim and Weapon, under the filter, choose the frags, those of
-the demos listed and of the demo playing, each on its own or together:
+Fragger, Victim and Weapon, under the search, choose the frags, those of
+the demos listed, each on its own or together:
 Fragger and Victim take parts of names, separated by commas, as the filter does
 (`pstn, tommeh` finds pstN's frags under any clan tag, and tommeh's), and
-their menus add the players of the demo playing. A player is who they are,
+their menus add the players of the demos listed, those with the most frags
+first. A player is who they are,
 not the name they take: one who renames to another player's name (as a
 team taking one player's name for fun) keeps their frags under their own,
 while one who just renames goes by the new name; Weapon ticks sniper, rifle,
 SMG, StG / BAR (the StG 44 and the BAR, which the game calls machine guns),
 shotgun, pistol, bazooka, melee (a hit with a gun's butt) or other, as the
 death messages tell (also the French, German, Spanish and Portuguese ones
-seen; the French write a rifle frag as a sniper frag), and Obj maps only
+seen; the French write a rifle frag as a sniper frag), and Obj maps
 keeps the frags made on the objective maps (the levels in `obj/`, as
 obj_team4 or harbor), not on the deathmatch ones (`dm/`), as a demo can
-have both. Great frags leaves out the slow scoped snipes: sniper frags made
+have both. Great leaves out the slow scoped snipes: sniper frags made
 with the scope on for over a second while standing still, as the fragger's
 view shows them; no-scopes, quick scopes, shots on the move and streaks
 (frags of the same fragger at most 5 s apart, which one clip shows) stay,
@@ -64,7 +66,7 @@ drawn closed, from the map, until the demo has it. With Specced frags too, it
 keeps all but the recorder's own. Only unspecced keeps
 only those frags, of the Fraggers, or of anyone without one. The
 list then shows only the demos with such frags, with how many of each
-fragger, and the demo playing lists only those. A player's frags are only those made while the
+fragger. A player's frags are only those made while the
 demo shows them (the recorder playing, or the player the recorder follows),
 and only while they're shown, so a video of them never shows someone else
 (Unspecced frags adds the others, from behind them).
@@ -72,11 +74,7 @@ and only while they're shown, so a video of them never shows someone else
 while they play and those of the players they follow, while they follow
 them.
 
-Double-click a demo to play it (the game starts then, or with Restart game
-in the toolbar, where the folder's button chooses another), click a frag or
-a round to jump to it; hovering a frag tells how it was made. Play chooses
-what plays: Everything, These frags, the frags listed, from the one
-selected or the first, or While watched, while one of the fraggers is shown.
+Double-click a demo to watch it in the game, with the keys below.
 Settings also sets how long
 each frag plays before and after it (4 and 2 seconds) and the words
 Censor stars out of the players' names and the messages, in the game and
@@ -92,9 +90,6 @@ spectates, and only them (the camera that follows them is behind them),
 one when they're Allies and one when they're Axis, from that team's player
 models in the game files, or as in the demo; videos have them too
 (`cg_followedModel`, `cg_followedGermanModel`).
-The time slider marks the frags listed under it and the rounds above it:
-hovering one tells what it is, elsewhere the time there, and a click jumps
-there.
 
 Record makes MP4s of the demos selected, or in the folders selected, or of
 all those listed when none is, as its button tells ("Record 148 demos…"):
