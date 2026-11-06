@@ -336,7 +336,7 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	if ( snap->ps.stats[STAT_DAMAGEDIR] != cl_demoHits.ownDir ) {
 		cl_demoHits.ownDir = snap->ps.stats[STAT_DAMAGEDIR];
 		// no mark for hits from behind someone, as for a spectator
-		if ( !CL_DemoShownFromBehind( &snap->ps, NULL ) ) {
+		if ( !CL_DemoShownFromBehind( &snap->ps ) ) {
 			cl_demoHits.dir = cl_demoHits.ownDir;
 		}
 	}
@@ -376,6 +376,18 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	hits->followed = qtrue;
 	hits->health = health;
 	CL_DemoFollowedHitsKeep( hits );
+}
+
+/*
+================
+CL_DemoFollowedFromEyes
+
+Added in OPM
+Whether the last snapshot shows the player followed from their eyes
+================
+*/
+qboolean CL_DemoFollowedFromEyes( void ) {
+	return cl_demoHits.client >= 0;
 }
 
 /*

@@ -2025,7 +2025,8 @@ void UI_Update(void)
 
         if (ui_hud && !view3d->LetterboxActive()) {
             // draw the health hud
-            if (hud_health) {
+            // Changed in OPM: not in a demo seen as a spectator
+            if (hud_health && !CL_DemoHidesHealth()) {
                 hud_health->ForceShow();
                 frame = uWinMan.getFrame();
                 hud_health->GetContainerWidget()->Display(frame, 1.0);
@@ -2508,7 +2509,12 @@ void UI_Update(void)
         }
 
         if (hud_health) {
-            hud_health->ForceShow();
+            // Changed in OPM: not in a demo seen as a spectator
+            if (CL_DemoHidesHealth()) {
+                hud_health->ForceHide();
+            } else {
+                hud_health->ForceShow();
+            }
         }
 
         //

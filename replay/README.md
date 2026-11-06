@@ -61,7 +61,7 @@ while they followed them; Unspecced those made while the demo shows someone
 else, filmed from behind the fragger, when the demo has them for 3 s before and
 their victim in view then (about half of those frags): the server only sends
 the players the recorder could see. The HUD of those is a spectator's, with
-their name but not their health, not in the demo. A door the demo doesn't have
+their name but no health. A door the demo doesn't have
 there is drawn closed, from the map, until the demo has it. With none of them,
 it's anyone's frags, as the demo shows them; with a Fragger, those made while
 the demo shows them, and only while they're shown, so a video of them never
@@ -213,7 +213,8 @@ they are, look, crouch and zoom are theirs in the demo, and their arms and
 gun are drawn from the gun in their hand, firing, rechambering and
 reloading as it does, with their lean from their body (their ammo isn't in
 the demo), and their frags show "You killed <victim>", which the server told
-only them. The HUD shows their health, and their hits kick their view, flash
+only them. The HUD shows their health, which the spectator views don't, and
+their hits kick their view, flash
 the screen red and mark the compass as they did for them, made again from
 their health dropping (the demo doesn't have them for a player followed) and
 from the shot or explosion that came with it. A hit with neither, like a
@@ -223,10 +224,10 @@ instead, as their own game showed them (the server fires from where their
 game puts the eye, and the demo has the start of each shot). The other way,
 `cg_recordercamera 1` shows the recorder from behind while they play, where
 the camera following a player is, as a spectator following them sees them:
-without their scope, crosshair, weapons, ammo or hits on the screen, and with
-their health as theirs. Both have the name of who is shown on the left, with
-their health, as a spectator has. Record chooses both, for
-videos too.
+without their scope, crosshair, weapons, ammo, health or hits on the screen.
+Both have the name of who is shown on the left, as a spectator has. Record
+chooses both, for videos too. Health only shows from someone's own eyes: the
+recorder playing, or a player followed with `cg_followcamera 2`.
 
 Demos don't show the server's messages about players coming and going
 ("<player> has entered the battle", which it tells everyone each time a

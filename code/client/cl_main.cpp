@@ -1829,14 +1829,29 @@ Whose back cgame shows, right before it draws the time playing: the killer
 of the kill demoonly plays while they aren't shown (demofilter unshown)
 ====================
 */
-qboolean CL_DemoShownFromBehind( const playerState_t *ps, qboolean *other ) {
-	qboolean	unshown = clc.demoplaying && cl_demoBehind->integer >= 0;
-
-	if ( other ) {
-		*other = unshown;
-	}
-	return unshown || ( clc.demoplaying && Cvar_VariableIntegerValue( "cg_recordercamera" )
+qboolean CL_DemoShownFromBehind( const playerState_t *ps ) {
+	return ( clc.demoplaying && cl_demoBehind->integer >= 0 ) || ( clc.demoplaying && Cvar_VariableIntegerValue( "cg_recordercamera" )
 		&& !( ps->pm_flags & ( PMF_SPECTATING | PMF_CAMERA_VIEW ) ) );
+}
+
+/*
+====================
+CL_DemoHidesHealth
+
+Added in OPM
+Whether the HUD leaves out the health: in a demo, seen as a spectator sees
+someone, from behind or as the server shows them. Seen from their own eyes,
+the recorder playing or a player followed (cg_followcamera 2), it stays.
+====================
+*/
+qboolean CL_DemoHidesHealth( void ) {
+	const playerState_t	*ps = &cl.snap.ps;
+
+	if ( !clc.demoplaying ) {
+		return qfalse;
+	}
+	return CL_DemoShownFromBehind( ps )
+		|| ( ( ps->pm_flags & ( PMF_SPECTATING | PMF_CAMERA_VIEW ) ) && !CL_DemoFollowedFromEyes() );
 }
 
 /*
@@ -1846,17 +1861,14 @@ CL_DemoSpectatorHud
 Added in OPM
 What the HUD, drawn from cl.snap (the snapshots kept stay as they came), has
 for a spectator following someone, while a demo shows them from behind: no
-weapons, ammo, crosshair or scope, and no red flash. The health is theirs for
-the recorder; for a player not followed the demo doesn't have it, so as a
-spectator's own
+weapons, ammo, crosshair or scope, and no red flash
 ====================
 */
 void CL_DemoSpectatorHud( void ) {
 	playerState_t	*ps = &cl.snap.ps;
-	qboolean		other;
 	int				i;
 
-	if ( !CL_DemoShownFromBehind( ps, &other ) ) {
+	if ( !CL_DemoShownFromBehind( ps ) ) {
 		return;
 	}
 
@@ -1875,9 +1887,6 @@ void CL_DemoSpectatorHud( void ) {
 		ps->ammo_amount[i] = 0;
 	}
 	ps->blend[3] = 0;
-	if ( other ) {
-		ps->stats[STAT_HEALTH] = ps->stats[STAT_MAXHEALTH];
-	}
 }
 
 void CL_UpdateDemoBehind( void ) {

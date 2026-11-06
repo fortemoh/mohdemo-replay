@@ -888,13 +888,14 @@ void CG_DrawPlayerEntInfo()
 
     // Added in OPM
     //  The player a demo shows from behind or from their eyes, as a spectator
-    //  following them has it; how a player not followed is doing isn't in it
+    //  following them has it; a demo has no health here
     if (CG_DemoBehind() >= 0) {
         iClientNum = CG_DemoBehind();
-        iHealth    = -1;
     } else if (CG_RecorderBehind() || (cg.snap->snapFlags & SNAPFLAG_FOLLOWED_FROM_EYES)) {
         iClientNum = cg.snap->ps.clientNum;
-        iHealth    = cg.snap->ps.stats[STAT_HEALTH];
+    }
+    if (cg.demoPlayback) {
+        iHealth = -1;
     }
 
     if (iClientNum == -1) {
