@@ -2384,6 +2384,8 @@ class Recorder(QObject):
         if len(self.parts) == 1:
             self.finish(video=self.parts[0])
             return
+        # it has nothing left to play, and joining a long video takes minutes
+        self.game.stop()
         self.on_progress(self.job, f"Joining {len(self.parts)} clips…")
         folder = self.parts_dir
         with open(os.path.join(folder, "parts.txt"), "w") as f:

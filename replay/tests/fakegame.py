@@ -22,6 +22,7 @@ Environment, for the tests:
     FAKEGAME_FFMPEG_FAIL    1: recordings fail as if FFmpeg were missing,
                             mid: FFmpeg quits half a second into them,
                             join: joining videos fails
+    FAKEGAME_JOIN_WAIT      seconds joining videos takes (0)
 """
 
 import json
@@ -67,6 +68,7 @@ def join_tool(args):
     if os.environ.get("FAKEGAME_FFMPEG_FAIL") == "join":
         print("fakegame: can't join")
         return 1
+    time.sleep(float(os.environ.get("FAKEGAME_JOIN_WAIT", "0")))
     with open(args[args.index("-i") + 1]) as f:
         parts = [line.strip()[len("file '"):-1] for line in f if line.strip()]
     joined = []

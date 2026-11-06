@@ -2041,6 +2041,18 @@ class TestRecording(FakeGameCase):
         self.assertIn("can't join", job["item"].toolTip(2))
         self.assertFalse(os.path.exists(self.videos) and os.listdir(self.videos))
 
+    def test_game_closed_while_joining(self):
+        self.add_demo("second", DEMO)
+        window = self.window()
+        self.ready(window, "first", "second")
+        with mock.patch.dict(os.environ, {"FAKEGAME_JOIN_WAIT": "2"}):
+            self.record(window, lambda d: d.join.setChecked(True))
+            self.assertTrue(wait_until(lambda: window.recorder and window.recorder.phase == "joining", 20))
+            self.assertFalse(window.recorder.game.running())
+            job, = self.done(window)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(len(self.video(os.path.basename(job["output"]))["joined"]), 2)
+
     def record_failing(self, names, numbers=False, wait=True):
         """Records t-'s frags in demos, one video for all: the job, and the
         commands the games were sent, till it's done if wait."""
