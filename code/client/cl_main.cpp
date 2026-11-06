@@ -1929,7 +1929,9 @@ CL_RunDemoOnly
 Jumps over what demoonly doesn't play, and pauses after the last of it, as
 it will be in ahead msec. A stretch ends before the snapshot that comes at
 its end is read: the HUD goes by the one read, ahead of the time drawn, and
-it may be of the round over, with no HUD, or of someone else
+it may be of the round over, with no HUD, or of someone else. The snapshot
+the next frame reads is read now, before that frame is saved: it may come
+long after the last one, and at a new round the time jumps to it.
 ====================
 */
 static void CL_RunDemoOnly( int ahead ) {
@@ -1940,8 +1942,15 @@ static void CL_RunDemoOnly( int ahead ) {
 		return;
 	}
 
+	while ( cl.serverTime + ahead >= cl.snap.serverTime ) {
+		CL_ReadDemoMessage();
+		if ( clc.state != CA_ACTIVE ) {
+			return;		// end of demo
+		}
+	}
+
 	time = CL_DemoTime() + ahead;
-	if ( !CL_DemoNextStretch( time + CL_DemoSnapshotMsec(), &start, &end, NULL ) ) {
+	if ( !CL_DemoNextStretch( Q_max( time + CL_DemoSnapshotMsec(), cl.snap.serverTime - clc.demoStartTime ), &start, &end, NULL ) ) {
 		Com_Printf( "Nothing more to play, paused\n" );
 		cl_demoOnly = DEMOONLY_ALL;
 		Cvar_Set( "cl_freezeDemo", "1" );
