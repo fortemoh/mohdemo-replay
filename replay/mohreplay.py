@@ -689,10 +689,123 @@ def search_demo(name, summary, searches):
     return found if any_found else None
 
 
+INDEX_FILE = ".mohdemo-index"  # in each folder of demos
+
+
+@functools.lru_cache(maxsize=256)
+def folder_key(folder):
+    """A name for a folder of demos in the cache folder."""
+    return hashlib.sha1(folder.encode()).hexdigest()[:12]
+
+
+class DemoIndexes:
+    """The indexes of the demos of a folder, in one file next to them, so they
+    go where the demos go and count whichever folder above them is opened; in
+    the cache folder (fallback) when that can't be written. One file and not one
+    for each demo, as a spinning disk takes minutes to open thousands of small
+    files. A line for each: what's known of it in JSON ({"demo": its file name,
+    "made": when}), a tab, then its index as mohdemoindex wrote it; the last one
+    of a demo counts."""
+
+    def __init__(self, folder, fallback):
+        self.paths = (os.path.join(folder, INDEX_FILE), fallback)
+        self.read()
+
+    def read(self):
+        self.kept = {}  # file name of a demo: (path, when made, where its index is, how long)
+        self.replaced = 0  # bytes of lines that don't count any more
+        self.cut_short = False  # its last line, if something stopped writing it
+        for path in self.paths:
+            try:
+                with open(path, "rb") as f:
+                    offset = 0
+                    for line in f:
+                        self.read_line(path, line, offset)
+                        offset += len(line)
+            except OSError:
+                pass
+
+    def read_line(self, path, line, offset):
+        head, tab, index = line.partition(b"\t")
+        try:
+            if not tab or not line.endswith(b"\n"):
+                raise ValueError
+            info = json.loads(head)
+            demo, made = info["demo"], info["made"]
+        except (ValueError, KeyError, TypeError):
+            self.replaced += len(line)
+            self.cut_short = not line.endswith(b"\n")
+            return
+        if demo in self.kept:
+            self.replaced += self.kept[demo][3]
+        self.kept[demo] = (path, made, offset + len(head) + 1, len(index) - 1)
+
+    def made(self, demo):
+        """When the index of a demo was made, None if it has none."""
+        return self.kept[demo][1] if demo in self.kept else None
+
+    def add(self, demo, made, index):
+        """Keeps the index of a demo, the bytes mohdemoindex wrote."""
+        index = index.replace(b"\r", b" ").replace(b"\n", b" ")
+        line = json.dumps({"demo": demo, "made": made}).encode() + b"\t" + index + b"\n"
+        for path in self.paths:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "ab") as f:
+                    f.write((b"\n" if self.cut_short else b"") + line)
+                    end = f.tell()
+            except OSError:
+                continue
+            self.cut_short = False
+            if demo in self.kept:
+                self.replaced += self.kept[demo][3]
+            self.kept[demo] = (path, made, end - len(index) - 1, len(index))
+            return True
+        return False
+
+    def index(self, demo):
+        """The index of a demo, None if it has none. Another window may have
+        rewritten the file: read again if it's not where it was."""
+        for again in (True, False):
+            if demo not in self.kept:
+                return None
+            try:
+                path, _, offset, length = self.kept[demo]
+                with open(path, "rb") as f:
+                    f.seek(offset)
+                    return json.loads(f.read(length))
+            except (OSError, ValueError):
+                if again:
+                    self.read()
+        return None
+
+    def forget(self, demo):
+        if demo in self.kept:
+            self.replaced += self.kept.pop(demo)[3]
+
+    def tidy(self):
+        """Rewrites the file next to the demos when what's replaced is most of
+        it, as when mohdemoindex changes and they're all made again."""
+        path = self.paths[0]
+        mine = {demo: kept for demo, kept in self.kept.items() if kept[0] == path}
+        if self.replaced <= sum(kept[3] for kept in self.kept.values()):
+            return
+        try:
+            with open(path, "rb") as old, open(path + ".new", "wb") as new:
+                for demo, (_, made, offset, length) in mine.items():
+                    old.seek(offset)
+                    new.write(json.dumps({"demo": demo, "made": made}).encode() + b"\t" + old.read(length) + b"\n")
+            os.replace(path + ".new", path)
+        except OSError:
+            return
+        self.read()
+
+
 class Library(QObject):
     """What's in every demo of the folder, without playing them: mohdemoindex
     (built next to the game) indexes them in the background, and the indexes
-    are kept in the cache folder until the demo or mohdemoindex changes."""
+    are kept next to them (DemoIndexes) until the demo or mohdemoindex
+    changes."""
 
     BATCH = 20  # demos per mohdemoindex run
     WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
@@ -702,7 +815,8 @@ class Library(QObject):
         self.on_change = on_change
         self.demos = {}  # name: summarize()
         self.paths = {}  # name: path of the demos to index
-        self.folder = self.cache = self.tool = None
+        self.folder = self.cache = self.tool = self.work = None
+        self.stores = {}  # folder in the folder of demos: its DemoIndexes
         self.waiting = []
         self.busy = set()
         self.failed = set()
@@ -716,7 +830,7 @@ class Library(QObject):
     def open(self, folder, exe):
         """The demos of folder, indexed with the mohdemoindex next to exe."""
         self.stop()
-        self.demos, self.failed = {}, set()
+        self.demos, self.failed, self.stores = {}, set(), {}
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
         self.folder = os.path.abspath(folder) if folder else None
@@ -724,10 +838,8 @@ class Library(QObject):
         if not self.folder or not os.path.isdir(self.folder):
             self.on_change()
             return
-        # a folder of indexes for each folder of demos
-        key = hashlib.sha1(self.folder.encode()).hexdigest()[:12]
         base = QStandardPaths.writableLocation(QStandardPaths.GenericCacheLocation)
-        self.cache = os.path.join(base, "mohdemo-replay", "index", key)
+        self.cache = os.path.join(base, "mohdemo-replay", "index")
         self.rescan()
 
     def rescan(self):
@@ -746,10 +858,14 @@ class Library(QObject):
         except OSError:
             made = None
         stale = []
+        moved = False
         for name, path in demos.items():
+            store, demo = self.store_of(name)
+            if store.made(demo) is None:
+                moved |= self.move_old_index(store, demo, path)
             try:
                 mtime = os.path.getmtime(path)
-                kept = os.path.getmtime(os.path.join(self.cache, name + ".json"))
+                kept = store.made(demo)
             except OSError:
                 mtime, kept = 0, None
             if kept is not None and kept >= mtime and (made is None or kept >= made):
@@ -762,10 +878,10 @@ class Library(QObject):
         for name in list(self.demos):
             if name not in demos:
                 del self.demos[name]
-                try:
-                    os.remove(os.path.join(self.cache, name + ".json"))
-                except OSError:
-                    pass
+                store, demo = self.store_of(name)
+                store.forget(demo)
+        if moved:
+            self.remove_empty_folders()
         # newest first
         self.paths = demos
         self.waiting = [name for _, name in sorted(stale, reverse=True)]
@@ -773,19 +889,58 @@ class Library(QObject):
         self.start_workers()
         self.on_change()
 
+    def store_of(self, name):
+        """The indexes of the folder a demo is in, and its file name."""
+        folder, _, demo = name.rpartition("/")
+        if folder not in self.stores:
+            path = os.path.join(self.folder, folder) if folder else self.folder
+            self.stores[folder] = DemoIndexes(path, os.path.join(self.cache, folder_key(path) + ".lines"))
+        return self.stores[folder], demo
+
+    def move_old_index(self, store, demo, path):
+        """Moves the index of a demo from where they used to be kept: a file
+        each in the cache folder, in a folder for each folder opened, so any
+        folder above the demo's. Whether there was one."""
+        old = []
+        folder = os.path.dirname(path)
+        while True:
+            file = os.path.join(self.cache, folder_key(folder), os.path.relpath(path, folder)[:-len(".dm3")] + ".json")
+            if os.path.isfile(file):
+                old.append(file)
+            if os.path.dirname(folder) == folder:
+                break
+            folder = os.path.dirname(folder)
+        if not old:
+            return False
+        newest = max(old, key=os.path.getmtime)
+        try:
+            with open(newest, "rb") as f:
+                store.add(demo, os.path.getmtime(newest), f.read())
+            for file in old:
+                os.remove(file)
+        except OSError:
+            pass
+        return True
+
+    def remove_empty_folders(self):
+        """Those the indexes moved out of, not those of indexes being made."""
+        for folder in os.listdir(self.cache):
+            if not folder.startswith("new-"):
+                for root, _, _ in os.walk(os.path.join(self.cache, folder), topdown=False):
+                    try:
+                        os.rmdir(root)
+                    except OSError:
+                        pass
+
     def index(self, name):
         """The index kept of a demo, None if there's none."""
-        try:
-            with open(os.path.join(self.cache, name + ".json"), encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, TypeError, ValueError):
-            return None
+        store, demo = self.store_of(name)
+        return store.index(demo)
 
     def load(self, name):
         try:
-            with open(os.path.join(self.cache, name + ".json"), encoding="utf-8") as f:
-                self.demos[name] = summarize(json.load(f))
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            self.demos[name] = summarize(self.index(name))
+        except (ValueError, KeyError, TypeError, AttributeError):
             self.demos.pop(name, None)
 
     def start_workers(self):
@@ -797,7 +952,11 @@ class Library(QObject):
             names = set(batch)
             self.waiting = [n for n in self.waiting if n not in names]
             self.busy |= names
-            output = os.path.join(self.cache, folder)
+            # for a moment: they're moved next to the demos when they're made
+            if not self.work:
+                os.makedirs(self.cache, exist_ok=True)
+                self.work = tempfile.mkdtemp(prefix="new-", dir=self.cache)
+            output = os.path.join(self.work, folder)
             os.makedirs(output, exist_ok=True)
             worker = QProcess(self)
             worker.readyReadStandardOutput.connect(lambda w=worker, f=folder: self.indexed(w, f))
@@ -815,8 +974,20 @@ class Library(QObject):
     def indexed(self, worker, folder):
         for line in bytes(worker.readAllStandardOutput()).decode("utf-8", "replace").splitlines():
             if line:
-                self.load(posixpath.join(folder, line))
+                self.keep(posixpath.join(folder, line))
         self.changed_timer.start()
+
+    def keep(self, name):
+        """A demo just indexed: its index moves next to it."""
+        file = os.path.join(self.work, name + ".json")
+        store, demo = self.store_of(name)
+        try:
+            with open(file, "rb") as f:
+                store.add(demo, os.path.getmtime(file), f.read())
+            os.remove(file)
+        except OSError:
+            pass
+        self.load(name)
 
     def worker_done(self, worker, names, folder):
         if worker not in self.workers:
@@ -828,7 +999,16 @@ class Library(QObject):
         self.failed |= {name for name in names if name not in self.demos}
         worker.deleteLater()
         self.start_workers()
+        if not self.workers:
+            for store in self.stores.values():
+                store.tidy()
+            self.remove_work()
         self.changed_timer.start()
+
+    def remove_work(self):
+        if self.work:
+            shutil.rmtree(self.work, ignore_errors=True)
+            self.work = None
 
     def progress(self):
         """(indexed, to index) while indexing, None when done."""
@@ -841,6 +1021,7 @@ class Library(QObject):
         for worker in workers:
             worker.kill()
             worker.waitForFinished(1000)
+        self.remove_work()
 
 
 class SortItem(QTreeWidgetItem):

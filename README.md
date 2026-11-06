@@ -124,8 +124,8 @@ commands and their settings, and recording.
   without drawing, up to the exact time asked.
 - `mohdemoindex` reads a demo the way the game does and lists its kills,
   rounds, levels and who is watched when, without game files. The app keeps
-  the indexes in `~/.cache/mohdemo-replay` until the demo or `mohdemoindex`
-  changes.
+  the indexes next to the demos, in a hidden file in each folder
+  (`.mohdemo-index`), until the demo or `mohdemoindex` changes.
 - A second copy of the game records, without a window on Linux. It steps
   exactly one frame time per frame and pipes the frames to FFmpeg, and
   the sound mixer renders the sound of each frame, so the video stays

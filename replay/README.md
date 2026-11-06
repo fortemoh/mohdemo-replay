@@ -24,8 +24,10 @@ for a player, it shows their frags in each demo. In all of these, a `*`
 stands for any one character: `gr*m` finds Grim and Gr1m (not Grm or
 Grimm), as Fragger and Victim below and the game's `demofilter` take it. For that, `mohdemoindex`, built next to the
 game, indexes the demos in the background the first time (about two minutes
-for 700, and again once after it changes), and the indexes are kept in
-`~/.cache/mohdemo-replay`. Under the list, it tells how far indexing is, then
+for 700, and again once after it changes). The indexes are kept next to the
+demos, in a hidden file in each of their folders (`.mohdemo-index`), so they go
+where the demos go and count whichever folder above them you open; for a folder
+that can't be written, in `~/.cache/mohdemo-replay`. Under the list, it tells how far indexing is, then
 how many demos there are and how many are listed, with their frags and about
 how long a video of them is ("53 of 5,139 demos listed, 412 frags, about 34
 min", at most, as frags close together share a clip), its tip why the others

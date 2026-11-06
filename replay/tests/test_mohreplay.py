@@ -1056,6 +1056,11 @@ class TestLibrary(FakeGameCase):
     def shown(self, window):
         return TestWindow.shown(self, window)
 
+    def lines(self, folder):
+        """The lines of the file of indexes next to the demos of a folder."""
+        with open(os.path.join(folder, mohreplay.INDEX_FILE), "rb") as f:
+            return f.read().splitlines()
+
     def test_closed_before_opening(self):
         window = self.window()
         window.close()
@@ -1092,9 +1097,12 @@ class TestLibrary(FakeGameCase):
         self.assertEqual(window.demo_items["first"].text(mohreplay.COL_RECORDER), "t-")
         self.assertEqual(window.demo_items["broken"].text(mohreplay.COL_RECORDER), "")
         self.assertIn("6:01, realism", window.demo_items["other"].toolTip(mohreplay.COL_DEMO))
-        cache = window.library.cache
-        self.assertTrue(cache.startswith(os.path.join(self.tmp, "cache")))
-        self.assertTrue(os.path.isfile(os.path.join(cache, "first.json")))
+        # next to the demos, in one file
+        self.assertEqual(sorted(json.loads(line.split(b"\t")[0])["demo"] for line in self.lines(self.demos)),
+                         ["first", "other"])
+        self.assertEqual(sorted(os.listdir(self.demos)), [mohreplay.INDEX_FILE, "broken.dm3", "first.dm3", "other.dm3"])
+        self.assertEqual(window.library.index("first")["duration"], 600000)
+        self.assertIsNone(window.library.index("broken"))
 
         # kept: nothing is indexed again
         again = self.window()
@@ -1123,7 +1131,7 @@ class TestLibrary(FakeGameCase):
         self.assertTrue(wait_until(lambda: "new" in window.demo_items and window.demo_items["new"].text(mohreplay.COL_LENGTH), 20))
         self.assertNotIn("other", window.demo_items)
         self.assertNotIn("other", window.library.demos)
-        self.assertFalse(os.path.exists(os.path.join(window.library.cache, "other.json")))
+        self.assertIsNone(window.library.index("other"))
 
     def test_demos_in_folders(self):
         # named by their path, so the same file name in two folders is two
@@ -1135,7 +1143,8 @@ class TestLibrary(FakeGameCase):
         self.indexed(window, ("first", "other", "clan/first", "clan/war 2/first"))
         self.assertEqual(self.shown(window), ["broken", "clan/first", "clan/war 2/first", "first", "other"])
         self.assertEqual(window.demo_items["clan/war 2/first"].text(mohreplay.COL_LENGTH), "10:00")
-        self.assertTrue(os.path.isfile(os.path.join(window.library.cache, "clan", "war 2", "first.json")))
+        self.assertEqual(len(self.lines(os.path.join(self.demos, "clan", "war 2"))), 1)
+        self.assertEqual(len(self.lines(os.path.join(self.demos, "clan"))), 1)
         # in their folders, by their file name; folders first
         clan = window.folder_items["clan"]
         self.assertEqual(clan.text(mohreplay.COL_DEMO), "clan (2)")
@@ -1163,11 +1172,118 @@ class TestLibrary(FakeGameCase):
                                    and window.demo_items["clan/new/late"].text(mohreplay.COL_LENGTH), 20))
         os.remove(os.path.join(self.demos, "clan", "first.dm3"))
         self.assertTrue(wait_until(lambda: "clan/first" not in window.demo_items, 20))
-        self.assertFalse(os.path.exists(os.path.join(window.library.cache, "clan", "first.json")))
+        self.assertIsNone(window.library.index("clan/first"))
         # a folder left empty goes
         shutil.rmtree(os.path.join(self.demos, "clan", "new"))
         self.assertTrue(wait_until(lambda: "clan/new" not in window.folder_items, 20))
         self.assertIn("clan", window.folder_items)
+
+    def indexing_runs(self, window):
+        """How many demos it had to index."""
+        return window.library.total
+
+    def test_indexes_shared_between_folders(self):
+        """The same indexes count whichever folder above the demos is opened,
+        and they go with the demos."""
+        os.makedirs(os.path.join(self.demos, "clan"))
+        self.add_demo("clan/war", DEMO)
+        window = self.window()
+        self.indexed(window, ("first", "other", "clan/war"))
+        window.close()
+        # only that folder: nothing to do
+        self.settings.setValue("demos", os.path.join(self.demos, "clan"))
+        again = self.window()
+        self.assertTrue(wait_until(lambda: "war" in again.library.demos))
+        self.assertEqual(self.indexing_runs(again), 0)
+        again.close()
+        # moved elsewhere, with its file
+        moved = os.path.join(self.tmp, "moved")
+        shutil.copytree(os.path.join(self.demos, "clan"), moved, copy_function=shutil.copy2)
+        self.settings.setValue("demos", moved)
+        third = self.window()
+        self.assertTrue(wait_until(lambda: "war" in third.library.demos))
+        self.assertEqual(self.indexing_runs(third), 0)
+
+    def test_folder_that_cant_be_written(self):
+        """Its indexes are kept in the cache folder instead, also shared."""
+        locked = os.path.join(self.tmp, "locked")
+        os.makedirs(locked)
+        shutil.copyfile(os.path.join(self.demos, "first.dm3"), os.path.join(locked, "first.dm3"))
+        os.chmod(locked, 0o555)
+        self.addCleanup(os.chmod, locked, 0o755)
+        self.settings.setValue("demos", locked)
+        window = self.window()
+        self.assertTrue(wait_until(lambda: "first" in window.library.demos and not window.library.progress(), 20))
+        self.assertEqual(os.listdir(locked), ["first.dm3"])
+        self.assertEqual(window.library.index("first")["duration"], 600000)
+        window.close()
+        again = self.window()
+        self.assertTrue(wait_until(lambda: "first" in again.library.demos))
+        self.assertEqual(self.indexing_runs(again), 0)
+
+    def test_old_indexes_moved(self):
+        """The indexes kept in the cache folder before, a file for each demo
+        in a folder for each folder opened, move next to the demos and aren't
+        made again; those of other folders opened go, as they're the same."""
+        os.makedirs(os.path.join(self.demos, "clan"))
+        self.add_demo("clan/war", DEMO)
+        future = time.time() + 5
+        for name in ("first", "other", "clan/war"):
+            os.utime(os.path.join(self.demos, name + ".dm3"), (future - 100, future - 100))
+        os.utime(os.path.join(self.bin, "mohdemoindex"), (future - 100, future - 100), follow_symlinks=False)
+        cache = os.path.join(self.tmp, "cache", "mohdemo-replay", "index")
+        old = []
+        for folder, name in ((self.demos, "first"), (self.demos, "other"), (self.demos, "clan/war"),
+                             (os.path.join(self.demos, "clan"), "war")):
+            path = os.path.join(cache, mohreplay.folder_key(folder), name + ".json")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(dict(DEMO, duration=123000), f, indent=2)
+            os.utime(path, (future, future))
+            old.append(path)
+        window = self.window()
+        self.assertTrue(wait_until(lambda: {"first", "other", "clan/war"} <= set(window.library.demos)))
+        self.assertEqual(self.indexing_runs(window), 1)  # broken, tried once more
+        self.assertEqual(window.library.demos["clan/war"]["duration"], 123000)
+        self.assertEqual(window.library.index("first")["duration"], 123000)
+        self.assertEqual([os.path.exists(path) for path in old], [False] * 4)
+        self.assertEqual(len(self.lines(os.path.join(self.demos, "clan"))), 1)
+        self.assertTrue(wait_until(lambda: not window.library.progress() and not window.library.work, 20))
+        self.assertEqual(os.listdir(cache), [])
+
+    def test_index_file_mended_and_tidied(self):
+        """A line cut short doesn't count, and what's after it does; when lines
+        replaced are most of the file, it's rewritten."""
+        store = mohreplay.DemoIndexes(self.demos, os.path.join(self.tmp, "fallback"))
+        self.assertEqual(store.kept, {})
+        self.assertTrue(store.add("a", 5.0, b'{"x": 1,\n "y": 2}'))
+        self.assertTrue(store.add("b", 6.0, b'{"x": 2}'))
+        path = os.path.join(self.demos, mohreplay.INDEX_FILE)
+        with open(path, "ab") as f:
+            f.write(b'{"demo": "c", "made": 7}\t{"x"')
+        store = mohreplay.DemoIndexes(self.demos, os.path.join(self.tmp, "fallback"))
+        self.assertEqual((store.index("a"), store.index("b"), store.index("c")), ({"x": 1, "y": 2}, {"x": 2}, None))
+        self.assertEqual((store.made("a"), store.made("c")), (5.0, None))
+        self.assertTrue(store.cut_short)
+        store.add("c", 8.0, b'{"x": 3}')
+        store = mohreplay.DemoIndexes(self.demos, os.path.join(self.tmp, "fallback"))
+        self.assertEqual(store.index("c"), {"x": 3})
+        # the last one counts
+        for n in range(10):
+            store.add("c", 9.0 + n, b'{"x": %d, "padding": "%s"}' % (n, b"." * 50))
+        self.assertEqual(store.index("c")["x"], 9)
+        before = os.path.getsize(path)
+        store.tidy()
+        self.assertLess(os.path.getsize(path), before / 2)
+        self.assertEqual((store.index("a"), store.index("b"), store.index("c")["x"], store.made("c")),
+                         ({"x": 1, "y": 2}, {"x": 2}, 9, 18.0))
+        # another window rewrote it: read again
+        other = mohreplay.DemoIndexes(self.demos, os.path.join(self.tmp, "fallback"))
+        with open(path, "rb") as f:
+            lines = f.readlines()
+        with open(path, "wb") as f:
+            f.writelines(reversed(lines))
+        self.assertEqual((other.index("a"), other.index("c")["x"]), ({"x": 1, "y": 2}, 9))
 
     def test_without_mohdemoindex(self):
         os.remove(os.path.join(self.bin, "mohdemoindex"))
@@ -2448,9 +2564,13 @@ class TestRealGame(FakeGameCase):
         exe = os.environ.get("MOHREPLAY_TEST_EXE") or os.path.join(mohreplay.REPO, ".cmake", "RelWithDebInfo", "openmohaa")
         self.settings.setValue("exe", exe)
         self.settings.setValue("game", game_folder(REAL_GAME, os.path.join(self.tmp, "real")))
-        self.settings.setValue("demos", REAL_DEMOS)
         self.settings.setValue("size", "640x360")
         self.demo = os.environ.get("MOHREPLAY_TEST_DEMO") or "d482684ec556d1c3-obj-obj_team1"
+        # a link to it: indexes are kept next to the demos, not to be left there
+        linked = os.path.join(self.tmp, "real demos")
+        os.makedirs(linked)
+        os.symlink(os.path.join(REAL_DEMOS, self.demo + ".dm3"), os.path.join(linked, self.demo + ".dm3"))
+        self.settings.setValue("demos", linked)
         # quiet: the recorder's own volume comes after
         start = mohreplay.Game.start
 
