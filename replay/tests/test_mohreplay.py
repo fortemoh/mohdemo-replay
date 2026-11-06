@@ -925,48 +925,104 @@ class TestSettings(FakeGameCase):
         # on the window, as the app opens it: left alone, PySide may delete
         # it twice when Python quits
         window = self.window()
-        dialog = mohreplay.SettingsDialog(self.settings, window, "videos")
-        self.assertEqual(dialog.tabs.tabText(dialog.tabs.currentIndex()), "Videos")
-        dialog.fields["demos"].setText(os.path.join(self.tmp, "other demos"))
-        dialog.kill_before.setValue(6)
+        dialog = mohreplay.SettingsDialog(self.settings, window, "video")
+        self.assertEqual([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())], ["Setup", "Video", "Censor"])
+        self.assertEqual(dialog.tabs.tabText(dialog.tabs.currentIndex()), "Video")
+        self.assertEqual(sorted(dialog.fields), ["exe", "game", "rec/ffmpeg"])
+        other = os.path.join(self.tmp, "other game")
+        dialog.fields["game"].setText(other)
+        dialog.fields["rec/ffmpeg"].setText("/my/ffmpeg")
         dialog.videos.size.setCurrentText("big")
         dialog.videos.blur.setChecked(True)
         dialog.accept()
         # a size that isn't one: nothing kept
         self.assertEqual(self.messages.shown, [("Settings", "The video size should be like 1920x1080.")])
         self.assertIsNone(self.settings.value("rec/size"))
-        self.assertEqual(self.settings.value("demos"), self.demos)
+        self.assertEqual(self.settings.value("game"), self.game_dir)
         dialog.videos.size.setCurrentText("1280×720")
         dialog.accept()
         self.assertEqual(dialog.result(), QDialog.Accepted)
-        self.assertEqual(self.settings.value("demos"), os.path.join(self.tmp, "other demos"))
-        self.assertEqual(self.settings.value("kill_before"), "6.0")
+        self.assertEqual((self.settings.value("game"), self.settings.value("rec/ffmpeg")), (other, "/my/ffmpeg"))
         self.assertEqual((self.settings.value("rec/size"), self.settings.value("rec/blur")), ("1280x720", "true"))
+        self.assertEqual(mohreplay.video_settings(self.settings)["ffmpeg"], "/my/ffmpeg")
         self.assertEqual(mohreplay.video_summary(self.settings),
                          "1280x720, 60 fps with motion blur, H.264 (CRF 20), sound 192k, words censored")
         again = mohreplay.SettingsDialog(self.settings, window)
         self.assertEqual(again.tabs.currentIndex(), 0)
         self.assertTrue(again.videos.blur.isChecked())
 
+    def test_advanced_folded(self):
+        """Folded, unless something in it is in use."""
+        window = self.window()
+        dialog = mohreplay.SettingsDialog(self.settings, window, "video")
+        dialog.show()
+        videos = dialog.videos
+        self.assertFalse(videos.fold.isChecked() or videos.folded.isVisible())
+        videos.fold.click()
+        self.assertTrue(videos.folded.isVisible())
+        videos.fold.click()
+        self.assertFalse(videos.folded.isVisible())
+        dialog.close()
+        for key, value in (("rec/codec", "H.265"), ("rec/advanced", "-c:v libx264")):
+            self.settings.setValue(key, value)
+            dialog = mohreplay.SettingsDialog(self.settings, window, "video")
+            dialog.show()
+            self.assertTrue(dialog.videos.fold.isChecked() and dialog.videos.folded.isVisible(), key)
+            dialog.close()
+            self.settings.remove(key)
+        # what's in it is kept when folded
+        dialog = mohreplay.SettingsDialog(self.settings, window, "video")
+        dialog.videos.codec.setCurrentText("H.265")
+        dialog.accept()
+        self.assertEqual(self.settings.value("rec/codec"), "H.265")
+
     def test_censor(self):
         """The words starred out, on by default, as the game and the videos
         are told them."""
         window = self.window()
-        dialog = mohreplay.SettingsDialog(self.settings, window)
+        dialog = mohreplay.SettingsDialog(self.settings, window, "censor")
+        self.assertEqual(dialog.tabs.currentIndex(), 2)
         self.assertTrue(dialog.censor.isChecked())
-        self.assertEqual(dialog.censor_words.text(), mohreplay.CENSOR_WORDS)
+        self.assertEqual(dialog.censor_words.toPlainText(), mohreplay.CENSOR_WORDS)
         self.assertEqual(mohreplay.censored_words(self.settings).split()[:3], ["nigger", "nigga", "nlgger"])
-        dialog.censor_words.setText("gay, nazi,jew")
+        dialog.censor_words.setPlainText("gay, nazi,jew\nkkk")
         dialog.accept()
-        self.assertEqual(mohreplay.censored_words(self.settings), "gay nazi jew")
-        self.assertEqual(mohreplay.video_settings(self.settings)["censor"], "gay nazi jew")
+        self.assertEqual(mohreplay.censored_words(self.settings), "gay nazi jew kkk")
+        self.assertEqual(mohreplay.video_settings(self.settings)["censor"], "gay nazi jew kkk")
         again = mohreplay.SettingsDialog(self.settings, window)
-        self.assertEqual(again.censor_words.text(), "gay, nazi,jew")
+        self.assertEqual(again.censor_words.toPlainText(), "gay, nazi,jew\nkkk")
         again.censor.setChecked(False)
         self.assertFalse(again.censor_words.isEnabled())
         again.accept()
         self.assertEqual(mohreplay.censored_words(self.settings), "")
         self.assertNotIn("words censored", mohreplay.video_summary(self.settings))
+        again = mohreplay.SettingsDialog(self.settings, window)
+        again.censor_words.setPlainText("x")
+        next(button for button in again.findChildren(mohreplay.QPushButton) if button.text() == "Default words").click()
+        self.assertEqual(again.censor_words.toPlainText(), mohreplay.CENSOR_WORDS)
+
+    def test_settings_applied(self):
+        """A game playing stops, as the next one starts with them; the demos
+        are indexed again only for another game program."""
+        window = self.window()
+        self.playing(window)
+        opened = []
+        with mock.patch.object(mohreplay.SettingsDialog, "exec", lambda dialog: 0):
+            self.assertFalse(window.edit_settings())
+        self.assertTrue(window.game.running())
+        with mock.patch.object(window.library, "open", lambda *args: opened.append(args)), \
+                mock.patch.object(mohreplay.SettingsDialog, "exec", lambda dialog: (dialog.accept(), dialog.result())[1]):
+            self.assertTrue(window.edit_settings())
+            self.assertFalse(opened)
+            self.assertFalse(window.game.running())
+
+            def other_program(dialog):
+                dialog.fields["exe"].setText(os.path.join(self.bin, "other"))
+                dialog.accept()
+                return dialog.result()
+            with mock.patch.object(mohreplay.SettingsDialog, "exec", other_program):
+                self.assertTrue(window.edit_settings())
+            self.assertEqual(len(opened), 1)
 
     def test_video_settings(self):
         video = mohreplay.video_settings(self.settings)
@@ -1481,12 +1537,14 @@ class TestRecording(FakeGameCase):
         self.assertEqual(self.video("short.mp4")["end"], 270000)
 
     def change_video(self, dialog, change):
-        """Changes the video settings with the Record dialog's Change…"""
-        def exec_dialog(videos):
-            change(videos.videos)
-            videos.accept()
-            return videos.result()
-        with mock.patch.object(mohreplay.VideoSettingsDialog, "exec", exec_dialog):
+        """Changes the video settings with the Record dialog's Change…, on
+        Settings' Video tab."""
+        def exec_dialog(settings):
+            self.assertEqual(settings.tabs.tabText(settings.tabs.currentIndex()), "Video")
+            change(settings.videos)
+            settings.accept()
+            return settings.result()
+        with mock.patch.object(mohreplay.SettingsDialog, "exec", exec_dialog):
             dialog.change_video()
 
     def test_motion_blur(self):

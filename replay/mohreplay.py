@@ -35,7 +35,8 @@ from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPalette, Q
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSlider,
+    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
+    QSizePolicy, QSlider,
     QSpinBox, QSplitter, QStyle, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
     QWidgetAction,
 )
@@ -1309,8 +1310,8 @@ def video_summary(settings):
 
 
 class VideoSettings(QWidget):
-    """How videos are recorded, kept as rec/*: Settings' Videos tab, and
-    the Record dialog's Change…."""
+    """How videos are encoded, kept as rec/*: Settings' Video tab. What's
+    rarely touched is folded, unless it's in use."""
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -1346,10 +1347,6 @@ class VideoSettings(QWidget):
         row.addWidget(QLabel("Better"))
         row.addWidget(quality_label)
         form.addRow("Quality", row)
-        self.codec = QComboBox()
-        self.codec.addItems(list(CODECS))
-        self.codec.setCurrentText(settings.value("rec/codec", "H.264"))
-        form.addRow("Codec", self.codec)
         self.sound = QCheckBox("Sound")
         self.sound.setChecked(settings.value("rec/sound", "true") == "true")
         self.bitrate = QComboBox()
@@ -1362,11 +1359,31 @@ class VideoSettings(QWidget):
         row.addWidget(self.bitrate)
         row.addStretch(1)
         form.addRow("Audio", row)
+
+        self.codec = QComboBox()
+        self.codec.addItems(list(CODECS))
+        self.codec.setCurrentText(settings.value("rec/codec", "H.264"))
         self.advanced = QLineEdit(settings.value("rec/advanced", ""))
-        self.advanced.setPlaceholderText("FFmpeg output options, instead of the ones above")
-        form.addRow("Advanced", self.advanced)
-        self.ffmpeg = QLineEdit(settings.value("rec/ffmpeg", "") or find_ffmpeg())
-        form.addRow("FFmpeg", self.ffmpeg)
+        self.advanced.setPlaceholderText("Instead of the ones above")
+        self.folded = QWidget()
+        more = QFormLayout(self.folded)
+        more.setContentsMargins(0, 0, 0, 0)
+        more.addRow("Codec", self.codec)
+        more.addRow("FFmpeg options", self.advanced)
+        self.fold = QToolButton()
+        self.fold.setText("Advanced")
+        self.fold.setCheckable(True)
+        self.fold.setAutoRaise(True)
+        self.fold.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.fold.toggled.connect(self.show_folded)
+        form.addRow("", self.fold)
+        form.addRow("", self.folded)
+        self.fold.setChecked(self.codec.currentText() != "H.264" or bool(self.advanced.text().strip()))
+        self.show_folded(self.fold.isChecked())
+
+    def show_folded(self, opened):
+        self.fold.setArrowType(Qt.DownArrow if opened else Qt.RightArrow)
+        self.folded.setVisible(opened)
 
     def error(self):
         """What's wrong with what's entered, None if nothing."""
@@ -1381,43 +1398,39 @@ class VideoSettings(QWidget):
                            ("crf", self.quality.value()), ("codec", self.codec.currentText()),
                            ("sound", "true" if self.sound.isChecked() else "false"),
                            ("bitrate", self.bitrate.currentText()),
-                           ("advanced", self.advanced.text().strip()), ("ffmpeg", self.ffmpeg.text().strip())):
+                           ("advanced", self.advanced.text().strip())):
             self.settings.setValue("rec/" + key, value)
 
 
 class SettingsDialog(QDialog):
-    """The game, its files and demos, and how videos are recorded, in tabs
-    ("game" and "videos")."""
+    """What's rarely touched, in tabs: where the game and FFmpeg are ("setup"),
+    how videos are encoded ("video") and the words starred out ("censor")."""
 
-    def __init__(self, settings, parent=None, tab="game"):
+    def __init__(self, settings, parent=None, tab="setup"):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(760)
+        self.setMinimumWidth(640)
         self.settings = settings
         self.tabs = QTabWidget()
-        game = QWidget()
-        form = QFormLayout(game)
+        setup = QWidget()
+        form = QFormLayout(setup)
         self.fields = {}
-        for key, label, folder in (("exe", "Game program", False),
-                                   ("game", "Game files folder", True),
-                                   ("demos", "Demos folder", True)):
-            edit = QLineEdit(settings.value(key, ""))
-            edit.setToolTip({"exe": "OpenMoHAA built from this repository",
-                             "game": "The folder with main/Pak0.pk3",
-                             "demos": "The folders in it too"}[key])
-            form.addRow(label, browse_row(edit, lambda _=False, e=edit, d=folder: self.browse(e, d)))
+        for key, label, folder, value, tip in (
+                ("exe", "Game program", False, settings.value("exe", ""), "OpenMoHAA built from this repository"),
+                ("game", "Game files folder", True, settings.value("game", ""), "The folder with main/Pak0.pk3"),
+                ("rec/ffmpeg", "FFmpeg program", False, settings.value("rec/ffmpeg", "") or find_ffmpeg(), "")):
+            edit = QLineEdit(value)
+            edit.setToolTip(tip)
+            form.addRow(label, browse_row(edit, lambda _=False, e=edit, d=folder, l=label: self.browse(e, d, l)))
             self.fields[key] = edit
-        self.size = QComboBox()
-        self.size.addItems(["1280x720", "1600x900", "1920x1080", "2560x1440"])
-        self.size.setEditable(True)
-        self.size.setCurrentText(settings.value("size", "1280x720"))
-        form.addRow("Game window size", self.size)
-        self.kill_before = seconds_box(settings, "kill_before", 4.0, "Time shown before each frag (cl_demoKillBefore)")
-        self.kill_after = seconds_box(settings, "kill_after", 2.0, "Time shown after each frag (cl_demoKillAfter)")
-        form.addRow("Each frag plays", lead_row(self.kill_before, self.kill_after, "it"))
+        self.tabs.addTab(setup, "Setup")
+        self.videos = VideoSettings(settings)
+        self.tabs.addTab(self.videos, "Video")
+        words = QWidget()
+        box = QVBoxLayout(words)
         self.censor = QCheckBox("Star out these words in the players' names and the messages, in videos too")
         self.censor.setChecked(is_on(settings.value("censor", "1")))
-        self.censor_words = QLineEdit(settings.value("censor_words", CENSOR_WORDS))
+        self.censor_words = QPlainTextEdit(settings.value("censor_words", CENSOR_WORDS))
         self.censor_words.setToolTip("Separated by commas, found however they're spelled: any case, letters "
                                      "repeated, look-alike digits and signs (n1gg3r, f@g), accents, anything between "
                                      "the letters (n.i.g.g.e.r) or letters spaced out (g a y); in each word, not "
@@ -1425,18 +1438,15 @@ class SettingsDialog(QDialog):
         self.censor_words.setEnabled(self.censor.isChecked())
         self.censor.toggled.connect(self.censor_words.setEnabled)
         reset = QPushButton("Default words")
-        reset.clicked.connect(lambda: self.censor_words.setText(CENSOR_WORDS))
-        censor = QVBoxLayout()
-        censor.addWidget(self.censor)
+        reset.clicked.connect(lambda: self.censor_words.setPlainText(CENSOR_WORDS))
         row = QHBoxLayout()
-        row.addWidget(self.censor_words, 1)
+        row.addStretch(1)
         row.addWidget(reset)
-        censor.addLayout(row)
-        form.addRow("Censor", censor)
-        self.tabs.addTab(game, "Game")
-        self.videos = VideoSettings(settings)
-        self.tabs.addTab(self.videos, "Videos")
-        self.tabs.setCurrentIndex(1 if tab == "videos" else 0)
+        box.addWidget(self.censor)
+        box.addWidget(self.censor_words, 1)
+        box.addLayout(row)
+        self.tabs.addTab(words, "Censor")
+        self.tabs.setCurrentIndex({"setup": 0, "video": 1, "censor": 2}[tab])
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -1444,11 +1454,11 @@ class SettingsDialog(QDialog):
         box.addWidget(self.tabs)
         box.addWidget(buttons)
 
-    def browse(self, edit, folder):
+    def browse(self, edit, folder, label):
         if folder:
             path = QFileDialog.getExistingDirectory(self, "Choose a folder", edit.text())
         else:
-            path, _ = QFileDialog.getOpenFileName(self, "Choose the game program", edit.text())
+            path, _ = QFileDialog.getOpenFileName(self, label, edit.text())
         if path:
             edit.setText(path)
 
@@ -1461,34 +1471,8 @@ class SettingsDialog(QDialog):
         for key, edit in self.fields.items():
             value = edit.text().strip()
             self.settings.setValue(key, game_program(value) if key == "exe" else value)
-        self.settings.setValue("size", self.size.currentText().strip())
-        self.settings.setValue("kill_before", str(self.kill_before.value()))
-        self.settings.setValue("kill_after", str(self.kill_after.value()))
         self.settings.setValue("censor", "1" if self.censor.isChecked() else "0")
-        self.settings.setValue("censor_words", self.censor_words.text().strip())
-        self.videos.save()
-        super().accept()
-
-
-class VideoSettingsDialog(QDialog):
-    """The Videos tab of Settings on its own."""
-
-    def __init__(self, settings, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Video settings")
-        self.videos = VideoSettings(settings)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        box = QVBoxLayout(self)
-        box.addWidget(self.videos)
-        box.addWidget(buttons)
-
-    def accept(self):
-        error = self.videos.error()
-        if error:
-            QMessageBox.warning(self, "Video settings", error)
-            return
+        self.settings.setValue("censor_words", self.censor_words.toPlainText().strip())
         self.videos.save()
         super().accept()
 
@@ -1867,7 +1851,7 @@ class RecordDialog(QDialog):
         self.summary = QLabel(video_summary(settings))
         self.summary.setWordWrap(True)
         change = QPushButton("Change…")
-        change.setToolTip("The video settings, also in Settings")
+        change.setToolTip("The Video tab of Settings")
         change.clicked.connect(self.change_video)
         row = QHBoxLayout()
         row.addWidget(heading("Video"))
@@ -1889,7 +1873,7 @@ class RecordDialog(QDialog):
             self.folder.setText(path)
 
     def change_video(self):
-        if VideoSettingsDialog(self.settings, self).exec():
+        if self.parent().edit_settings("video"):
             self.summary.setText(video_summary(self.settings))
 
     def kill_times(self):
@@ -2601,17 +2585,19 @@ class Window(QMainWindow):
             ka = KILL_AFTER
         return max(500, kb), max(500, ka)
 
-    def edit_settings(self, tab="game"):
-        if SettingsDialog(self.settings, self, tab).exec():
-            self.show_folder()
-            self.fill_demos()
+    def edit_settings(self, tab="setup"):
+        """Whether anything was set. The next game starts with it."""
+        program = self.settings.value("exe", "")
+        if not SettingsDialog(self.settings, self, tab).exec():
+            return False
+        if self.settings.value("exe", "") != program:
             self.library.open(self.settings.value("demos", ""), self.settings.value("exe", ""))
-            # the next one starts with them
-            self.game.stop()
+        self.game.stop()
+        return True
 
     def start_game(self):
         if not self.ready():
-            self.tell("Set the game program, game files and demos folders in Settings")
+            self.tell("Set the game program and game files in Settings, and choose the demos folder")
             return
         self.game.stop()
         try:
@@ -3178,9 +3164,11 @@ def main():
 
     window = Window(settings)
     window.show()
-    if not window.ready():
+    if not (os.path.isfile(settings.value("exe", "")) and os.path.isdir(settings.value("game", ""))):
         window.edit_settings()
-    elif args.demo:
+    if not os.path.isdir(settings.value("demos", "")):
+        window.choose_folder()
+    if args.demo and window.ready():
         window.play_demo(args.demo)
     sys.exit(app.exec())
 

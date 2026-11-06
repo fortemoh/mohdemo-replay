@@ -7,9 +7,9 @@ built from this repository, which adds the demo commands, Python 3 and PySide6.
     python3 replay/mohreplay.py [--exe PATH] [--game FOLDER] [--demos FOLDER] [DEMO]
 
 On the first run, Settings asks for the game program (found by itself when
-built in `.cmake/RelWithDebInfo/`), the folder with the game files (the one
-with `main/Pak0.pk3`) and the folder with the demos, whose folders are
-looked in too: the list shows them in their folders, which tell how many of
+built in `.cmake/RelWithDebInfo/`) and the folder with the game files (the one
+with `main/Pak0.pk3`), then it asks for the folder with the demos, chosen after
+that with its button, whose folders are looked in too: the list shows them in their folders, which tell how many of
 their demos are shown, and a demo there is named by its path in the folder
 of demos (the filter finds a folder's name too). The list shows each
 demo's length (demos under 5 minutes aren't listed), recorder, levels and rules (default or realism servers, told by the
@@ -116,16 +116,17 @@ models in the game files, or as in the demo (`cg_followedModel`,
 everyone as an airborne soldier or a winter German, whatever they wore. A demo
 watched in the game looks the same.
 
-Settings has what's rarely touched. The words Censor stars out of the players'
-names and the messages, in the game and in videos (on, with words a video can
-be flagged for, which you can change): however they're spelled, any case,
-letters repeated, look-alike digits and signs (n1gg3r, f@g), accents, anything
-between the letters (n.i.g.g.e.r) or letters spaced out (g a y), in each word
-but not across words, a letter a word has twice having to be there twice
-("Nigeria" stays). The size, frames per second, quality, codec (H.264, H.265 or
-the graphics card's H.264 encoder, with VAAPI), sound and its bitrate are in
-the Videos tab, which the Record dialog sums up in a line, with Change… to set
-them there, and the Advanced box takes FFmpeg output options instead. Motion blur is the renderer's: what moves blurs
+Settings has what's rarely touched. Setup is where the game and FFmpeg are.
+Video has the size, frames per second, quality, motion blur and sound, which
+the Record dialog sums up in a line, with Change… to set them there; under
+Advanced, the codec (H.264, H.265 or the graphics card's H.264 encoder, with
+VAAPI) and FFmpeg output options to use instead. Censor has the words starred
+out of the players' names and the messages, in the game and in videos (on, with
+words a video can be flagged for, which you can change): however they're
+spelled, any case, letters repeated, look-alike digits and signs (n1gg3r, f@g),
+accents, anything between the letters (n.i.g.g.e.r) or letters spaced out
+(g a y), in each word but not across words, a letter a word has twice having to
+be there twice ("Nigeria" stays). Motion blur is the renderer's: what moves blurs
 over all of a frame's time, as with a camera, along each pixel's motion.
 Motion looks smoother, a cut between two frags stays clean, and recording
 takes about 1.7 times as long with the graphics card's encoder, 1.1 times
