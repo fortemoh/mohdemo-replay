@@ -1949,7 +1949,8 @@ class RecordDialog(QDialog):
         self.kill_before = seconds_box(settings, "rec/kill_before", 4.0,
                                        "Time recorded before each frag (cl_demoKillBefore)", "kill_before")
         self.kill_after = seconds_box(settings, "rec/kill_after", 2.0,
-                                      "Time recorded after each frag (cl_demoKillAfter)", "kill_after")
+                                      "Time recorded after each frag, or after the fragger's last shot if they "
+                                      "go on firing before it's over (cl_demoKillAfter)", "kill_after")
         row = QHBoxLayout()
         row.addWidget(QLabel("Each frag"))
         row.addLayout(lead_row(self.kill_before, self.kill_after, "it"), 1)

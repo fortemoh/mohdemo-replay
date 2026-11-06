@@ -14,6 +14,7 @@ Without PySide6, it exits with 77, which ctest takes as skipped.
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -2674,8 +2675,9 @@ class TestRealGame(FakeGameCase):
         # from the kill before the first one by a player the recorder follows
         recorder = index["recorder"]["name"]
         followed = next(i for i, (k, _, _) in enumerate(frags) if not mohreplay.same_player(k["killerName"], recorder))
-        window.game.send(*kill_filter.commands(), "timescale 4", "demoseek " + mohreplay.seconds(spans[max(0, followed - 1)][0]),
-                         "demoonly kills")
+        # as planned: a clip going on while its fragger fires is another test
+        window.game.send("set cl_demoKeepShooting 0", *kill_filter.commands(), "timescale 4",
+                         "demoseek " + mohreplay.seconds(spans[max(0, followed - 1)][0]), "demoonly kills")
         samples, end = [], time.monotonic() + 20
         while time.monotonic() < end:
             state = self.game_state(window)
@@ -2687,6 +2689,31 @@ class TestRealGame(FakeGameCase):
         self.assertEqual([t for t in samples if not any(s - 150 <= t <= e + 150 for s, e in clips)], [])
         start, stop = spans[followed]
         self.assertTrue(any(start <= t <= stop for t in samples), "the followed player's kill wasn't played")
+
+    def test_clip_goes_on_while_firing(self):
+        """A clip ends the time after a frag from its fragger's last shot, past
+        where it's planned to end while they fire."""
+        window = self.window()
+        index = self.real_demo(window)
+        lines, output = [], window.game.on_output
+        window.game.on_output = lambda line: (lines.append(line), output(line))
+        kill_filter = mohreplay.KillFilter(recorder=True, specced=True)
+        spans = mohreplay.demoonly_plan(index, "kills", kill_filter=kill_filter)[1]
+        window.game.send("set developer 1", *kill_filter.commands(), "timescale 4",
+                         "demoseek " + mohreplay.seconds(spans[0][0]), "demoonly kills")
+
+        def clips_gone_on():
+            matches = (re.search(r"Played on to ([\d:.]+): the last shot was at ([\d:.]+)", line) for line in lines)
+            return [match for match in matches if match]
+        wait_until(lambda: len(clips_gone_on()) >= 3, 20)
+        played = clips_gone_on()
+        self.assertTrue(played, "no clip went on")
+
+        def msec(text):
+            minutes, seconds = text.split(":")
+            return int(minutes) * 60000 + float(seconds) * 1000
+        for match in played:
+            self.assertAlmostEqual(msec(match.group(1)) - msec(match.group(2)), mohreplay.KILL_AFTER, delta=300)
 
     def test_kill_filter(self):
         """demonextkill goes where Record plans each kill to start, with the

@@ -69,6 +69,11 @@ cvar_t	*cl_demoKillBefore;
 //  the player a demo shows from behind (cgame), -1 for none: the killer of a
 //  kill demoonly plays while they aren't shown (demofilter unshown)
 cvar_t	*cl_demoBehind;
+//  the player who made the last kill demoonly played (cgame tells when they
+//  last fired, in cg_demoLastShot), -1 for none; with cl_demoKeepShooting, the
+//  time after a kill counts from their last shot
+cvar_t	*cl_demoShooter;
+cvar_t	*cl_demoKeepShooting;
 cvar_t	*cl_demoKillAfter;
 cvar_t	*cl_demoMultiKill;
 cvar_t	*cl_demoClipNumbers;
@@ -731,6 +736,9 @@ typedef enum {
 
 static demoOnly_t	cl_demoOnly;
 static char			cl_demoOnlyPlayer[MAX_NAME_LENGTH];
+static qboolean		cl_demoPlaysOn;			// past the end of a stretch, as its player still shoots
+static int			cl_demoPlayedTo;		// the last time it was in a stretch
+static int			cl_demoShooterKill = -1;	// the index event of cl_demoShooter's kill
 
 // the kills demoonly and the kill jumps go to without a player given, set by
 // demofilter and kept from one demo to the next: by players whose names
@@ -895,6 +903,11 @@ static void CL_SeekDemoTo( int msec ) {
 	}
 
 	Com_Printf( "Seeking to %s\n", CL_DemoTimeString( msec ) );
+
+	// Added in OPM
+	//  Shots from before it don't keep a clip going
+	Cvar_Set( "cg_demoLastShot", "0" );
+	cl_demoPlaysOn = qfalse;
 
 	if ( clc.state == CA_ACTIVE && clc.demoStartTime + msec < cl.serverTime ) {
 		CL_PlayDemo( clc.demoName );
@@ -1814,7 +1827,8 @@ int CL_DemoClipNumber( void ) {
 	if ( cl_demoOnly == DEMOONLY_ALL ) {
 		return cl_demoClipNumbers->integer;
 	}
-	if ( !CL_DemoNextStretch( CL_DemoTime(), &start, &end, &before ) ) {
+	// playing on past its end, it's still the one that was playing
+	if ( !CL_DemoNextStretch( cl_demoPlaysOn ? cl_demoPlayedTo : CL_DemoTime(), &start, &end, &before ) ) {
 		return 0;
 	}
 	return cl_demoClipNumbers->integer + before;
@@ -1924,6 +1938,75 @@ static int CL_DemoSnapshotMsec( void ) {
 
 /*
 ====================
+CL_UpdateDemoShooter
+
+Added in OPM
+Who made the last kill of the stretch demoonly plays at time, for cgame to
+tell when they fire
+====================
+*/
+static void CL_UpdateDemoShooter( int time ) {
+	const demoEvent_t	*ev;
+	int					start, end;
+	int					shooter = -1;
+	int					i;
+
+	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
+		ev = &cl_demoIndex.events[i];
+		if ( ev->time > time ) {
+			break;
+		}
+		if ( ev->type == DEMOEVENT_KILL && CL_DemoKillStretch( i, &start, &end ) && start <= time && time < end ) {
+			shooter = ev->client;
+			cl_demoShooterKill = i;
+		}
+	}
+
+	if ( shooter >= 0 && shooter != cl_demoShooter->integer ) {
+		Cvar_Set( "cl_demoShooter", va( "%i", shooter ) );
+	}
+}
+
+/*
+====================
+CL_DemoKeepsShooting
+
+Added in OPM
+Whether demoonly plays on at time, past the end of a stretch of kills: the
+time after a kill counts from the last shot of the player who made it, while
+they're the one shown and in the same level
+====================
+*/
+static qboolean CL_DemoKeepsShooting( int time ) {
+	const playerState_t	*ps = &cl.snap.ps;
+	int					shooter = cl_demoShooter->integer;
+	int					shown, shot;
+
+	if ( !cl_demoKeepShooting->integer || shooter < 0 || cl_demoShooterKill < 0 ) {
+		return qfalse;
+	}
+
+	if ( cl_demoBehind->integer >= 0 ) {
+		shown = cl_demoBehind->integer;
+	} else if ( ps->pm_flags & ( PMF_SPECTATING | PMF_CAMERA_VIEW ) ) {
+		shown = ps->stats[STAT_INFOCLIENT];
+	} else {
+		shown = ps->clientNum;
+	}
+	if ( shown != shooter ) {
+		return qfalse;
+	}
+
+	shot = Cvar_VariableIntegerValue( "cg_demoLastShot" );
+	if ( !shot ) {
+		return qfalse;
+	}
+	shot -= clc.demoStartTime;
+	return shot <= time && time < shot + CL_DemoKillAfter() && time < CL_DemoNextMapTimeFor( cl_demoShooterKill );
+}
+
+/*
+====================
 CL_RunDemoOnly
 
 Jumps over what demoonly doesn't play, and pauses after the last of it, as
@@ -1931,11 +2014,13 @@ it will be in ahead msec. A stretch ends before the snapshot that comes at
 its end is read: the HUD goes by the one read, ahead of the time drawn, and
 it may be of the round over, with no HUD, or of someone else. The snapshot
 the next frame reads is read now, before that frame is saved: it may come
-long after the last one, and at a new round the time jumps to it.
+long after the last one, and at a new round the time jumps to it. It plays on
+past a stretch of kills while the player who made them still shoots.
 ====================
 */
 static void CL_RunDemoOnly( int ahead ) {
-	int		time, start, end;
+	int			time, start, end, next;
+	qboolean	found;
 
 	if ( cl_demoOnly == DEMOONLY_ALL || !clc.demoplaying || clc.state != CA_ACTIVE
 		|| clc.demoSeeking || cl_freezeDemo->integer ) {
@@ -1950,17 +2035,43 @@ static void CL_RunDemoOnly( int ahead ) {
 	}
 
 	time = CL_DemoTime() + ahead;
-	if ( !CL_DemoNextStretch( Q_max( time + CL_DemoSnapshotMsec(), cl.snap.serverTime - clc.demoStartTime ), &start, &end, NULL ) ) {
+	next = Q_max( time + CL_DemoSnapshotMsec(), cl.snap.serverTime - clc.demoStartTime );
+	found = CL_DemoNextStretch( next, &start, &end, NULL );
+
+	if ( found && time >= start ) {
+		cl_demoPlaysOn = qfalse;
+		cl_demoPlayedTo = time;
+		if ( cl_demoOnly != DEMOONLY_WATCHED ) {
+			CL_UpdateDemoShooter( time );
+		}
+		return;
+	}
+
+	if ( cl_demoOnly != DEMOONLY_WATCHED && CL_DemoKeepsShooting( next ) ) {
+		if ( !cl_demoPlaysOn ) {
+			Com_DPrintf( "Playing on after %s: the last shot was at %s\n", CL_DemoTimeString( cl_demoPlayedTo ),
+				CL_DemoTimeString( Cvar_VariableIntegerValue( "cg_demoLastShot" ) - clc.demoStartTime ) );
+		}
+		cl_demoPlaysOn = qtrue;
+		return;
+	}
+
+	if ( cl_demoPlaysOn ) {
+		Com_DPrintf( "Played on to %s: the last shot was at %s\n", CL_DemoTimeString( time ),
+			CL_DemoTimeString( Cvar_VariableIntegerValue( "cg_demoLastShot" ) - clc.demoStartTime ) );
+	}
+
+	if ( !found ) {
 		Com_Printf( "Nothing more to play, paused\n" );
 		cl_demoOnly = DEMOONLY_ALL;
+		cl_demoPlaysOn = qfalse;
+		Cvar_Set( "cl_demoShooter", "-1" );
 		Cvar_Set( "cl_freezeDemo", "1" );
 		CL_CloseAVI();
 		return;
 	}
 
-	if ( time < start ) {
-		CL_SeekDemoTo( start );
-	}
+	CL_SeekDemoTo( start );
 }
 
 /*
@@ -2005,6 +2116,9 @@ static void CL_DemoOnly_f( void ) {
 
 	cl_demoOnly = only;
 	Q_strncpyz( cl_demoOnlyPlayer, player, sizeof( cl_demoOnlyPlayer ) );
+	cl_demoPlaysOn = qfalse;
+	cl_demoShooterKill = -1;
+	Cvar_Set( "cl_demoShooter", "-1" );
 
 	if ( !CL_DemoNextStretch( CL_DemoTime(), &start, &end, NULL ) ) {
 		Com_Printf( "Nothing more to play\n" );
@@ -5289,6 +5403,8 @@ void CL_Init( void ) {
 	//  Seconds of each kill shown by demonextkill and demoonly kills
 	cl_demoKillBefore = Cvar_Get ("cl_demoKillBefore", "4", CVAR_ARCHIVE );
 	cl_demoKillAfter = Cvar_Get ("cl_demoKillAfter", "2", CVAR_ARCHIVE );
+	cl_demoShooter = Cvar_Get ("cl_demoShooter", "-1", CVAR_ROM );
+	cl_demoKeepShooting = Cvar_Get ("cl_demoKeepShooting", "1", 0 );
 	//  Seconds at most between a player's kills in a multi-kill
 	cl_demoMultiKill = Cvar_Get ("cl_demoMultiKill", "3", CVAR_ARCHIVE );
 	//  The number drawn on the first clip demoonly plays, the next ones

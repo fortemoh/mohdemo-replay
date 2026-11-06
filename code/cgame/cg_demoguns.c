@@ -336,3 +336,57 @@ void CG_DemoGuns(snapshot_t *snap)
         present[number] = qtrue;
     }
 }
+
+/*
+===============
+CG_DemoShots
+
+Tells the client when the player it asks about last fired (cl_demoShooter), in
+cg_demoLastShot, for a clip to go on until they've stopped: each shot restarts
+their body's animation
+===============
+*/
+void CG_DemoShots(const snapshot_t *snap)
+{
+    static int      shooter = -1;
+    static qboolean firing;
+    static float    firedAt;
+    const char     *anim;
+    float           time;
+    dtiki_t        *tiki;
+    int             i;
+
+    if (!cg.demoPlayback) {
+        return;
+    }
+
+    if (cl_demoShooter->integer != shooter) {
+        shooter = cl_demoShooter->integer;
+        firing  = qfalse;
+    }
+    if (shooter < 0) {
+        return;
+    }
+
+    for (i = 0; i < snap->numEntities; i++) {
+        const entityState_t *body = &snap->entities[i];
+
+        if (body->number != shooter) {
+            continue;
+        }
+
+        tiki = body->eType == ET_PLAYER && !(body->eFlags & EF_DEAD) ? CG_FollowedBodyTiki(body) : NULL;
+        if (!tiki || CG_DemoBodyAnims(body, tiki, &anim, &time) < 0 || Q_stricmp(anim, "fire")) {
+            break;
+        }
+
+        // not one that began before a seek, seen part way through
+        if (firing ? time < firedAt : time < 0.15f) {
+            cgi.Cvar_Set("cg_demoLastShot", va("%i", snap->serverTime));
+        }
+        firing  = qtrue;
+        firedAt = time;
+        return;
+    }
+    firing = qfalse;
+}

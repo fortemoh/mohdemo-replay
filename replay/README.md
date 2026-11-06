@@ -193,7 +193,11 @@ binds, without the app:
 | `demovideo <name> [end time]` | record into an MP4, see below |
 
 `cl_demoKillBefore` and `cl_demoKillAfter` set how many seconds of each kill
-are shown (4 and 2). Kills less than a second apart play as one, without a
+are shown (4 and 2). A clip doesn't end while its fragger is firing: the time
+after a kill counts from their last shot, each shot before it's over starting
+it again, while they're the one shown (`cl_demoKeepShooting 0` turns that off).
+A video can so run longer than planned, as the clip list's times are the planned
+ones. Kills less than a second apart play as one, without a
 jump, except for a player's kills or whoever's is shown when the player
 shown changes in between: that stays a cut. A multi-kill is two kills or
 more by a player, each at most `cl_demoMultiKill` seconds (3) after the one

@@ -387,6 +387,7 @@ static snapshot_t *CG_ReadNextSnapshot(void)
             // Added in OPM
             CG_FollowFromEyes(dest);
             CG_DemoGuns(dest);
+            CG_DemoShots(dest);
             return dest;
         }
 
