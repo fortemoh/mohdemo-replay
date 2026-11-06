@@ -239,7 +239,8 @@ chooses both, for videos too. Health only shows from someone's own eyes: the
 recorder playing, or a player followed with `cg_followcamera 2`.
 
 Demos don't show the score and time left, top right, the stopwatch of planting
-or defusing a bomb, or the server's messages
+or defusing a bomb, the weapons players carry on their bodies, which only some
+servers' mods put there (`cg_demoholsters 1` shows them), or the server's messages
 about players coming and going
 ("<player> has entered the battle", which it tells everyone each time a
 player enters, as at every round, has left the battle, has joined the

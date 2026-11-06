@@ -186,6 +186,65 @@ static void CG_DemoGunAdd(snapshot_t *snap, const entityState_t *es)
 
 /*
 ===============
+CG_DemoHolsters
+
+Takes the weapons players carry on their bodies out of the snapshot, unless
+cg_demoholsters: the game's own files don't put them there, some servers' mods
+do. What's in their hands stays, and what isn't a weapon, as a clip in a reload.
+===============
+*/
+void CG_DemoHolsters(snapshot_t *snap)
+{
+    static int      body[MAX_CLIENTS];
+    static qboolean carried[MAX_ENTITIES_IN_SNAPSHOT];
+    int             count;
+    int             i;
+
+    if (!cg.demoPlayback || cg_demoholsters->integer) {
+        return;
+    }
+
+    for (i = 0; i < MAX_CLIENTS; i++) {
+        body[i] = -1;
+    }
+    for (i = 0; i < snap->numEntities; i++) {
+        if (snap->entities[i].eType == ET_PLAYER && snap->entities[i].number < MAX_CLIENTS) {
+            body[snap->entities[i].number] = i;
+        }
+    }
+
+    for (i = 0; i < snap->numEntities; i++) {
+        const entityState_t *es = &snap->entities[i];
+        dtiki_t             *tiki;
+        const char          *tag;
+
+        carried[i] = qfalse;
+        if (es->parent >= MAX_CLIENTS || body[es->parent] < 0
+            || Q_stricmpn(CG_ConfigString(CS_MODELS + es->modelindex), "models/weapons/", 15)) {
+            continue;
+        }
+
+        tiki = CG_FollowedBodyTiki(&snap->entities[body[es->parent]]);
+        tag  = tiki ? cgi.Tag_NameForNum(tiki, es->tag_num & TAG_MASK) : NULL;
+        if (tag && Q_stricmp(tag, "tag_weapon_right") && Q_stricmp(tag, "tag_weapon_left")) {
+            carried[i] = qtrue;
+        }
+    }
+
+    count = 0;
+    for (i = 0; i < snap->numEntities; i++) {
+        if (!carried[i]) {
+            if (count != i) {
+                snap->entities[count] = snap->entities[i];
+            }
+            count++;
+        }
+    }
+    snap->numEntities = count;
+}
+
+/*
+===============
 CG_DemoGuns
 
 Puts the guns of the players who have none in the snapshot, while the demo

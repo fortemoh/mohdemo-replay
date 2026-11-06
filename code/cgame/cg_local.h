@@ -537,6 +537,7 @@ extern "C" {
     extern cvar_t *cg_recordercamera;
     extern cvar_t *cl_demoBehind;
     extern cvar_t *cg_demoguns;
+    extern cvar_t *cg_demoholsters;
     extern cvar_t *cl_demoShooter;
     extern cvar_t *cg_followedModel;
     extern cvar_t *cg_followedGermanModel;
@@ -642,6 +643,7 @@ extern "C" {
     void CG_FollowFromEyes(snapshot_t *snap);
     qboolean CG_FollowedGun(const entityState_t *es, const entityState_t *body);
     dtiki_t *CG_FollowedBodyTiki(const entityState_t *body);
+    void CG_DemoHolsters(snapshot_t *snap);
     void CG_DemoGuns(snapshot_t *snap);
     void CG_DemoShots(const snapshot_t *snap);
     void CG_FollowedKill(const char *text);
