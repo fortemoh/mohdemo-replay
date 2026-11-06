@@ -34,9 +34,9 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QActionGroup, QColor, QDesktopServices, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSlider,
-    QSpinBox, QStyle, QTabWidget, QToolBar, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QSpinBox, QSplitter, QStyle, QTabWidget, QToolBar, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
     QWidgetAction,
 )
 
@@ -2376,45 +2376,70 @@ class Window(QMainWindow):
         footer.addWidget(self.message, 1)
         footer.addWidget(self.record_button)
 
-        central = QWidget()
-        box = QVBoxLayout(central)
-        box.addLayout(filters)
+        listed = QWidget()
+        box = QVBoxLayout(listed)
+        box.setContentsMargins(0, 0, 0, 0)
         box.addWidget(self.demos, 1)
         box.addLayout(footer)
-        self.setCentralWidget(central)
 
         # the videos recorded and to record
         self.queue = self.make_list(["Video", "What", "Status"])
         self.queue.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.queue.itemActivated.connect(self.open_video)
-        buttons = QHBoxLayout()
-        for text, action, tip in (
-                ("Pause", self.pause_jobs, "Holds the videos selected; the one recording stops and keeps its "
-                                           "clips made, to go on from there"),
-                ("Resume", self.resume_jobs, "Records the videos selected that are paused, failed or canceled "
-                                             "again, in their turn"),
-                ("Record again", self.record_jobs_again, "Records the videos selected that are done once more, in "
-                                                         "their turn, with the game as it is now: a new video, "
-                                                         "numbered, next to the one made"),
-                ("Up", lambda: self.move_jobs(-1), "Records the videos selected sooner"),
-                ("Down", lambda: self.move_jobs(1), "Records the videos selected later"),
-                ("Cancel", self.cancel_jobs, ""), ("Remove finished", self.remove_finished, ""),
-                ("Open folder", self.open_folder, "")):
-            button = QPushButton(text)
+        self.queue.itemSelectionChanged.connect(self.show_pause_button)
+        self.queue_summary = faint(QLabel())
+        self.pause_button = QPushButton()
+        self.pause_button.clicked.connect(self.pause_or_resume)
+        cancel = QPushButton(theme_icon("dialog-cancel", QStyle.SP_DialogCancelButton), "Cancel")
+        cancel.clicked.connect(self.cancel_jobs)
+        open_folder = QPushButton(theme_icon("folder-open", QStyle.SP_DirOpenIcon), "Open folder")
+        open_folder.clicked.connect(self.open_folder)
+        more = QToolButton()
+        more.setText("More")
+        more.setPopupMode(QToolButton.InstantPopup)
+        more.setMenu(QMenu(more))
+        more.menu().setToolTipsVisible(True)
+        again = more.menu().addAction("Record again", self.record_jobs_again)
+        again.setToolTip("Records the videos selected that are done once more, in their turn, with the game as it is "
+                         "now: a new video, numbered, next to the one made")
+        more.menu().addAction("Remove finished", self.remove_finished)
+        head = QHBoxLayout()
+        head.addWidget(heading("Videos"))
+        head.addSpacing(6)
+        head.addWidget(self.queue_summary)
+        head.addStretch(1)
+        head.addWidget(self.pause_button)
+        for name, fallback, tip, step in (("go-up", QStyle.SP_ArrowUp, "Records the videos selected sooner", -1),
+                                          ("go-down", QStyle.SP_ArrowDown, "Records the videos selected later", 1)):
+            button = QToolButton()
+            button.setIcon(theme_icon(name, fallback))
             button.setToolTip(tip)
-            button.clicked.connect(action)
-            buttons.addWidget(button)
-        buttons.addStretch(1)
+            button.clicked.connect(lambda _=False, step=step: self.move_jobs(step))
+            head.addWidget(button)
+        head.addWidget(cancel)
+        head.addSpacing(10)
+        head.addWidget(open_folder)
+        head.addWidget(more)
         videos = QWidget()
         box = QVBoxLayout(videos)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.addWidget(self.queue)
-        box.addLayout(buttons)
-        self.queue_dock = QDockWidget("Videos", self)
-        self.queue_dock.setObjectName("videos")
-        self.queue_dock.setWidget(videos)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.queue_dock)
-        self.queue_dock.hide()
+        box.setContentsMargins(0, 6, 0, 0)
+        box.addLayout(head)
+        box.addWidget(self.queue, 1)
+        self.show_queue()
+
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(listed)
+        splitter.addWidget(videos)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([480, 210])
+
+        central = QWidget()
+        box = QVBoxLayout(central)
+        box.addLayout(filters)
+        box.addWidget(splitter, 1)
+        self.setCentralWidget(central)
 
         toolbar = QToolBar("Toolbar")
         toolbar.setObjectName("toolbar")
@@ -2451,9 +2476,6 @@ class Window(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         toolbar.addWidget(spacer)
-        videos_action = self.queue_dock.toggleViewAction()
-        videos_action.setIcon(theme_icon("video-x-generic", QStyle.SP_FileDialogContentsView))
-        toolbar.addAction(videos_action)
         settings_action = toolbar.addAction(theme_icon("configure", QStyle.SP_FileDialogDetailedView), "Settings…")
         settings_action.triggered.connect(lambda: self.edit_settings())
         self.show_folder()
@@ -2940,15 +2962,12 @@ class Window(QMainWindow):
         self.jobs.append(job)
         self.queue.addTopLevelItem(job["item"])
         self.show_job(job)
-        if self.queue_dock.isHidden():
-            self.queue_dock.show()
-            self.resizeDocks([self.queue_dock], [160], Qt.Vertical)
         if start:
             self.save_queue()
             self.next_job()
 
     def show_job(self, job):
-        """Its line in the Videos panel."""
+        """Its line in the list of videos."""
         item, status = job["item"], job["status"]
         item.setText(0, os.path.basename(job["output"]))
         item.setText(1, job["label"])
@@ -2969,6 +2988,36 @@ class Window(QMainWindow):
         item.setToolTip(2, tip)
         item.setToolTip(0, job["output"] if status == "done" else "")
         item.setForeground(2, QColor(Qt.red) if status == "failed" else self.queue.palette().text())
+        self.show_queue()
+
+    def show_queue(self):
+        """How many videos there are of each kind, and what the button for
+        those selected does."""
+        counts = collections.Counter(job["status"] for job in self.jobs)
+        self.queue_summary.setText(", ".join(f"{counts[status]} {word}" for status, word in (
+            ("recording", "recording"), ("waiting", "waiting"), ("paused", "paused"), ("failed", "failed"),
+            ("canceled", "canceled"), ("done", "done")) if counts[status]))
+        self.show_pause_button()
+
+    def show_pause_button(self):
+        """Pause for the videos selected that wait or record, else Resume for
+        those paused, failed or canceled; nothing for the others."""
+        statuses = {job["status"] for job in self.selected_jobs()}
+        pause = bool(statuses & {"waiting", "recording"})
+        resume = not pause and bool(statuses & {"paused", "failed", "canceled"})
+        self.pause_button.setText("Resume" if resume else "Pause")
+        self.pause_button.setIcon(theme_icon(*(("media-playback-start", QStyle.SP_MediaPlay) if resume
+                                               else ("media-playback-pause", QStyle.SP_MediaPause))))
+        self.pause_button.setToolTip("Records the videos selected that are paused, failed or canceled again, in their "
+                                     "turn" if resume else "Holds the videos selected; the one recording stops and "
+                                     "keeps its clips made, to go on from there")
+        self.pause_button.setEnabled(pause or resume)
+
+    def pause_or_resume(self):
+        if self.pause_button.text() == "Resume":
+            self.resume_jobs()
+        else:
+            self.pause_jobs()
 
     def queue_file(self):
         """Where the videos are kept when the app closes: next to the
@@ -3103,6 +3152,7 @@ class Window(QMainWindow):
         for job in [j for j in self.jobs if j["status"] in ("done", "failed", "canceled")]:
             self.jobs.remove(job)
             self.queue.takeTopLevelItem(self.queue.indexOfTopLevelItem(job["item"]))
+        self.show_queue()
         self.save_queue()
 
     def open_video(self, item):

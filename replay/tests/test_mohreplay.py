@@ -1491,7 +1491,6 @@ class TestRecording(FakeGameCase):
             dialog.end.setText("1:10")
             dialog.pattern.setText("{demo} {start}")
         self.record(window, setup)
-        self.assertFalse(window.queue_dock.isHidden())
         job, = self.done(window)
         self.assertEqual(job["status"], "done")
         self.assertEqual(job["item"].text(2), "Done")
@@ -2315,6 +2314,48 @@ class TestRecording(FakeGameCase):
         again = [c for c in sent[len(demos):] if c.startswith("demo ")]
         self.assertNotIn(demos[0], again)
         self.assertFalse([name for name in os.listdir(self.videos) if name.startswith(".mohreplay-parts")])
+
+    def test_videos_panel(self):
+        """Always there: how many there are, and one button that pauses or
+        resumes those selected, as they are; the rest under More."""
+        window = self.window()
+        self.ready(window)
+        buttons = {button.text() for button in window.findChildren(mohreplay.QPushButton)}
+        self.assertTrue({"Pause", "Cancel", "Open folder"} <= buttons)
+        more = next(button for button in window.findChildren(mohreplay.QToolButton) if button.text() == "More")
+        self.assertEqual([action.text() for action in more.menu().actions()], ["Record again", "Remove finished"])
+        self.assertEqual(window.queue_summary.text(), "")
+        self.assertFalse(window.pause_button.isEnabled())
+        with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
+            for start, name in (("1:00", "a"), ("1:10", "b"), ("1:20", "c")):
+                self.stretch(window, start, name)
+            a, b, c = window.jobs
+            self.assertEqual(window.queue_summary.text(), "1 recording, 2 waiting")
+            b["item"].setSelected(True)
+            self.assertEqual((window.pause_button.text(), window.pause_button.isEnabled()), ("Pause", True))
+            window.pause_button.click()
+            self.assertEqual(b["status"], "paused")
+            self.assertEqual(window.pause_button.text(), "Resume")
+            self.assertEqual(window.queue_summary.text(), "1 recording, 1 waiting, 1 paused")
+            # some of each: pause first, those paused resumed on their own
+            c["item"].setSelected(True)
+            self.assertEqual(window.pause_button.text(), "Pause")
+            c["item"].setSelected(False)
+            window.pause_button.click()
+            self.assertEqual(b["status"], "waiting")
+            self.assertEqual(window.pause_button.text(), "Pause")
+            b["item"].setSelected(False)
+            buttons = {b.toolTip(): b for b in window.findChildren(mohreplay.QToolButton)}
+            c["item"].setSelected(True)
+            buttons["Records the videos selected sooner"].click()
+            self.assertEqual(self.labels(window), ["a.mp4", "c.mp4", "b.mp4"])
+            buttons["Records the videos selected later"].click()
+            self.assertEqual(self.labels(window), ["a.mp4", "b.mp4", "c.mp4"])
+            self.assertTrue(wait_until(lambda: all(job["status"] == "done" for job in window.jobs), 60))
+        self.assertEqual(window.queue_summary.text(), "3 done")
+        self.assertFalse(window.pause_button.isEnabled())
+        more.menu().actions()[1].trigger()
+        self.assertEqual((window.jobs, window.queue_summary.text()), ([], ""))
 
     def test_queue_kept_when_closing(self):
         """Closing keeps the videos left, the one recording with its clips

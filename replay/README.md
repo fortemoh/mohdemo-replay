@@ -105,14 +105,14 @@ clips of a video without encoding them again. A clip the game doesn't
 record, as its demo's map isn't installed or the game quits in it, is tried
 again once in a new game, then left out, the video going on without it
 ("Done, 1 clip left out", its tip which and why); three in a row stop the
-video. The Videos panel lists them,
-with how far the one recording is and how long it has left, in the order
-they're recorded in: Up and Down move those selected, Pause holds them (the
-one recording stops, keeping its clips made, and goes on from the next one),
-Resume records them again, also when they failed or were canceled, Record
-again records those done once more (the same clips and settings, with the
-game as it is now, as after an update: a new video next to the first,
-numbered "(2)"), Cancel, Remove finished, Open folder, and double-click to
+video. The Videos list, under the demos, shows them with how far the one
+recording is and how long it has left, in the order they're recorded in, and
+how many there are of each kind. Pause holds those selected (the one recording
+stops, keeping its clips made, and goes on from the next one), and turns into
+Resume for those paused, failed or canceled, the arrows move them up and down,
+Cancel, Open folder; under More, Record again records those done once more (the
+same clips and settings, with the game as it is now, as after an update: a new
+video next to the first, numbered "(2)"), and Remove finished. Double-click to
 watch one. Closing the app
 keeps them, the one recording with its clips made, and they go on when it
 opens again (in `queue.json`, next to its settings). Only the first window
