@@ -2847,6 +2847,8 @@ class Window(QMainWindow):
         if not names:
             return
         kill_filter = self.kill_filter()
+        # thousands of demos take a while
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         indexes = {name: self.library.index(name) for name in names}
 
         def plans_for(before, after):
@@ -2870,8 +2872,11 @@ class Window(QMainWindow):
                     ("everything", ("All of the demo" if len(names) == 1 else f"All of the {len(names):,} demos")
                      + (", " + about(sum(length(s) for s in whole)) if None not in whole else ""), True)]
 
-        dialog = RecordDialog(self.settings, choices(plans_for(*self.get_rec_kill_times())),
-                              0 if len(names) == 1 else None, join=len(names) > 1, parent=self,
+        try:
+            offered = choices(plans_for(*self.get_rec_kill_times()))
+        finally:
+            QApplication.restoreOverrideCursor()
+        dialog = RecordDialog(self.settings, offered, 0 if len(names) == 1 else None, join=len(names) > 1, parent=self,
                               relabel=lambda before, after: choices(plans_for(before, after)))
         if not dialog.exec():
             return
