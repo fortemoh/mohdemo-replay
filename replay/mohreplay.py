@@ -2132,6 +2132,18 @@ class RecordDialog(QDialog):
         return jobs
 
 
+def written_by(pid):
+    """How many bytes a process has written, None when that can't be told."""
+    try:
+        with open(f"/proc/{pid}/io") as f:
+            for line in f:
+                if line.startswith("wchar:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 class Recorder(QObject):
     """Records a job in a second game, offscreen, rendering the sound: its
     clips one after the other, loading their demos, then FFmpeg joins them
@@ -2161,6 +2173,7 @@ class Recorder(QObject):
         self.loaded = None  # the demo the recorder plays
         self.parts = []
         self.joiner = None
+        self.join_size = 0  # of the clips, in bytes
         self.parts_dir = None
         self.started_at = None  # how much of the video was made before
         # with the settings of the game watched, but changing none
@@ -2262,6 +2275,9 @@ class Recorder(QObject):
         self.phase = "starting"
 
     def poll(self):
+        if self.phase == "joining":
+            self.show_joining()
+            return
         # looked at first: the game says it records before FFmpeg makes the
         # file, and that it's done once FFmpeg has quit
         made = os.path.isfile(self.made())
@@ -2387,6 +2403,8 @@ class Recorder(QObject):
         # it has nothing left to play, and joining a long video takes minutes
         self.game.stop()
         self.on_progress(self.job, f"Joining {len(self.parts)} clips…")
+        self.join_size = sum(os.path.getsize(part) for part in self.parts if os.path.isfile(part))
+        self.clock.start()
         folder = self.parts_dir
         with open(os.path.join(folder, "parts.txt"), "w") as f:
             f.writelines("file '" + part.replace("'", "'\\''") + "'\n" for part in self.parts)
@@ -2398,6 +2416,19 @@ class Recorder(QObject):
         self.joiner.start(self.job["ffmpeg"], ["-loglevel", "warning", "-y", "-f", "concat", "-safe", "0",
                                                "-i", os.path.join(folder, "parts.txt"), "-c", "copy",
                                                "-movflags", "+faststart", os.path.join(folder, "joined.mp4")])
+
+    def show_joining(self):
+        """How far FFmpeg is, from what it has written: the clips once, into
+        the video, then about as much again, +faststart moving the video's
+        index to its start. As it was when that can't be told."""
+        written = written_by(self.joiner.processId()) if self.joiner else None
+        if not written or not self.join_size:
+            return
+        share = min(0.99, written / (2 * self.join_size))
+        text = f"Joining {len(self.parts)} clips: {int(share * 100)}%"
+        if share >= 0.02:
+            text += ", " + about(self.clock.elapsed() * (1 - share) / share) + " left"
+        self.on_progress(self.job, text + "…")
 
     def joined(self, code=0, status=None):
         if self.phase != "joining":

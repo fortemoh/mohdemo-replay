@@ -2053,6 +2053,36 @@ class TestRecording(FakeGameCase):
         self.assertEqual(job["status"], "done")
         self.assertEqual(len(self.video(os.path.basename(job["output"]))["joined"]), 2)
 
+    def test_joining_tells_how_far(self):
+        self.add_demo("second", DEMO)
+        window = self.window()
+        self.ready(window, "first", "second")
+        with mock.patch.dict(os.environ, {"FAKEGAME_JOIN_WAIT": "3"}):
+            self.record(window, lambda d: d.join.setChecked(True))
+            self.assertTrue(wait_until(lambda: window.recorder and window.recorder.phase == "joining", 20))
+            job, recorder = window.jobs[0], window.recorder
+            self.assertGreater(recorder.join_size, 0)
+
+            def shows(written, text):
+                with mock.patch.object(mohreplay, "written_by", lambda pid: written):
+                    return wait_until(lambda: job["item"].text(2) == text, 2)
+            # the clips once, then as much again as the video's index moves
+            self.assertTrue(shows(recorder.join_size, "Joining 2 clips: 50%, under a minute left…"))
+            self.assertTrue(shows(recorder.join_size * 5, "Joining 2 clips: 99%, under a minute left…"))
+            # when it can't be told, as it was
+            self.assertTrue(shows(None, "Joining 2 clips: 99%, under a minute left…"))
+            self.done(window)
+        self.assertEqual(job["status"], "done")
+
+    def test_written_by(self):
+        before = mohreplay.written_by(os.getpid())
+        if before is None:
+            self.skipTest("this system doesn't tell")
+        with open(os.path.join(self.demos, "written"), "wb", buffering=0) as f:
+            f.write(b"x" * 100000)
+        self.assertGreaterEqual(mohreplay.written_by(os.getpid()) - before, 100000)
+        self.assertIsNone(mohreplay.written_by(0))
+
     def record_failing(self, names, numbers=False, wait=True):
         """Records t-'s frags in demos, one video for all: the job, and the
         commands the games were sent, till it's done if wait."""
