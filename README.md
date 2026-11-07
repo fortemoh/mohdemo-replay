@@ -34,7 +34,8 @@ them, and the videos being made. The demos and player names are made up.*
   some minutes if you like; of one demo, a stretch of time too. MP4 with sound,
   at the size and frame rate you choose, recorded in the background faster than
   real time, with the cameras, the skins of the player followed and clip
-  numbers you choose. Videos wait in a queue you can pause and reorder, kept
+  numbers you choose, and a scope made up for the long sniper frags of players
+  nobody watched, if you like. Videos wait in a queue you can pause and reorder, kept
   when the app closes.
 - **No app needed.** Everything is a game console command (`demoseek`,
   `demonextkill`, `demoonly`, `demovideo`…), so it all works with key binds

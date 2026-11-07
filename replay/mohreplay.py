@@ -217,6 +217,18 @@ def camera_cvars(chosen):
     return [("cg_recordercamera", RECORDER_CAMERAS[chosen[0]][1]), ("cg_followcamera", FOLLOWED_CAMERAS[chosen[1]][1])]
 
 
+# the scope made up for the long sniper frags of players not shown, as a demo
+# doesn't tell if they had one: {key: (label, cg_demoscope)}, the first the
+# default
+SCOPES = {"none": ("None", "0"), "spectator": ("As a spectator sees it", "2"), "eyes": ("In their eyes", "1")}
+
+
+def scope_chosen(settings):
+    """The scope chosen, a key of SCOPES."""
+    scope = settings.value("camera_scope", "none")
+    return scope if scope in SCOPES else "none"
+
+
 # how a player model's name tells its team, as the game goes by it
 # (Player::InitModel)
 ALLIES_MODELS = ("american", "allied")
@@ -1091,11 +1103,12 @@ class Game:
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
     def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None,
-              kill_before=None, kill_after=None, videos=None, followed=("", ""), censor="", camera=("eyes", "behind")):
+              kill_before=None, kill_after=None, videos=None, followed=("", ""), censor="", camera=("eyes", "behind"),
+              scope="none"):
         """videos: the folder its videos go to, instead of its home; followed:
         the models of the player followed when allies and axis, "" for
         theirs; censor: the words starred out (cl_censor); camera: the
-        cameras (cameras())."""
+        cameras (cameras()); scope: the scope made up (scope_chosen())."""
         self.cleanup()
         self.game = game
         self.home = tempfile.mkdtemp(prefix="mohreplay-")
@@ -1134,6 +1147,7 @@ class Game:
                        for arg in ("+set", cvar, model)),
                      *(("+set", "cl_censor", censor) if censor else ()),
                      *(arg for cvar, value in camera_cvars(camera) for arg in ("+set", cvar, value)),
+                     "+set", "cg_demoscope", SCOPES[scope][1],
                      "+set", "cl_demoKillBefore", kb,
                      "+set", "cl_demoKillAfter", ka,
                      "+set", "r_swapInterval", "1", "+set", "com_maxfps", "0",
@@ -1469,6 +1483,7 @@ def video_settings(settings):
             "followed": followed_models(settings),
             "censor": censored_words(settings),
             "camera": cameras(settings),
+            "scope": scope_chosen(settings),
             # the folder its clips' demos are in, whichever is opened later
             "demos": settings.value("demos", ""),
             "ffmpeg": settings.value("rec/ffmpeg", "").strip() or find_ffmpeg()}
@@ -1993,6 +2008,10 @@ class RecordDialog(QDialog):
         self.followed_camera = camera_menu(FOLLOWED_CAMERAS, followed)
         self.followed_camera.setToolTip("Behind them, in their eyes (made from their gun and body, as their own view "
                                         "isn't recorded) or as the server showed them")
+        self.scope = camera_menu(SCOPES, scope_chosen(settings))
+        self.scope.setToolTip("For the sniper frags of Unspecced frags from 1000 units or more. A demo doesn't tell if "
+                              "those players had a scope on, but nearly all do that far, so one is made up from "
+                              "0.4 s before the shot until just after it")
         models = player_models(settings.value("game", ""))
         allies, axis = followed_models(settings)
         self.followed_allies = model_menu(models, False, allies)
@@ -2001,6 +2020,7 @@ class RecordDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.addRow("Recorder's camera", self.recorder_camera)
         form.addRow("Followed player's camera", self.followed_camera)
+        form.addRow("Scope on long unspecced frags", self.scope)
         form.addRow("Their skin as Allies", self.followed_allies)
         form.addRow("Their skin as Axis", self.followed_axis)
         right.addLayout(form)
@@ -2098,6 +2118,7 @@ class RecordDialog(QDialog):
                            ("forcemodel", "1" if self.forcemodel.isChecked() else "0")):
             self.settings.setValue("rec/" + key, value)
         for key, menu in (("camera_recorder", self.recorder_camera), ("camera_followed", self.followed_camera),
+                          ("camera_scope", self.scope),
                           ("followed_allies", self.followed_allies), ("followed_axis", self.followed_axis)):
             self.settings.setValue(key, menu.currentData())
         if self.offers_join:
@@ -2204,7 +2225,7 @@ class Recorder(QObject):
                         kill_before=kill_before, kill_after=kill_after, videos=self.parts_dir,
                         followed=job.get("followed", followed_models(settings)),
                         censor=job.get("censor", censored_words(settings)),
-                        camera=job.get("camera", cameras(settings)))
+                        camera=job.get("camera", cameras(settings)), scope=job.get("scope", scope_chosen(settings)))
 
     def start(self):
         job = self.job
@@ -2831,7 +2852,8 @@ class Window(QMainWindow):
         before, after = self.get_rec_kill_times()
         self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height,
                         viewmodel=video["viewmodel"], forcemodel=video["forcemodel"], kill_before=before / 1000,
-                        kill_after=after / 1000, followed=video["followed"], censor=video["censor"], camera=video["camera"])
+                        kill_after=after / 1000, followed=video["followed"], censor=video["censor"], camera=video["camera"],
+                        scope=video["scope"])
         self.tell("Starting the game…", 5000)
         # for its keys that go to frags
         self.game.send(*self.kill_filter().commands())

@@ -114,7 +114,10 @@ before its turn. Each lands in the folder chosen, named from a pattern
 frag played from how long before it to how long after.
 
 How it looks, in Record, is what the videos show: the cameras of the recorder
-and of the player they follow, the model of the player followed, and only them,
+and of the player they follow, the scope made up for the long sniper frags of
+Unspecced frags (a demo doesn't tell if those players had one on, nearly all do
+from 1000 units or more: none, as a spectator sees it, or in their eyes), the
+model of the player followed, and only them,
 one when they're Allies and one when they're Axis, from that team's player
 models in the game files, or as in the demo (`cg_followedModel`,
 `cg_followedGermanModel`), the gun in the player's hands, and Force models,
@@ -239,6 +242,14 @@ without their scope, crosshair, weapons, ammo, health or hits on the screen.
 Both have the name of who is shown on the left, as a spectator has. Record
 chooses both, for videos too. Health only shows from someone's own eyes: the
 recorder playing, or a player followed with `cg_followcamera 2`.
+
+A demo doesn't tell whether a player it shows from behind while they aren't the
+one shown (`demofilter unshown`) has a scope on. `cg_demoscope` makes one up for
+their sniper kills from `cg_demoscopedist` units (1000) or more, of which nearly
+all had one, from `cg_demoscopetime` msec (400) before the shot until just after
+it: `1` in their eyes, `2` as a spectator following them sees it, the camera
+behind them zoomed in. Where they stand, how their aim moves and where the shot
+lands are the demo's; Record chooses it, for videos too.
 
 Demos don't show the score and time left, top right, the stopwatch of planting
 or defusing a bomb, the weapons players carry on their bodies, which only some
