@@ -250,7 +250,7 @@ void CG_RegisterCvars(void)
     // a made up scope for the sniper kills from that far of a player shown
     // from behind, from that many msec before the shot: 1 from their eyes, 2 as
     // a spectator sees it
-    cg_demoscope     = cgi.Cvar_Get("cg_demoscope", "0", 0);
+    cg_demoscope     = cgi.Cvar_Get("cg_demoscope", "1", 0);
     cg_demoscopedist = cgi.Cvar_Get("cg_demoscopedist", "1000", 0);
     cg_demoscopetime = cgi.Cvar_Get("cg_demoscopetime", "400", 0);
     // the client's: the sniper kill of the player shown from behind about now

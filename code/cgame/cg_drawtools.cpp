@@ -510,13 +510,8 @@ void CG_DrawZoomOverlay()
     bDrawOverlay = qtrue;
 
     // Added in OPM
-    //  nor while a demo shows a player from behind, but in their eyes through
-    //  the scope made up for them
-    if (!cg.snap) {
-        return;
-    }
-    if (CG_DemoScopeEyes() < 0 && (CG_DemoBehind() >= 0 || CG_RecorderBehind())) {
-        fAlpha = 0;
+    //  nor while a demo shows a player from behind
+    if (!cg.snap || CG_DemoBehind() >= 0 || CG_RecorderBehind()) {
         return;
     }
 
@@ -524,9 +519,7 @@ void CG_DrawZoomOverlay()
         weaponstring = CG_ConfigString(CS_WEAPONS + cg.snap->ps.activeItems[1]);
     }
 
-    if (CG_DemoScopeEyes() >= 0) {
-        zoomType = (cg_entities[CG_DemoScopeEyes()].currentState.eFlags & EF_AXIS) ? 1 : 0;
-    } else if (!Q_stricmp(weaponstring, "Spy Camera")) {
+    if (!Q_stricmp(weaponstring, "Spy Camera")) {
         zoomType = 2;
     } else if (!Q_stricmp(weaponstring, "Binoculars")) {
         zoomType = 3;

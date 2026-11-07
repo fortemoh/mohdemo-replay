@@ -646,8 +646,6 @@ extern "C" {
     // cg_demoscope.c
     //
     // Added in OPM
-    int      CG_DemoScope(void);
-    int      CG_DemoScopeEyes(void);
     qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov);
     void     CG_DemoScopeShot(const vec3_t start, const vec3_t end);
     void     CG_CalcEntityLerpPositions(centity_t *cent);

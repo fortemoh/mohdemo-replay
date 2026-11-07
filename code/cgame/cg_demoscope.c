@@ -24,12 +24,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //  A demo holds nothing of whether a player it shows from behind (CG_DemoBehind)
 //  has a scope on, nor when they put it on. Far enough, a sniper's shot almost
 //  always has one: of 9,813 kills whose killer's view is in the demo, 94% at
-//  1000 to 1500 units, 98.5% at 1500 to 2000, and 61% at 500 to 750. So
-//  cg_demoscope makes one up for a sniper kill far enough, for a moment before
-//  the shot (cg_demoscopetime) and just after: 1 shows it from their eyes, as
-//  they saw it, 2 as a spectator following them sees it, the camera behind them
-//  zoomed in. Where they stand and how their aim moves come from their entity,
-//  where it ends up from the shot in the demo.
+//  1000 to 1500 units, 98.5% at 1500 to 2000, and 61% at 500 to 750. So one is
+//  made up for a sniper kill far enough (cg_demoscope 0 turns that off), for a
+//  moment before the shot (cg_demoscopetime) and just after, as a spectator
+//  following them sees it: the camera behind them zoomed in. Where they stand
+//  and how their aim moves come from their entity, where it ends up from the
+//  shot in the demo.
 
 #include "cg_local.h"
 
@@ -81,7 +81,7 @@ CG_DemoScope
 The player a scope is made up for now, -1 for none
 ===============
 */
-int CG_DemoScope(void)
+static int CG_DemoScope(void)
 {
     int client = CG_DemoBehind();
     int kill, start, victim;
@@ -114,18 +114,6 @@ int CG_DemoScope(void)
         }
     }
     return scope.on ? client : -1;
-}
-
-/*
-===============
-CG_DemoScopeEyes
-
-The player whose eyes a made up scope shows now, -1 for none
-===============
-*/
-int CG_DemoScopeEyes(void)
-{
-    return cg_demoscope->integer == 1 ? CG_DemoScope() : -1;
 }
 
 /*
@@ -200,8 +188,7 @@ static void CG_DemoScopeEye(const vec3_t origin, const vec3_t angles, float heig
 CG_DemoScopeView
 
 The view with a made up scope, if there's one: their aim, closing in on the
-victim until the kill and off by the same after it, from their eyes or from
-behind them
+victim until the kill and off by the same after it, from behind them
 ===============
 */
 qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
@@ -209,7 +196,7 @@ qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
     int        client = CG_DemoScope();
     int        victim = cl_demoScopeVictim->integer;
     int        start;
-    centity_t *cent, *other;
+    centity_t *other;
     vec3_t     bodyOrigin, bodyAngles, eye, target, dir, aim;
     float      height, lean, frac;
 
@@ -219,10 +206,9 @@ qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
 
     start = scope.kill - DEMO_SCOPE_SHOT_AHEAD - cg_demoscopetime->integer;
 
-    cent = &cg_entities[client];
-    CG_DemoScopeBody(cent, bodyOrigin, bodyAngles, &height, &lean);
-
     if (cg.time < scope.kill && victim >= 0 && victim < MAX_CLIENTS && cg_entities[victim].currentValid) {
+        CG_DemoScopeBody(&cg_entities[client], bodyOrigin, bodyAngles, &height, &lean);
+
         other = &cg_entities[victim];
         // where they're drawn this frame, which cg_smoothClients moves ahead
         // of their entity
@@ -250,22 +236,11 @@ qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
         scope.offset[YAW]   = frac * AngleSubtract(aim[YAW], bodyAngles[YAW]);
     }
 
-    if (cg_demoscope->integer != 1) {
-        // as a spectator's: where their camera is, zooming as they do
-        CG_DemoBehindCamera(client, scope.offset, origin, angles);
-        frac = (float)Q_min(cg.time - start, scope.kill + DEMO_SCOPE_AFTER - cg.time) / DEMO_SCOPE_ZOOM_TIME;
-        frac = Q_clamp_float(frac, 0, 1);
-        *fov = cg_fov->value + frac * (DEMO_SCOPE_FOV - cg_fov->value);
-        return qtrue;
-    }
-
-    angles[PITCH] = bodyAngles[PITCH] + scope.offset[PITCH];
-    angles[YAW]   = bodyAngles[YAW] + scope.offset[YAW];
-    // as a player's first person view rolls with their lean
-    angles[ROLL] = lean * 0.4f;
-    CG_DemoScopeEye(bodyOrigin, angles, height, lean, origin);
-
-    *fov = DEMO_SCOPE_FOV;
+    // as a spectator's: where their camera is, zooming as they do
+    CG_DemoBehindCamera(client, scope.offset, origin, angles);
+    frac = (float)Q_min(cg.time - start, scope.kill + DEMO_SCOPE_AFTER - cg.time) / DEMO_SCOPE_ZOOM_TIME;
+    frac = Q_clamp_float(frac, 0, 1);
+    *fov = cg_fov->value + frac * (DEMO_SCOPE_FOV - cg_fov->value);
     return qtrue;
 }
 
