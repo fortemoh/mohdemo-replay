@@ -56,6 +56,7 @@ CG_PlayerTeamIcon
 void CG_PlayerTeamIcon(refEntity_t *pModel, entityState_t *pPlayerState)
 {
     qboolean bInArtillery, bInTeam, bSpecialIcon;
+    int      iTeam;
 
     if (cg_protocol < PROTOCOL_MOHTA_MIN) {
         if (pPlayerState->eFlags & EF_ALLIES) {
@@ -71,13 +72,22 @@ void CG_PlayerTeamIcon(refEntity_t *pModel, entityState_t *pPlayerState)
         return;
     }
 
+    // Added in OPM
+    //  Through the scope made up for a player, the icons they would see
+    iTeam = cg.snap->ps.stats[STAT_TEAM];
+    if (CG_DemoScopeEyes() >= 0) {
+        if (pPlayerState->number == CG_DemoScopeEyes()) {
+            return;
+        }
+        iTeam = (cg_entities[CG_DemoScopeEyes()].currentState.eFlags & EF_AXIS) ? TEAM_AXIS : TEAM_ALLIES;
+    }
+
     bInTeam      = qfalse;
     bSpecialIcon = qfalse;
     if (cgs.gametype > GT_FFA
-        && (cg.snap->ps.stats[STAT_TEAM] == TEAM_ALLIES && (pPlayerState->eFlags & EF_ALLIES)
-            || cg.snap->ps.stats[STAT_TEAM] == TEAM_AXIS && (pPlayerState->eFlags & EF_AXIS)
-            || cg.snap->ps.stats[STAT_TEAM] != TEAM_AXIS && cg.snap->ps.stats[STAT_TEAM] != TEAM_ALLIES
-                   && (pPlayerState->eFlags & EF_ANY_TEAM) != 0)) {
+        && (iTeam == TEAM_ALLIES && (pPlayerState->eFlags & EF_ALLIES)
+            || iTeam == TEAM_AXIS && (pPlayerState->eFlags & EF_AXIS)
+            || iTeam != TEAM_AXIS && iTeam != TEAM_ALLIES && (pPlayerState->eFlags & EF_ANY_TEAM) != 0)) {
         bInTeam = qtrue;
     }
 
@@ -1375,6 +1385,20 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
         for (i = 0; i < MAX_MODEL_SURFACES; i++) {
             model.surfaces[i] |= MDL_SURFACE_NODRAW;
         }
+    }
+
+    // Added in OPM
+    //  Through the scope made up for a player, they and their gun aren't seen,
+    //  nor a gun they just put away, that stays by their body for a moment.
+    //  They still go on, for the gun's sound and flash
+    if (CG_DemoScopeEyes() >= 0
+        && (s1->number == CG_DemoScopeEyes() || s1->parent == CG_DemoScopeEyes()
+            || (s1->parent == ENTITYNUM_NONE && model.tiki && !Q_stricmpn(model.tiki->name, "models/weapons/", 15)
+                && Distance(model.origin, cg.refdef.vieworg) < 128))) {
+        for (i = 0; i < MAX_MODEL_SURFACES; i++) {
+            model.surfaces[i] |= MDL_SURFACE_NODRAW;
+        }
+        model.renderfx &= ~RF_SHADOW;
     }
 
     if (!(s1->renderfx & RF_DONTDRAW) && (model.renderfx & RF_SHADOW) && cg_shadows->integer

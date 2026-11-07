@@ -537,6 +537,11 @@ extern "C" {
     extern cvar_t *cg_recordercamera;
     extern cvar_t *cl_demoBehind;
     extern cvar_t *cg_demoguns;
+    extern cvar_t *cg_demoscope;
+    extern cvar_t *cg_demoscopedist;
+    extern cvar_t *cg_demoscopetime;
+    extern cvar_t *cl_demoScopeKill;
+    extern cvar_t *cl_demoScopeVictim;
     extern cvar_t *cg_recordersmooth;
     extern cvar_t *cg_demoholsters;
     extern cvar_t *cl_demoShooter;
@@ -634,6 +639,18 @@ extern "C" {
     // Added in OPM
     qboolean CG_RecorderBehind(void);
     int      CG_DemoBehind(void);
+    void     CG_DemoBehindState(const entityState_t *es, playerState_t *ps);
+    void     CG_DemoBehindCamera(int client, const vec3_t offset, vec3_t origin, vec3_t angles);
+
+    //
+    // cg_demoscope.c
+    //
+    // Added in OPM
+    int      CG_DemoScope(void);
+    int      CG_DemoScopeEyes(void);
+    qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov);
+    void     CG_DemoScopeShot(const vec3_t start, const vec3_t end);
+    void     CG_CalcEntityLerpPositions(centity_t *cent);
 
     //
     // cg_followeyes.c

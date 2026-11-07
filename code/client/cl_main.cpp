@@ -69,6 +69,10 @@ cvar_t	*cl_demoKillBefore;
 //  the player a demo shows from behind (cgame), -1 for none: the killer of a
 //  kill demoonly plays while they aren't shown (demofilter unshown)
 cvar_t	*cl_demoBehind;
+//  the sniper kill of that player about now, as the snapshots' time, and its
+//  victim, for the scope cgame makes up for them (cg_demoscope)
+cvar_t	*cl_demoScopeKill;
+cvar_t	*cl_demoScopeVictim;
 //  the player who made the last kill demoonly played (cgame tells when they
 //  last fired, in cg_demoLastShot), -1 for none; with cl_demoKeepShooting, the
 //  time after a kill counts from their last shot
@@ -1903,6 +1907,46 @@ void CL_DemoSpectatorHud( void ) {
 	ps->blend[3] = 0;
 }
 
+/*
+====================
+CL_UpdateDemoScope
+
+Added in OPM
+For the scope cgame makes up (cg_demoscope): the sniper kill of the player
+shown from behind that's coming, or was just made
+====================
+*/
+static void CL_UpdateDemoScope( int behind ) {
+	const demoEvent_t	*ev;
+	int					kill = 0, victim = -1;
+	int					time, i;
+
+	if ( behind >= 0 ) {
+		time = CL_DemoTime();
+		for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
+			ev = &cl_demoIndex.events[i];
+			if ( ev->time + 500 < time ) {
+				continue;
+			}
+			if ( ev->time - 2000 > time ) {
+				break;
+			}
+			if ( ev->type == DEMOEVENT_KILL && ev->client == behind && ev->weapon == DEMOWEAPON_SNIPER
+				&& !ev->teamKill && ev->other >= 0 && ev->other != behind ) {
+				kill = ev->time + clc.demoStartTime;
+				victim = ev->other;
+				break;
+			}
+		}
+	}
+	if ( kill != cl_demoScopeKill->integer ) {
+		Cvar_Set( "cl_demoScopeKill", va( "%i", kill ) );
+	}
+	if ( victim != cl_demoScopeVictim->integer ) {
+		Cvar_Set( "cl_demoScopeVictim", va( "%i", victim ) );
+	}
+}
+
 void CL_UpdateDemoBehind( void ) {
 	int			behind = -1;
 	qboolean	shown;
@@ -1919,6 +1963,7 @@ void CL_UpdateDemoBehind( void ) {
 	if ( behind != cl_demoBehind->integer ) {
 		Cvar_Set( "cl_demoBehind", va( "%i", behind ) );
 	}
+	CL_UpdateDemoScope( behind );
 	CL_DemoSpectatorHud();
 }
 
@@ -5411,6 +5456,8 @@ void CL_Init( void ) {
 	//  counting on, or on all of the demo without demoonly; 0 for none
 	cl_demoClipNumbers = Cvar_Get ("cl_demoClipNumbers", "0", CVAR_TEMP );
 	cl_demoBehind = Cvar_Get ("cl_demoBehind", "-1", CVAR_ROM );
+	cl_demoScopeKill = Cvar_Get ("cl_demoScopeKill", "0", CVAR_ROM );
+	cl_demoScopeVictim = Cvar_Get ("cl_demoScopeVictim", "-1", CVAR_ROM );
 	//  Words starred out of the players' names and the messages, separated
 	//  by spaces or commas, however they're spelled (cl_censor.cpp)
 	cl_censor = Cvar_Get ("cl_censor", "", CVAR_TEMP );

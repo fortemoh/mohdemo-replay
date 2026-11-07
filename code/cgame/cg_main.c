@@ -127,6 +127,11 @@ cvar_t *cg_followcamera;
 cvar_t *cg_recordercamera;
 cvar_t *cl_demoBehind;
 cvar_t *cg_demoguns;
+cvar_t *cg_demoscope;
+cvar_t *cg_demoscopedist;
+cvar_t *cg_demoscopetime;
+cvar_t *cl_demoScopeKill;
+cvar_t *cl_demoScopeVictim;
 cvar_t *cg_recordersmooth;
 cvar_t *cg_demoholsters;
 cvar_t *cl_demoShooter;
@@ -242,6 +247,15 @@ void CG_RegisterCvars(void)
     // the client's: the player demoonly shows from behind (demofilter unshown)
     cl_demoBehind = cgi.Cvar_Get("cl_demoBehind", "-1", CVAR_ROM);
     cg_demoguns   = cgi.Cvar_Get("cg_demoguns", "1", 0);
+    // a made up scope for the sniper kills from that far of a player shown
+    // from behind, from that many msec before the shot: 1 from their eyes, 2 as
+    // a spectator sees it
+    cg_demoscope     = cgi.Cvar_Get("cg_demoscope", "0", 0);
+    cg_demoscopedist = cgi.Cvar_Get("cg_demoscopedist", "1000", 0);
+    cg_demoscopetime = cgi.Cvar_Get("cg_demoscopetime", "400", 0);
+    // the client's: the sniper kill of the player shown from behind about now
+    cl_demoScopeKill   = cgi.Cvar_Get("cl_demoScopeKill", "0", CVAR_ROM);
+    cl_demoScopeVictim = cgi.Cvar_Get("cl_demoScopeVictim", "-1", CVAR_ROM);
     cg_recordersmooth = cgi.Cvar_Get("cg_recordersmooth", "1", 0);
     cg_demoholsters = cgi.Cvar_Get("cg_demoholsters", "0", 0);
     cl_demoShooter = cgi.Cvar_Get("cl_demoShooter", "-1", CVAR_ROM);

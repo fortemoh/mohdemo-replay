@@ -1361,6 +1361,7 @@ void CG_ParseCGMessage_ver_15()
             if (iType != CGM_BULLET_5) {
                 // Added in OPM
                 cgi.DemoHitSource(vStart, vEndArray[0]);
+                CG_DemoScopeShot(vStart, vEndArray[0]);
             }
 
             if (iType == CGM_BULLET_1) {
@@ -1810,6 +1811,7 @@ void CG_ParseCGMessage_ver_6()
             if (iType != CGM6_BULLET_5) {
                 // Added in OPM
                 cgi.DemoHitSource(vStart, vEndArray[0]);
+                CG_DemoScopeShot(vStart, vEndArray[0]);
             }
 
             if (iType == CGM6_BULLET_1) {

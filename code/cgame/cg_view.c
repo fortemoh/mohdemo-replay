@@ -872,7 +872,7 @@ Added in OPM
   box tells (standing or crouching)
 ===============
 */
-static void CG_DemoBehindState(const entityState_t *es, playerState_t *ps)
+void CG_DemoBehindState(const entityState_t *es, playerState_t *ps)
 {
     vec3_t mins, maxs;
     int    i;
@@ -895,10 +895,11 @@ Added in OPM
   Where the camera behind a player is, from their entity, done as for a player
   followed (CG_StockFollowCamera): from the snapshot to the next. It doesn't
   go by where they're drawn this frame, which cg_smoothClients moves ahead of
-  them, so that they move against it as a player followed does
+  them, so that they move against it as a player followed does. offset is
+  added to their aim
 ===============
 */
-static void CG_DemoBehindCamera(int client, vec3_t origin, vec3_t angles)
+void CG_DemoBehindCamera(int client, const vec3_t offset, vec3_t origin, vec3_t angles)
 {
     centity_t    *cent = &cg_entities[client];
     playerState_t ps;
@@ -906,6 +907,7 @@ static void CG_DemoBehindCamera(int client, vec3_t origin, vec3_t angles)
     int           i;
 
     CG_DemoBehindState(&cent->currentState, &ps);
+    VectorAdd(ps.viewangles, offset, ps.viewangles);
     CG_StockFollowCameraAt(&ps, &cent->currentState, client, origin, angles);
 
     if (!cent->interpolate) {
@@ -913,6 +915,7 @@ static void CG_DemoBehindCamera(int client, vec3_t origin, vec3_t angles)
     }
 
     CG_DemoBehindState(&cent->nextState, &ps);
+    VectorAdd(ps.viewangles, offset, ps.viewangles);
     CG_StockFollowCameraAt(&ps, &cent->nextState, client, nextOrigin, nextAngles);
 
     for (i = 0; i < 3; i++) {
@@ -938,7 +941,7 @@ static qboolean CG_DemoBehindView(vec3_t origin, vec3_t angles)
         return qfalse;
     }
 
-    CG_DemoBehindCamera(client, origin, angles);
+    CG_DemoBehindCamera(client, vec3_origin, origin, angles);
     return qtrue;
 }
 
@@ -1091,6 +1094,8 @@ static int CG_CalcViewValues(void)
         cg.renderingThirdPerson = qtrue;
         // not the zoom of the player shown
         cg.camera_fov = cg_fov->value;
+        // but the view with the scope made up for their long shot
+        CG_DemoScopeView(cg.refdef.vieworg, cg.refdefViewAngles, &cg.camera_fov);
         VectorCopy(cg.refdef.vieworg, cg.currentViewPos);
         VectorCopy(cg.refdefViewAngles, cg.currentViewAngles);
         VectorCopy(cg.refdef.vieworg, cg.SoundOrg);
