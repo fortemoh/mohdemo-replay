@@ -2582,6 +2582,10 @@ class LivePlayer(QObject):
     def send_clip(self):
         commands = self.clips[self.clip]["commands"]
         self.game.send(*(command for command in commands if not command.startswith("demovideo")))
+        # what demoonly plays: the game tells it once it has the commands,
+        # which may take a while, and "" again once it's over
+        self.only = next((command.split(None, 1)[1].split()[0] for command in commands
+                          if command.startswith("demoonly ") and command.split()[1:]), "")
         self.phase = "starting"
         self.clock.start()
 
@@ -2596,13 +2600,13 @@ class LivePlayer(QObject):
                 self.loaded = None
                 self.next_clip()
         elif self.phase == "starting":
-            # what the game wrote before the commands is read for a while
-            if self.clock.elapsed() < 300 or state.get("seeking"):
-                return
-            if not state.get("paused"):
-                self.only = state.get("only", "")
+            # until the game has the commands, it tells what it played before
+            started = (state.get("only", "") == self.only and not state.get("seeking") and not state.get("paused")
+                       and state.get("time", 0) >= clip.get("start", 0) - 1000
+                       and (self.only or self.clock.elapsed() > 1000))
+            if started:
                 self.phase = "playing"
-            elif self.clock.elapsed() > 5000:
+            elif state.get("paused") and self.clock.elapsed() > 5000:
                 self.next_clip()  # nothing to play
         elif self.phase == "playing":
             end = clip.get("end")
