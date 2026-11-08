@@ -1902,6 +1902,7 @@ class RecordDialog(QDialog):
         self.setWindowTitle("Record a video")
         self.setMinimumWidth(780)
         self.settings = settings
+        self.live = False  # chosen to play it live, not to record it
         box = QVBoxLayout(self)
         box.setSpacing(4)
 
@@ -2044,8 +2045,11 @@ class RecordDialog(QDialog):
 
         box.addSpacing(12)
         buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        live = buttons.addButton("Play live", QDialogButtonBox.ActionRole)
+        live.setToolTip("Plays the video in the game, as it would be recorded, without recording it")
+        live.clicked.connect(self.play_live)
         buttons.addButton("Record", QDialogButtonBox.AcceptRole)
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self.record)
         buttons.rejected.connect(self.reject)
         box.addWidget(buttons)
 
@@ -2078,6 +2082,14 @@ class RecordDialog(QDialog):
     def times(self):
         """The stretch of time chosen, in msec."""
         return parse_clock(self.start.text()), parse_clock(self.end.text())
+
+    def play_live(self):
+        self.live = True
+        self.accept()
+
+    def record(self):
+        self.live = False
+        self.accept()
 
     def accept(self):
         if self.what() is None:
@@ -2504,6 +2516,112 @@ class Recorder(QObject):
             self.clip_failed("The recorder quit. " + (self.error or "Its last lines: " + " / ".join(self.last_lines)))
 
 
+class LivePlayer(QObject):
+    """Plays the clips of videos in a game window, as they would be recorded,
+    with their settings, but recording nothing: each clip's commands but the
+    video's, then the next clip once it's over (what demoonly plays, its end
+    time, or the demo). It pauses after the last clip, and stops when the
+    game is closed. tell(text) says how it goes."""
+
+    LOAD_WAIT = 120000  # msec a demo is given to load, then it's left out
+
+    def __init__(self, window, jobs, tell):
+        super().__init__(window)
+        self.window = window
+        self.job = jobs[0]  # whose settings it plays with
+        self.clips = [clip for job in jobs for clip in job["clips"]]
+        self.tell = tell
+        self.clip = -1
+        self.loaded = None
+        self.phase = "loading"
+        self.only = ""  # what demoonly plays in the clip, "" for everything
+        self.error = ""
+        self.game = Game(self.output, self.exited, keep_config=False)
+        self.clock = QElapsedTimer()
+        self.timer = QTimer(self, interval=100, timeout=self.poll)
+
+    def start(self):
+        settings, job = self.window.settings, self.job
+        try:
+            width, height = (int(v) for v in settings.value("size", "1280x720").split("x"))
+        except ValueError:
+            width, height = 1280, 720
+        self.game.start(settings.value("exe"), settings.value("game"), job.get("demos") or settings.value("demos"),
+                        width, height, BLUR_CVARS if job.get("blur") else (),
+                        viewmodel=job.get("viewmodel"), forcemodel=job.get("forcemodel"),
+                        kill_before=job.get("kill_before"), kill_after=job.get("kill_after"),
+                        followed=job.get("followed", followed_models(settings)),
+                        censor=job.get("censor", censored_words(settings)),
+                        camera=job.get("camera", cameras(settings)))
+        self.timer.start()
+        self.next_clip()
+
+    def output(self, line):
+        if line.startswith("ERROR:"):
+            self.error = line.replace("^1", "").replace("ERROR: ", "")
+
+    def next_clip(self):
+        self.clip += 1
+        self.clock.start()
+        if self.clip == len(self.clips):
+            self.timer.stop()
+            self.phase = "done"
+            self.game.send("demopause 1")
+            self.tell("Played " + the(len(self.clips), "clip", "clips").lower() + " live")
+            return
+        demo = self.clips[self.clip]["demo"]
+        self.tell(f"Playing clip {self.clip + 1} of {len(self.clips)} live: {demo}")
+        if demo != self.loaded:
+            self.error = ""
+            self.game.send("demo " + quoted(demo))
+            self.loaded = demo
+            self.phase = "loading"
+        else:
+            self.send_clip()
+
+    def send_clip(self):
+        commands = self.clips[self.clip]["commands"]
+        self.game.send(*(command for command in commands if not command.startswith("demovideo")))
+        self.phase = "starting"
+        self.clock.start()
+
+    def poll(self):
+        state = self.game.read_json("demostate.json") or {}
+        clip = self.clips[self.clip]
+        if self.phase == "loading":
+            if state.get("demo") == self.loaded and state.get("time", 0) > 0 and not state.get("seeking"):
+                self.send_clip()
+            elif self.error or self.clock.elapsed() > self.LOAD_WAIT:
+                self.tell(f"Couldn't play {self.loaded}: {self.error or 'it did not load'}", 5000)
+                self.loaded = None
+                self.next_clip()
+        elif self.phase == "starting":
+            # what the game wrote before the commands is read for a while
+            if self.clock.elapsed() < 300 or state.get("seeking"):
+                return
+            if not state.get("paused"):
+                self.only = state.get("only", "")
+                self.phase = "playing"
+            elif self.clock.elapsed() > 5000:
+                self.next_clip()  # nothing to play
+        elif self.phase == "playing":
+            end = clip.get("end")
+            if (state.get("demo") != self.loaded or self.only and not state.get("only")
+                    or end is not None and state.get("time", 0) >= end):
+                self.next_clip()
+
+    def stop(self):
+        self.phase = "done"
+        self.timer.stop()
+        self.game.stop()
+
+    def exited(self):
+        if self.phase != "done":
+            self.phase = "done"
+            self.timer.stop()
+            self.tell("Stopped playing live", 5000)
+
+
 class Window(QMainWindow):
     MOST_PLAYERS = 1000  # the most the menus of Fragger and Victim list
 
@@ -2513,6 +2631,7 @@ class Window(QMainWindow):
         self.game = Game(self.game_output, self.game_exited)
         self.pending_demo = None
         self.recorder = None
+        self.live = None  # the LivePlayer playing
         self.jobs = []
         self.library = Library(self.library_changed, self)
         self.demo_items = {}  # name: item
@@ -2687,6 +2806,8 @@ class Window(QMainWindow):
         again = more.menu().addAction("Record again", self.record_jobs_again)
         again.setToolTip("Records the videos selected that are done once more, in their turn, with the game as it is "
                          "now: a new video, numbered, next to the one made")
+        live = more.menu().addAction("Play live", self.play_jobs_live)
+        live.setToolTip("Plays the videos selected in the game, as they would be recorded, without recording them")
         more.menu().addAction("Remove finished", self.remove_finished)
         head = QHBoxLayout()
         head.addWidget(heading("Videos"))
@@ -2822,6 +2943,7 @@ class Window(QMainWindow):
         if not self.ready():
             self.tell("Set the game program and game files in Settings, and choose the demos folder")
             return
+        self.stop_live()
         self.game.stop()
         try:
             width, height = (int(v) for v in self.settings.value("size", "1280x720").split("x"))
@@ -3063,6 +3185,7 @@ class Window(QMainWindow):
 
     def play_demo(self, name):
         self.pending_demo = name
+        self.stop_live()
         if self.game.running():
             self.game.send("demo " + quoted(name))
         else:
@@ -3112,12 +3235,15 @@ class Window(QMainWindow):
         if not dialog.exec():
             return
         what = dialog.what()
+        live = []  # the videos to play live, all together
+        add_jobs = live.extend if dialog.live else self.add_jobs
         # who's in the videos' names
         player = ", ".join(kill_filter.names)
         if what == "range":
             start, end = dialog.times()
-            self.add_jobs(dialog.jobs(f"{names[0]}, {clock(start)} to {clock(end)}", [range_clip(names[0], start, end)],
+            add_jobs(dialog.jobs(f"{names[0]}, {clock(start)} to {clock(end)}", [range_clip(names[0], start, end)],
                                       names[0], player))
+            self.play_live(live)
             return
         plans = plans_for(*dialog.kill_times())
         chosen = list(plans[what])
@@ -3129,14 +3255,32 @@ class Window(QMainWindow):
                 clip["frags"] = clip_frags(indexes[clip["demo"]], clip["spans"], only, kill_filter)
         if dialog.join.isChecked() or len(clips) == 1:
             demo = chosen[0] if len(chosen) == 1 else f"{len(chosen)} demos"
-            self.add_jobs(dialog.jobs(demo + (f", {kind}" if kind else ""), clips, demo, player))
+            add_jobs(dialog.jobs(demo + (f", {kind}" if kind else ""), clips, demo, player))
         else:
             for name, clip in zip(chosen, clips):
-                self.add_jobs(dialog.jobs(name + (f", {kind}" if kind else ""), [clip], name, player))
+                add_jobs(dialog.jobs(name + (f", {kind}" if kind else ""), [clip], name, player))
+        self.play_live(live)
 
     def add_jobs(self, jobs):
         for job in jobs:
             self.add_job(job)
+
+    def play_live(self, jobs):
+        """Plays the clips of jobs in a game window, recording nothing."""
+        if not jobs or not self.ready():
+            return
+        self.stop_live()
+        self.game.stop()
+        self.live = LivePlayer(self, jobs, self.tell)
+        self.live.start()
+
+    def stop_live(self):
+        if self.live:
+            self.live.stop()
+            self.live = None
+
+    def play_jobs_live(self):
+        self.play_live(self.selected_jobs())
 
     def add_job(self, job, start=True):
         """Records it after the ones before it."""
@@ -3338,9 +3482,12 @@ class Window(QMainWindow):
         self.save_queue()
 
     def open_video(self, item):
+        """Opens the video made, else plays it live."""
         job = next((j for j in self.jobs if j["item"] is item), None)
-        if job and job["status"] == "done":
+        if job and job["status"] == "done" and os.path.isfile(job["output"]):
             QDesktopServices.openUrl(QUrl.fromLocalFile(job["output"]))
+        elif job:
+            self.play_live([job])
 
     def open_folder(self):
         job = next((j for j in self.jobs if j["item"].isSelected()), None)
@@ -3374,6 +3521,7 @@ class Window(QMainWindow):
         self.save_queue()
         if self.keeps_queue:
             self.queue_lock.unlock()
+        self.stop_live()
         self.game.stop()
         super().closeEvent(event)
 

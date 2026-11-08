@@ -102,8 +102,11 @@ stops, keeping its clips made, and goes on from the next one), and turns into
 Resume for those paused, failed or canceled, the arrows move them up and down,
 Cancel, Open folder; under More, Record again records those done once more (the
 same clips and settings, with the game as it is now, as after an update: a new
-video next to the first, numbered "(2)"), and Remove finished. Double-click to
-watch one. Closing the app
+video next to the first, numbered "(2)"), Play live and Remove finished.
+Double-click to watch one; one not made yet plays live. Play live, also a
+button in the Record dialog, plays the video in a game window as it would be
+recorded, with its settings, without recording anything: clip after clip, in
+real time with sound, pausing after the last; close the game to stop. Closing the app
 keeps them, the one recording with its clips made, and they go on when it
 opens again (in `queue.json`, next to its settings). Only the first window
 open keeps them: another one doesn't write over its list, and asks before
