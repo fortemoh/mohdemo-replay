@@ -863,19 +863,55 @@ int CG_DemoBehind(void)
 
 /*
 ===============
+CG_DemoJumpStart
+
+Added in OPM
+  Whether a player's body takes off for a jump, when a server has their eyes
+  lower (JUMP_START_VIEWHEIGHT) for the 200 to 300 msec it takes: all 204 such
+  snapshots of a player followed in a demo had a takeoff of more than 0.3
+  weight, with 3 more at their usual height
+===============
+*/
+static qboolean CG_DemoJumpStart(const entityState_t *es)
+{
+    dtiki_t    *tiki = CG_FollowedBodyTiki(es);
+    const char *name;
+    int         i;
+
+    if (!tiki) {
+        return qfalse;
+    }
+    for (i = 0; i < MAX_FRAMEINFOS; i++) {
+        if (es->frameInfo[i].weight <= 0.3f) {
+            continue;
+        }
+        name = cgi.Anim_NameForNum(tiki, es->frameInfo[i].index);
+        if (name && strstr(name, "_jump_") && strstr(name, "_takeoff")) {
+            return qtrue;
+        }
+    }
+    return qfalse;
+}
+
+/*
+===============
 CG_DemoBehindState
 
 Added in OPM
   What a stock server's camera behind a player goes by, from their entity: its
   place and yaw, their pitch that their head, torso, arms and pelvis share
   between them (PmoveAdjustAngleSettings), and their eyes' height that their
-  box tells (standing or crouching)
+  box tells (standing or crouching), lower as they take off for a jump. A box
+  comes a snapshot after the height when they crouch or stand up, which is
+  left: telling it from their animations put the camera wrong as often. Dead,
+  their bones are at rest, while a server keeps the pitch they had
 ===============
 */
 void CG_DemoBehindState(const entityState_t *es, playerState_t *ps)
 {
-    vec3_t mins, maxs;
-    int    i;
+    static float alivePitch[MAX_CLIENTS];
+    vec3_t       mins, maxs;
+    int          i;
 
     memset(ps, 0, sizeof(*ps));
     VectorCopy(es->origin, ps->origin);
@@ -883,8 +919,21 @@ void CG_DemoBehindState(const entityState_t *es, playerState_t *ps)
     for (i = 0; i < 4; i++) {
         ps->viewangles[PITCH] += AngleNormalize180(es->bone_angles[i][PITCH]);
     }
+    if (es->number >= 0 && es->number < MAX_CLIENTS) {
+        if (es->eFlags & EF_DEAD) {
+            ps->viewangles[PITCH] = alivePitch[es->number];
+        } else {
+            alivePitch[es->number] = ps->viewangles[PITCH];
+        }
+    }
     IntegerToBoundingBox(es->solid, mins, maxs);
-    ps->viewheight = maxs[2] > CROUCH_MAXS_Z ? DEFAULT_VIEWHEIGHT : CROUCH_VIEWHEIGHT;
+    if (maxs[2] <= CROUCH_MAXS_Z) {
+        ps->viewheight = CROUCH_VIEWHEIGHT;
+    } else if (CG_DemoJumpStart(es)) {
+        ps->viewheight = JUMP_START_VIEWHEIGHT;
+    } else {
+        ps->viewheight = DEFAULT_VIEWHEIGHT;
+    }
 }
 
 /*
