@@ -91,6 +91,14 @@ static const char *whiteListedCommands[] = {
 };
 
 //
+// Added in OPM
+//  Of those, the ones a demo plays: its sounds and music. The rest were for
+//  the one who recorded it: the menus to choose a team or weapon, the
+//  settings a server wanted (r_fastsky, cg_3rd_person, name...), screenshots
+//
+static const char *demoCommands[] = {"tmstart", "tmstartloop", "tmstop", "tmvolume", "play", "playmp3", "stopmp3", "wait"};
+
+//
 // List of commands allowed to be executed locally
 // (when the client also runs the server)
 //
@@ -145,6 +153,12 @@ static qboolean CG_IsSetVariableAllowed(const char *name, char type)
 {
     cvar_t *var;
 
+    // Added in OPM
+    //  None in a demo: they were the recorder's
+    if (cg.demoPlayback) {
+        return qfalse;
+    }
+
     if (CG_IsVariableAllowed(name)) {
         return qtrue;
     }
@@ -179,6 +193,16 @@ static qboolean CG_IsCommandAllowed(const char *name)
 {
     size_t  i;
     cvar_t *var;
+
+    // Added in OPM
+    if (cg.demoPlayback) {
+        for (i = 0; i < ARRAY_LEN(demoCommands); i++) {
+            if (!Q_stricmp(name, demoCommands[i])) {
+                return qtrue;
+            }
+        }
+        return qfalse;
+    }
 
     for (i = 0; i < ARRAY_LEN(whiteListedCommands); i++) {
         if (!Q_stricmp(name, whiteListedCommands[i])) {
