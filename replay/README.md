@@ -267,7 +267,7 @@ respawn" or what the players write (their chat, with
 the words of voice commands and the server console's): they fill the
 message box; the frags' messages stay, in the middle at the top of the
 screen. "You killed <victim>", which only the killer gets, shows from someone's
-eyes, not from behind them. In the middle of the screen, only the
+eyes, not from behind them, on the left at the same height. In the middle of the screen, only the
 round results show ("Axis win!", in the server's language): not the server's
 welcome ("Welcome <player>, have fun!") or ads, "Press fire to join the
 battle!" or the warnings to the recorder about being idle. Of the texts some

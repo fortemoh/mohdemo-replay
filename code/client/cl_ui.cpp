@@ -1235,19 +1235,24 @@ UI_PlaceMessageBoxes
 
 Added in OPM
   In a demo, which shows no compass, the kills are in the middle at the top
-  of the screen, their lines in the middle too. The messages below them ("You
-  killed <victim>", round results) stay where they are
+  of the screen, their lines in the middle too. The messages ("You killed
+  <victim>", round results) stay on the left, up where the compass was, their
+  first line level with the first of the kills
 ====================
 */
 static void UI_PlaceMessageBoxes(void)
 {
     UIRect2D dmRect = getDefaultDMBoxRectangle();
+    UIRect2D gmRect = getDefaultGMBoxRectangle();
     UIRect2D frame;
 
     if (clc.demoplaying) {
         float margin = uid.vidWidth * 0.2f;
 
         dmRect = UIRect2D(margin, 0, uid.vidWidth - 2 * margin, dmRect.size.height);
+        // the kills' box draws its first line 8 (virtual) units down, the
+        // messages' at the top
+        gmRect.pos.y = dmRect.pos.y + 8.0f * uid.scaleRes[1];
     }
 
     if (dmbox) {
@@ -1255,6 +1260,13 @@ static void UI_PlaceMessageBoxes(void)
         if (frame.pos.x != dmRect.pos.x || frame.pos.y != dmRect.pos.y || frame.size.width != dmRect.size.width
             || frame.size.height != dmRect.size.height) {
             dmbox->setFrame(dmRect);
+        }
+    }
+    if (gmbox) {
+        frame = gmbox->getFrame();
+        if (frame.pos.x != gmRect.pos.x || frame.pos.y != gmRect.pos.y || frame.size.width != gmRect.size.width
+            || frame.size.height != gmRect.size.height) {
+            gmbox->setFrame(gmRect);
         }
     }
 }
