@@ -806,6 +806,65 @@ class DemoIndexes:
         self.read()
 
 
+@functools.lru_cache(maxsize=1)
+def code_version():
+    """What the summaries kept were made with: this file, as it is."""
+    try:
+        with open(__file__, "rb") as f:
+            return hashlib.sha1(f.read()).hexdigest()[:12]
+    except OSError:
+        return ""
+
+
+class Summaries:
+    """The summaries of a folder's demos (summarize), kept in the cache
+    folder, so opening it doesn't make them all again: {name: [when its index
+    was made, summary]}, all of them made again when this file changes."""
+
+    def __init__(self, path):
+        self.path = path
+        self.kept = {}
+        self.changed = False
+        try:
+            with open(path, encoding="utf-8") as f:
+                kept = json.load(f)
+            if kept.get("version") == code_version():
+                self.kept = kept.get("demos", {})
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def get(self, name, made):
+        """Its summary, if one was kept for that index, else None."""
+        kept = self.kept.get(name)
+        if not kept or made is None or kept[0] != made:
+            return None
+        summary = dict(kept[1])
+        summary["kills"] = [tuple(kill) for kill in summary.get("kills", [])]
+        return summary
+
+    def put(self, name, made, summary):
+        self.kept[name] = [made, summary]
+        self.changed = True
+
+    def forget(self, name):
+        if self.kept.pop(name, None):
+            self.changed = True
+
+    def save(self):
+        if not self.changed:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            # dumps, not dump, whose encoder in C is ten times as fast
+            text = json.dumps({"version": code_version(), "demos": self.kept}, separators=(",", ":"))
+            with open(self.path + ".new", "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(self.path + ".new", self.path)
+            self.changed = False
+        except OSError:
+            pass
+
+
 class Library(QObject):
     """What's in every demo of the folder, without playing them: mohdemoindex
     (built next to the game) indexes them in the background, and the indexes
@@ -816,9 +875,18 @@ class Library(QObject):
     WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
 
     def __init__(self, on_change, parent=None):
+        """on_change(names) is told the demos whose summaries changed, a few
+        at a time, or None when the demos of the folder may have."""
         super().__init__(parent)
         self.on_change = on_change
         self.demos = {}  # name: summarize()
+        self.summaries = Summaries("")
+        self.made_count = 0  # summaries given, to number them
+        self.pending = {}  # name: when its index was made, for those to summarize, a few at a time
+        self.changed = set()  # the demos whose summaries changed, for on_change
+        self.whole = False  # whether on_change is to be told all may have
+        self.summarizer = QTimer(self, singleShot=True, interval=0, timeout=self.summarize_some)
+        self.save_timer = QTimer(self, singleShot=True, interval=2000, timeout=lambda: self.summaries.save())
         self.paths = {}  # name: path of the demos to index
         self.folder = self.cache = self.tool = self.work = None
         self.stores = {}  # folder in the folder of demos: its DemoIndexes
@@ -830,21 +898,24 @@ class Library(QObject):
         self.watcher = QFileSystemWatcher(self)
         self.rescan_timer = QTimer(self, singleShot=True, interval=1000, timeout=self.rescan)
         self.watcher.directoryChanged.connect(lambda _: self.rescan_timer.start())
-        self.changed_timer = QTimer(self, singleShot=True, interval=300, timeout=lambda: self.on_change())
+        self.changed_timer = QTimer(self, singleShot=True, interval=1000, timeout=self.report)
 
     def open(self, folder, exe):
         """The demos of folder, indexed with the mohdemoindex next to exe."""
         self.stop()
-        self.demos, self.failed, self.stores = {}, set(), {}
+        self.summaries.save()
+        self.demos, self.failed, self.stores, self.pending = {}, set(), {}, {}
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
         self.folder = os.path.abspath(folder) if folder else None
         self.tool = find_indexer(exe) if exe else None
         if not self.folder or not os.path.isdir(self.folder):
-            self.on_change()
+            self.summaries = Summaries("")
+            self.on_change(None)
             return
         base = QStandardPaths.writableLocation(QStandardPaths.GenericCacheLocation)
         self.cache = os.path.join(base, "mohdemo-replay", "index")
+        self.summaries = Summaries(os.path.join(base, "mohdemo-replay", "summaries", folder_key(self.folder) + ".json"))
         self.rescan()
 
     def rescan(self):
@@ -885,6 +956,7 @@ class Library(QObject):
                 del self.demos[name]
                 store, demo = self.store_of(name)
                 store.forget(demo)
+                self.summaries.forget(name)
         if moved:
             self.remove_empty_folders()
         # newest first
@@ -892,7 +964,7 @@ class Library(QObject):
         self.waiting = [name for _, name in sorted(stale, reverse=True)]
         self.total = len(self.waiting) + len(self.busy)
         self.start_workers()
-        self.on_change()
+        self.on_change(None)
 
     def store_of(self, name):
         """The indexes of the folder a demo is in, and its file name."""
@@ -943,10 +1015,66 @@ class Library(QObject):
         return store.index(demo)
 
     def load(self, name):
-        try:
-            self.demos[name] = summarize(self.index(name))
-        except (ValueError, KeyError, TypeError, AttributeError):
-            self.demos.pop(name, None)
+        """Its summary: the one kept, if it's of its index, else made soon,
+        with others (summarize_some)."""
+        store, demo = self.store_of(name)
+        made = store.made(demo)
+        summary = self.summaries.get(name, made)
+        if summary is not None:
+            self.demos[name] = self.numbered(summary)
+            return
+        self.pending[name] = made
+        self.summarizer.start()
+
+    def summarize_some(self):
+        """Summarizes the demos waiting, for a moment at a time, so the
+        window goes on answering, as there can be thousands."""
+        clock = QElapsedTimer()
+        clock.start()
+        while self.pending and clock.elapsed() < 50:
+            name, made = next(iter(self.pending.items()))
+            del self.pending[name]
+            try:
+                summary = summarize(self.index(name))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                self.demos.pop(name, None)
+                self.summaries.forget(name)
+            else:
+                self.summaries.put(name, made, summary)
+                self.demos[name] = self.numbered(dict(summary))
+            self.changed.add(name)
+        if self.pending:
+            self.summarizer.start()
+        else:
+            self.save_timer.start()
+            # all of them, unless indexing goes on
+            self.whole |= not self.workers
+        self.report_soon()
+
+    def numbered(self, summary):
+        """With a number of its own, "made", to tell it from the one before."""
+        self.made_count += 1
+        summary["made"] = self.made_count
+        return summary
+
+    def report_soon(self):
+        """Tells on_change in a moment, at once when all is done: while
+        indexing or making summaries, no more than once a second."""
+        if self.whole:
+            self.changed_timer.start(0)
+        elif not self.changed_timer.isActive():
+            self.changed_timer.start(1000)
+
+    def report(self):
+        """Tells on_change what changed since it was last told."""
+        changed, self.changed = self.changed, set()
+        whole, self.whole = self.whole, False
+        if whole or changed:
+            self.on_change(None if whole else changed)
+
+    def loading(self):
+        """Whether summaries are still being made."""
+        return bool(self.pending)
 
     def start_workers(self):
         while self.waiting and len(self.workers) < self.WORKERS:
@@ -980,7 +1108,6 @@ class Library(QObject):
         for line in bytes(worker.readAllStandardOutput()).decode("utf-8", "replace").splitlines():
             if line:
                 self.keep(posixpath.join(folder, line))
-        self.changed_timer.start()
 
     def keep(self, name):
         """A demo just indexed: its index moves next to it."""
@@ -1001,14 +1128,16 @@ class Library(QObject):
         self.workers.remove(worker)
         self.busy -= names
         # not indexed: not tried again until the folder is opened again
-        self.failed |= {name for name in names if name not in self.demos}
+        self.failed |= {name for name in names if name not in self.demos and name not in self.pending}
         worker.deleteLater()
         self.start_workers()
         if not self.workers:
             for store in self.stores.values():
                 store.tidy()
             self.remove_work()
-        self.changed_timer.start()
+            # indexing is over: all of them, once their summaries are made
+            self.whole |= not self.pending
+        self.report_soon()
 
     def remove_work(self):
         if self.work:
@@ -1023,6 +1152,8 @@ class Library(QObject):
     def stop(self):
         workers, self.workers = self.workers, []
         self.waiting, self.busy = [], set()
+        self.summarizer.stop()
+        self.summaries.save()
         for worker in workers:
             worker.kill()
             worker.waitForFinished(1000)
@@ -1031,7 +1162,26 @@ class Library(QObject):
 
 class SortItem(QTreeWidgetItem):
     """Sorts by the number kept in a column's UserRole, if any; folders
-    first, by name, whichever way the rest is sorted."""
+    first, by name, whichever way the rest is sorted. What it sorts by in
+    each column is kept (key), as sorting thousands of demos asks __lt__ tens
+    of thousands of times."""
+
+    def setData(self, column, role, value):
+        keys = getattr(self, "keys", None)
+        if keys:
+            keys.pop(column, None)
+        super().setData(column, role, value)
+
+    def key(self, column):
+        """(its number, None if none; its text in lower case)."""
+        keys = getattr(self, "keys", None)
+        if keys is None:
+            keys = self.keys = {}
+        key = keys.get(column)
+        if key is None:
+            number = self.data(column, Qt.UserRole)
+            key = keys[column] = (number if isinstance(number, (int, float)) else None, self.text(column).lower())
+        return key
 
     def __lt__(self, other):
         tree = self.treeWidget()
@@ -1043,10 +1193,10 @@ class SortItem(QTreeWidgetItem):
                 less = isinstance(self, FolderItem)
             # sorting the other way asks other < self
             return less if not tree or tree.header().sortIndicatorOrder() == Qt.AscendingOrder else not less
-        mine, theirs = self.data(column, Qt.UserRole), other.data(column, Qt.UserRole)
-        if isinstance(mine, (int, float)) and isinstance(theirs, (int, float)):
-            return mine < theirs
-        return self.text(column).lower() < other.text(column).lower()
+        mine, theirs = self.key(column), other.key(column)
+        if mine[0] is not None and theirs[0] is not None:
+            return mine[0] < theirs[0]
+        return mine[1] < theirs[1]
 
 
 class FolderItem(SortItem):
@@ -2620,6 +2770,7 @@ class Window(QMainWindow):
         self.live = None  # the LivePlayer playing
         self.jobs = []
         self.library = Library(self.library_changed, self)
+        self.sort_clock = QElapsedTimer()  # since the list of demos was last sorted
         self.demo_items = {}  # name: item
         self.folder_items = {}  # folder in the demos folder: item
         self.demo_frags = {}  # name of a demo listed: how many frags the filter keeps in it
@@ -2946,7 +3097,10 @@ class Window(QMainWindow):
     def fill_demos(self):
         """Lists the demos of the folder, in the folders they're in, with
         what the library knows of them, keeping the items there."""
-        demos = list_demos(self.settings.value("demos", ""))
+        folder = self.settings.value("demos", "")
+        # as the library found them, without looking through the folder again
+        same = folder and self.library.folder == os.path.abspath(folder)
+        demos = self.library.paths if same else list_demos(folder)
         for name in [n for n in self.demo_items if n not in demos]:
             item = self.demo_items.pop(name)
             (item.parent() or self.demos.invisibleRootItem()).removeChild(item)
@@ -2970,21 +3124,10 @@ class Window(QMainWindow):
                 item.setText(COL_DEMO, name.rsplit("/", 1)[-1])
                 item.setData(COL_DEMO, Qt.UserRole, name)
                 self.folder_item(posixpath.dirname(name)).addChild(item)
-            summary = self.library.demos.get(name)
-            if summary and item.data(COL_LENGTH, Qt.UserRole) != summary["duration"]:
-                item.setText(COL_LENGTH, clock(summary["duration"]))
-                item.setData(COL_LENGTH, Qt.UserRole, summary["duration"])
-                item.setText(COL_RULES, RULES.get(summary["rules"], ""))
-                item.setText(COL_RECORDER, summary["recorder"])
-                item.setText(COL_MAP, ", ".join(m.rsplit("/", 1)[-1] for m in summary["maps"]))
-                players = sorted(summary["players"].values(), key=lambda p: (-p[1], p[0].lower()))
-                rules = f", {RULES[summary['rules']].lower()}" if summary["rules"] else ""
-                tip = (f"<b>{html.escape(', '.join(summary['maps']))}</b> — {clock(summary['duration'])}{rules}<br>"
-                       + html.escape(", ".join(player_kills(p) for p in players)))
-                for column in range(len(DEMO_COLUMNS)):
-                    item.setToolTip(column, tip)
+            self.show_summary(item, self.library.demos.get(name))
         self.demos.setRootIsDecorated(bool(self.folder_items))
         self.demos.setSortingEnabled(True)
+        self.sort_clock.start()
         self.filter_demos()
 
     def folder_item(self, folder):
@@ -3045,16 +3188,20 @@ class Window(QMainWindow):
         return (summary.get("duration", MIN_LENGTH) >= MIN_LENGTH
                 or (self.short_demos.isChecked() and bool(summary.get("kills"))))
 
-    def filter_demos(self):
+    def filter_demos(self, fit=True):
         """Shows the demos with each word of one of the searches (separated
         by commas) in the name, a map or a player's name, and the players
         found; with the kill filter, only those with kills it keeps, and
         their killers; only those recorded by the recorders named, and of the
-        rules chosen, if any, and not those long_enough doesn't let in."""
+        rules chosen, if any, and not those long_enough doesn't let in. The
+        columns fit what they show if fit."""
         searches = search_parts(self.filter.text())
         rules = self.rules.currentData()
         recorders = [clean_name(name) for name in self.recorded_by.names()]
         kill_filter = self.kill_filter()
+        # each summary keeps what the filter keeps of it, as the list is
+        # filtered again each time a few demos are indexed
+        filter_key = tuple(kill_filter.commands())
         found_any = False
         self.demo_frags = {}
         for name, item in self.demo_items.items():
@@ -3069,7 +3216,10 @@ class Window(QMainWindow):
                 shown, found = hits is not None, hits or {}
             count = len(summary.get("kills", []))
             if shown and kill_filter:
-                count, found = filter_kills(summary, kill_filter)
+                kept = summary.get("filtered")
+                if not kept or kept[0] != filter_key:
+                    kept = summary["filtered"] = (filter_key, filter_kills(summary, kill_filter))
+                count, found = kept[1]
                 shown = count > 0
             item.setHidden(not shown)
             if shown:
@@ -3089,7 +3239,8 @@ class Window(QMainWindow):
             if (searches or recorders or kill_filter) and count:
                 item.setExpanded(True)
         self.demos.setColumnHidden(COL_PLAYER, not found_any)
-        self.fit_columns(self.demos)
+        if fit:
+            self.fit_columns(self.demos)
         self.show_demo_count()
 
     def show_demo_count(self):
@@ -3145,7 +3296,8 @@ class Window(QMainWindow):
         ranked = sorted(players.values(), key=lambda p: (-p[1], p[0].lower()))[:self.MOST_PLAYERS]
         return [player for player, _ in ranked], {player: f"{player} ({kills})" for player, kills in ranked}
 
-    def library_changed(self):
+    def library_changed(self, names=None):
+        """The demos whose summaries changed, or all of them (None)."""
         # those who recorded the most first
         recorders = {}
         for summary in self.library.demos.values():
@@ -3154,7 +3306,44 @@ class Window(QMainWindow):
         ranked = sorted(recorders.values(), key=lambda r: (-r[1], r[0].lower()))
         self.recorded_by.players = [name for name, _ in ranked]
         self.recorded_by.labels = {name: f"{name} ({count})" for name, count in ranked}
-        self.fill_demos()
+        if names is None:
+            self.fill_demos()
+        else:
+            self.update_demos(names)
+
+    def update_demos(self, names):
+        """Shows what the library now knows of those demos, without making the
+        list again: while indexing, they come a few at a time, and sorting
+        thousands takes a while, so the list is sorted again now and then,
+        and when it's over (fill_demos)."""
+        self.demos.setSortingEnabled(False)
+        for name in names:
+            item = self.demo_items.get(name)
+            if item is not None:
+                self.show_summary(item, self.library.demos.get(name))
+        now = not self.sort_clock.isValid() or self.sort_clock.hasExpired(10000)
+        if now:
+            self.demos.setSortingEnabled(True)
+            self.sort_clock.start()
+        self.filter_demos(fit=now)
+
+    def show_summary(self, item, summary):
+        """A demo's item shows its summary, if it has a new one (its "made"
+        count, which the library gives each)."""
+        if not summary or item.data(COL_DEMO, Qt.UserRole + 1) == summary.get("made"):
+            return
+        item.setData(COL_DEMO, Qt.UserRole + 1, summary.get("made"))
+        item.setText(COL_LENGTH, clock(summary["duration"]))
+        item.setData(COL_LENGTH, Qt.UserRole, summary["duration"])
+        item.setText(COL_RULES, RULES.get(summary["rules"], ""))
+        item.setText(COL_RECORDER, summary["recorder"])
+        item.setText(COL_MAP, ", ".join(m.rsplit("/", 1)[-1] for m in summary["maps"]))
+        players = sorted(summary["players"].values(), key=lambda p: (-p[1], p[0].lower()))
+        rules = f", {RULES[summary['rules']].lower()}" if summary["rules"] else ""
+        tip = (f"<b>{html.escape(', '.join(summary['maps']))}</b> — {clock(summary['duration'])}{rules}<br>"
+               + html.escape(", ".join(player_kills(p) for p in players)))
+        for column in range(len(DEMO_COLUMNS)):
+            item.setToolTip(column, tip)
 
     def play_demo(self, name):
         self.pending_demo = name
