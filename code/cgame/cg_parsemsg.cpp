@@ -1668,7 +1668,9 @@ void CG_ParseCGMessage_ver_15()
 
         case CGM_NOTIFY_HIT:
         case CGM_NOTIFY_KILL:
-            if (cg.snap) {
+            // Changed in OPM
+            //  The recorder's own: not heard from behind a player not shown
+            if (cg.snap && CG_DemoBehind() < 0) {
                 const char *soundName;
                 int         iOldEnt;
 
@@ -2076,7 +2078,9 @@ void CG_ParseCGMessage_ver_6()
 
         case CGM6_NOTIFY_HIT:
         case CGM6_NOTIFY_KILL:
-            if (cg.snap) {
+            // Changed in OPM
+            //  The recorder's own: not heard from behind a player not shown
+            if (cg.snap && CG_DemoBehind() < 0) {
                 int iOldEnt;
 
                 iOldEnt = current_entity_number;

@@ -1517,7 +1517,17 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
     }
 
     // update audio positions
-    cgi.S_Respatialize(cg.snap->ps.clientNum, cg.SoundOrg, cg.SoundAxis);
+    // Changed in OPM
+    //  From behind a player not shown, the listener is no one: the recorder's
+    //  sounds come from where they are, as anyone else's, and aren't their own
+    if (CG_DemoBehind() >= 0) {
+        cgi.S_UpdateEntity(
+            cg.snap->ps.clientNum, cg.predicted_player_state.origin, cg.predicted_player_state.velocity, qfalse
+        );
+        cgi.S_Respatialize(ENTITYNUM_NONE, cg.SoundOrg, cg.SoundAxis);
+    } else {
+        cgi.S_Respatialize(cg.snap->ps.clientNum, cg.SoundOrg, cg.SoundAxis);
+    }
 
     // make sure the lagometerSample and frame timing isn't done twice when in stereo
     if (stereoView != STEREO_RIGHT) {

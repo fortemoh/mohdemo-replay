@@ -687,7 +687,10 @@ static qboolean S_OMAHA_IsLocalEntity(int iEntNum)
     }
 
     localNum = -1;
-    if (cl.snap.valid) {
+    if (s_iListenerNumber == ENTITYNUM_NONE) {
+        // Added in OPM: the view isn't anyone's (a demo seen from behind a
+        // player its recorder doesn't show), so no sounds are one's own
+    } else if (cl.snap.valid) {
         localNum = cl.snap.ps.clientNum;
     } else if (s_iListenerNumber >= 0) {
         localNum = s_iListenerNumber;

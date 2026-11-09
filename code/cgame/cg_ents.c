@@ -55,7 +55,9 @@ void CG_SetEntitySoundPosition(centity_t *cent)
 
         cgi.S_UpdateEntity(cent->currentState.number, origin, vel, qfalse);
     } else {
-        if (cent && cg.snap && cent->currentState.parent == cg.snap->ps.clientNum) {
+        // Changed in OPM
+        //  From behind a player not shown, the recorder's gun is heard where it is
+        if (cent && cg.snap && cent->currentState.parent == cg.snap->ps.clientNum && CG_DemoBehind() < 0) {
             vec3_t origin;
             vec3_t velocity;
 
