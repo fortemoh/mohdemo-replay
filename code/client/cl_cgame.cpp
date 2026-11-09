@@ -442,7 +442,8 @@ box: the yellow ones, which tell what the player picked up (ammo, health,
 weapons, in any language; also a server's "( 3 ) players are active and
 clean"), the server's own about players coming and going, like
 "<player> has entered the battle", which it tells everyone each time a
-player enters, as at every round, the bomb's, and the players' chat,
+player enters, as at every round, the bomb's, the recorder's own "Will
+switch to new weapon next time you respawn", and the players' chat,
 "<player>: <text>" with (team), (spectator) or (dead) before it, the
 words of voice commands and the server console's too
 ===================
@@ -453,6 +454,10 @@ static qboolean CL_DemoHidesPrint( const char *text ) {
 		" is preparing for deployment"
 	};
 	// as English, French and German servers tell them
+	// what the one who recorded it was told
+	static const char *const recorders[] = {
+		"Will switch to new weapon next time you respawn"
+	};
 	static const char *const bombs[] = {
 		"A Bomb has been planted!", "A Bomb has been defused!", "A bomb is still set!", "La bombe est en place.",
 		"La bombe vient d'\xeatre d\xe9samorc\xe9" "e.", "Bombe wurde platziert."
@@ -480,6 +485,11 @@ static qboolean CL_DemoHidesPrint( const char *text ) {
 	}
 	for ( i = 0; i < (int)ARRAY_LEN( bombs ); i++ ) {
 		if ( len == strlen( bombs[i] ) && !strncmp( text, bombs[i], len ) ) {
+			return qtrue;
+		}
+	}
+	for ( i = 0; i < (int)ARRAY_LEN( recorders ); i++ ) {
+		if ( len == strlen( recorders[i] ) && !strncmp( text, recorders[i], len ) ) {
 			return qtrue;
 		}
 	}
