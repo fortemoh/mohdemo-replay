@@ -19,6 +19,7 @@ import functools
 import hashlib
 import html
 import json
+import math
 import os
 import posixpath
 import re
@@ -1708,12 +1709,16 @@ def clip_part(clip, taken, last):
 
 
 def split_clips(clips, most):
-    """The clips of a video in parts at most most msec long, cut between the
+    """The clips of a video in parts most msec long, cut between the
     stretches they play: [[clip]], each clip playing some of the stretches
     of one given. A stretch longer than a part, as all of a long demo, starts
-    a part and goes on in the next ones, their first clip "continued".
-    Clips whose stretches aren't known stay whole."""
+    a part and goes on in the next ones, their first clip "continued". What
+    would be left for a last part shorter than half of one goes in the part
+    before instead: 8 h 14 min in parts of 1 h are seven of 1 h and one of
+    1 h 14 min. Clips whose stretches aren't known stay whole."""
     parts, part, room = [], [], most
+    # msec of the stretches still to place
+    left = sum(end - start for clip in clips if clip["spans"] for start, end in clip["spans"])
     for clip in clips:
         if clip["spans"] is None:
             part.append(clip)
@@ -1723,18 +1728,24 @@ def split_clips(clips, most):
         for (start, end), kills in zip(clip["spans"], frags):
             continued = False
             while True:
+                if left - room < most / 2:
+                    # the rest, in this part
+                    room = math.inf
                 if end - start > room and (part or taken):
                     if taken:
                         part.append(clip_part(clip, taken, False))
                     parts.append(part)
                     part, taken, room = [], [], most
+                    continue
                 if end - start <= room:
                     taken.append((start, end, kills, continued))
                     room -= end - start
+                    left -= end - start
                     break
                 cut = start + room
                 taken.append((start, cut, [k for k in kills if k["time"] < cut], continued))
                 kills = [k for k in kills if k["time"] >= cut]
+                left -= cut - start
                 start, room, continued = cut, 0, True
         if taken:
             whole = [(start, end) for start, end, _, _ in taken] == [tuple(span) for span in clip["spans"]]
@@ -1961,10 +1972,12 @@ class RecordDialog(QDialog):
                                 "their frags (a .csv of the same name)")
         self.numbers.setChecked(settings.value("rec/numbers", "false") == "true")
         left.addWidget(self.numbers)
-        self.split = QCheckBox("Split into parts of at most")
+        self.split = QCheckBox("Split into parts of")
         self.split.setToolTip("A video longer than this is recorded in parts, \"<name> part 1.mp4\", \"<name> part "
                               "2.mp4\"…, cut between frags; a stretch longer than a part, as all of a long demo, is "
-                              "cut in it. Clip numbers go on from one part to the next, and each has its list")
+                              "cut in it. Less than half a part left at the end goes in the last part: 8 h 14 min in "
+                              "parts of 60 min end with one of 1 h 14 min. Clip numbers go on from one part to the "
+                              "next, and each has its list")
         self.split.setChecked(settings.value("rec/split", "false") == "true")
         self.split_minutes = QSpinBox()
         self.split_minutes.setRange(1, 999)

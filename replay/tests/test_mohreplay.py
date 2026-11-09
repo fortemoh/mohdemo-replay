@@ -570,8 +570,9 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(clip["commands"][0], "set cl_demoClipNumbers 0")
 
     def test_split_clips(self):
-        """A video in parts of at most a length, cut between the stretches
-        it plays, a stretch longer than a part in pieces."""
+        """A video in parts of a length, cut between the stretches it plays,
+        a stretch longer than a part in pieces, less than half a part left at
+        the end in the last part."""
         split = mohreplay.split_clips
         kills = mohreplay.only_clip("a", "kills", [(0, 10000), (20000, 30000), (40000, 50000)])
         kills["frags"] = [[{"time": 4000}], [{"time": 24000}], [{"time": 44000}]]
@@ -580,8 +581,9 @@ class TestFunctions(unittest.TestCase):
         part, = split([kills, rest], 30000)
         self.assertIs(part[0], kills)
         self.assertIs(part[1], rest)
-        # the first two stretches, then the last, where the video stops
-        first, second = split([kills], 25000)
+        # the first two stretches, then the last, where the video stops: half
+        # a part, not less
+        first, second = split([kills], 20000)
         self.assertEqual(len(first), 1)
         self.assertEqual((first[0]["spans"], first[0]["start"], first[0]["end"]), ([(0, 10000), (20000, 30000)], 0, 30000))
         self.assertEqual(first[0]["commands"][-4:], ["demoseek 0.000", "demopause 0", "demoonly kills",
@@ -592,6 +594,12 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(second[0]["commands"][-4:], ["demoseek 40.000", "demopause 0", "demoonly kills",
                                                       "demovideo {part}"])
         self.assertEqual(kills["spans"], [(0, 10000), (20000, 30000), (40000, 50000)])
+        # less than half a part left: in the part before
+        part, = split([kills], 25000)
+        self.assertIs(part[0], kills)
+        parts = split([mohreplay.range_clip("e", 0, (8 * 60 + 14) * 60000)], 60 * 60000)
+        self.assertEqual([c["spans"][0][1] - c["spans"][0][0] for part in parts for c in part],
+                         [60 * 60000] * 7 + [74 * 60000])
         # a stretch longer than a part starts one and goes on in the next
         long = mohreplay.range_clip("c", 60000, 210000)
         parts = split([mohreplay.range_clip("d", 0, 20000), long], 60000)

@@ -84,10 +84,12 @@ again next time. Number the clips puts a number on each clip of the
 video (#1, #2 and on through all of its demos, at the bottom of the
 screen), and the list of the clips next to it, a `.csv` of the same name:
 each one's number, start in the video and demo, and the time, fragger,
-victim and weapon of each of its frags. Split into parts of at most
-(60 min, say), records a longer video as "<name> part 1.mp4", "<name> part
-2.mp4" and on, each at most that long, cut between frags (a stretch longer
-than a part, as all of a long demo, is cut in it), the clip numbers going on
+victim and weapon of each of its frags. Split into parts of (60 min, say)
+records a longer video as "<name> part 1.mp4", "<name> part 2.mp4" and on,
+each that long, cut between frags (a stretch longer than a part, as all of
+a long demo, is cut in it), but for less than half a part left at the end,
+which goes in the last part (8 h 14 min: seven parts of 1 h and one of 1 h
+14 min, not a stray part of 14 min), the clip numbers going on
 from one part to the next, each with its list. Videos are recorded one after the
 other by a second copy of the game, in the background, without a window on
 Linux and faster than real time; FFmpeg joins the
