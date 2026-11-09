@@ -60,8 +60,6 @@ protected:
     void  RemoveTopItem(void);
     str   CalculateBreaks(UIFont *font, str text, float max_width);
     float PrintWrap(UIFont *font, float x, float y, str text);
-    // Added in OPM
-    float LineX(UIFont *font, float x, const char *text, size_t len);
     float DrawItem(item_t *in, float x, float y, float alpha);
 
 public:
