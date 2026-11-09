@@ -71,6 +71,12 @@ void CG_PlayerTeamIcon(refEntity_t *pModel, entityState_t *pPlayerState)
         return;
     }
 
+    // Added in OPM
+    //  None over the heads in a demo: the team's, talking, in a menu
+    if (cg.demoPlayback) {
+        return;
+    }
+
     bInTeam      = qfalse;
     bSpecialIcon = qfalse;
     if (cgs.gametype > GT_FFA
