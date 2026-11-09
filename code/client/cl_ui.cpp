@@ -1231,6 +1231,44 @@ static UIRect2D getDefaultDMBoxRectangle(void)
 
 /*
 ====================
+UI_PlaceMessageBoxes
+
+Added in OPM
+  In a demo, which shows no compass, the kills and the messages are in the
+  middle at the top of the screen, their lines in the middle too
+====================
+*/
+static void UI_PlaceMessageBoxes(void)
+{
+    UIRect2D dmRect = getDefaultDMBoxRectangle();
+    UIRect2D gmRect = getDefaultGMBoxRectangle();
+    UIRect2D frame;
+
+    if (clc.demoplaying) {
+        float margin = uid.vidWidth * 0.2f;
+
+        dmRect = UIRect2D(margin, 0, uid.vidWidth - 2 * margin, dmRect.size.height);
+        gmRect = UIRect2D(margin, dmRect.size.height, uid.vidWidth - 2 * margin, gmRect.size.height);
+    }
+
+    if (dmbox) {
+        frame = dmbox->getFrame();
+        if (frame.pos.x != dmRect.pos.x || frame.pos.y != dmRect.pos.y || frame.size.width != dmRect.size.width
+            || frame.size.height != dmRect.size.height) {
+            dmbox->setFrame(dmRect);
+        }
+    }
+    if (gmbox) {
+        frame = gmbox->getFrame();
+        if (frame.pos.x != gmRect.pos.x || frame.pos.y != gmRect.pos.y || frame.size.width != gmRect.size.width
+            || frame.size.height != gmRect.size.height) {
+            gmbox->setFrame(gmRect);
+        }
+    }
+}
+
+/*
+====================
 UI_GetObjectivesTop
 ====================
 */
@@ -2040,7 +2078,8 @@ void UI_Update(void)
             }
 
             // draw the compass hud
-            if (hud_compass) {
+            // Changed in OPM: not in a demo
+            if (hud_compass && !clc.demoplaying) {
                 hud_compass->ForceShow();
                 frame = uWinMan.getFrame();
                 hud_compass->GetContainerWidget()->Display(frame, 1.0);
@@ -2068,6 +2107,9 @@ void UI_Update(void)
     if (dmbox) {
         dmbox->setRealShow(true);
     }
+
+    // Added in OPM
+    UI_PlaceMessageBoxes();
 
     currentMenu = menuManager.CurrentMenu();
 
@@ -2202,7 +2244,9 @@ void UI_Update(void)
         // try to show the weapons bar
         //
         if (hud_weapons) {
-            if (ui_weaponsbar->integer && !(cl.snap.ps.pm_flags & PMF_NO_WEAPONBAR)) {
+            // Changed in OPM: not in a demo, where it popped up as the
+            // player shown changed weapons
+            if (ui_weaponsbar->integer && !(cl.snap.ps.pm_flags & PMF_NO_WEAPONBAR) && !clc.demoplaying) {
                 int iEquippedDiff = 0;
                 int iOwnedDiff    = 0;
 
@@ -2375,7 +2419,8 @@ void UI_Update(void)
         // try to show the item bar
         //
         if (hud_items) {
-            if (ui_weaponsbar->integer && ui_itemsbar->integer) {
+            // Changed in OPM: not in a demo, as the weapons bar
+            if (ui_weaponsbar->integer && ui_itemsbar->integer && !clc.demoplaying) {
                 int iEquippedDiff = 0;
                 int iOwnedDiff    = 0;
 
@@ -2552,8 +2597,9 @@ void UI_Update(void)
         //
         // show the compass
         //
+        // Changed in OPM: not in a demo
         if (hud_compass) {
-            if (ui_compass->integer) {
+            if (ui_compass->integer && !clc.demoplaying) {
                 hud_compass->ForceShow();
             } else {
                 hud_compass->ForceHide();
