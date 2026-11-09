@@ -1786,7 +1786,8 @@ def stretches(spans, switches=()):
 def kill_span(index, kill, start, end, before=KILL_BEFORE, after=KILL_AFTER):
     """When kill plays, in msec: from before it, or before the fight that led
     to it, to after it, or after the shots of its killer that go on with it
-    (a fight no more than FIGHT_MOST from it), while it can be played (start to end),
+    (a fight no more than FIGHT_MOST from it, and inside its round), while it
+    can be played (start to end),
     inside its level, as the engine clamps it (CL_DemoKillStart, CL_DemoKillEnd)."""
     levels = [level["time"] for level in index.get("maps", [])]
     time = kill["time"]
@@ -1795,9 +1796,13 @@ def kill_span(index, kill, start, end, before=KILL_BEFORE, after=KILL_AFTER):
     last = levels[i] if i < len(levels) else index.get("duration", 0)
     begin, finish = time - before, time + after
     if kill.get("fightStart", time) < time:
-        begin = min(begin, max(kill["fightStart"] - before, time - FIGHT_MOST))
+        # not from the round before
+        fight = max([kill["fightStart"]] + [r["time"] for r in index.get("rounds", []) if r["time"] <= time])
+        begin = min(begin, max(fight - before, time - FIGHT_MOST))
     if kill.get("fightEnd", time) > time:
-        finish = max(finish, min(kill["fightEnd"] + after, time + FIGHT_MOST))
+        # nor past the end of its round, which shows the scores
+        fight = min([kill["fightEnd"]] + [r["time"] - after for r in index.get("roundEnds", []) if r["time"] >= time])
+        finish = max(finish, min(fight + after, time + FIGHT_MOST))
     return max(start, first, begin), min(end, last, finish)
 
 

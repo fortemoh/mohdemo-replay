@@ -742,6 +742,12 @@ class TestFunctions(unittest.TestCase):
         # 5 s from it at most, and never less than the lead set
         self.assertEqual(span(fightStart=97000, fightEnd=103500), (95000, 105000))
         self.assertEqual(span(fightStart=80000, fightEnd=120000), (95000, 105000))
+        # inside its round: not from the round before, nor into the scores
+        demo["rounds"] = [{"time": 97000}]
+        demo["roundEnds"] = [{"time": 103000, "text": "Axis win!"}]
+        self.assertEqual(span(fightStart=95000, fightEnd=104000), (95000, 103000))
+        demo["roundEnds"] = [{"time": 101000, "text": "Axis win!"}]
+        self.assertEqual(span(fightStart=99000, fightEnd=104000), (97000, 102000))
         self.assertEqual(mohreplay.kill_span(demo, dict(time=100000, fightStart=80000), 0, 600000, 10000, 9000),
                          (90000, 109000))
 

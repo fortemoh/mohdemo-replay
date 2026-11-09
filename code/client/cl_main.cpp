@@ -1376,17 +1376,29 @@ CL_DemoKillStart
 
 Added in OPM
 When a kill's stretch starts, before clamping: CL_DemoKillBefore before it,
-or before the fight that led to it (demoEvent_t fightStart), but no more
-than DEMO_FIGHT_MOST before it
+or before the fight that led to it (demoEvent_t fightStart), in its round,
+but no more than DEMO_FIGHT_MOST before it
 ====================
 */
 #define DEMO_FIGHT_MOST 5000
 
-static int CL_DemoKillStart( const demoEvent_t *ev ) {
-	int start = ev->time - CL_DemoKillBefore();
+static int CL_DemoKillStart( int i ) {
+	const demoEvent_t	*ev = &cl_demoIndex.events[i];
+	int					start = ev->time - CL_DemoKillBefore();
+	int					fight = ev->fightStart;
+	int					j;
 
-	if ( ev->fightStart < ev->time ) {
-		start = Q_min( start, Q_max( ev->fightStart - CL_DemoKillBefore(), ev->time - DEMO_FIGHT_MOST ) );
+	if ( fight < ev->time ) {
+		// not from the round before, which can start in the same message
+		for ( j = i; j + 1 < cl_demoIndex.numEvents && cl_demoIndex.events[j + 1].time <= ev->time; j++ ) {
+		}
+		for ( ; j >= 0; j-- ) {
+			if ( cl_demoIndex.events[j].type == DEMOEVENT_ROUNDSTART && cl_demoIndex.events[j].time <= ev->time ) {
+				fight = Q_max( fight, cl_demoIndex.events[j].time );
+				break;
+			}
+		}
+		start = Q_min( start, Q_max( fight - CL_DemoKillBefore(), ev->time - DEMO_FIGHT_MOST ) );
 	}
 	return start;
 }
@@ -1398,14 +1410,27 @@ CL_DemoKillEnd
 Added in OPM
 When a kill's stretch ends, before clamping: CL_DemoKillAfter after it, or
 after the last shot of its killer that goes on with it (demoEvent_t
-fightEnd), but no more than DEMO_FIGHT_MOST after it
+fightEnd), but no more than DEMO_FIGHT_MOST after it, nor past the end of
+its round, which shows the scores
 ====================
 */
-static int CL_DemoKillEnd( const demoEvent_t *ev ) {
-	int end = ev->time + CL_DemoKillAfter();
+static int CL_DemoKillEnd( int i ) {
+	const demoEvent_t	*ev = &cl_demoIndex.events[i];
+	int					end = ev->time + CL_DemoKillAfter();
+	int					fight = ev->fightEnd;
+	int					j;
 
-	if ( ev->fightEnd > ev->time ) {
-		end = Q_max( end, Q_min( ev->fightEnd + CL_DemoKillAfter(), ev->time + DEMO_FIGHT_MOST ) );
+	if ( fight > ev->time ) {
+		// its round's end can come before it in the same message
+		for ( j = i; j > 0 && cl_demoIndex.events[j - 1].time >= ev->time; j-- ) {
+		}
+		for ( ; j < cl_demoIndex.numEvents; j++ ) {
+			if ( cl_demoIndex.events[j].type == DEMOEVENT_ROUNDEND && cl_demoIndex.events[j].time >= ev->time ) {
+				fight = Q_min( fight, cl_demoIndex.events[j].time - CL_DemoKillAfter() );
+				break;
+			}
+		}
+		end = Q_max( end, Q_min( fight + CL_DemoKillAfter(), ev->time + DEMO_FIGHT_MOST ) );
 	}
 	return end;
 }
@@ -1686,8 +1711,8 @@ static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 		return qfalse;
 	}
 
-	*start = Q_max( CL_DemoKillStart( ev ), CL_DemoMapTimeFor( i ) );
-	*end = Q_min( CL_DemoKillEnd( ev ), CL_DemoNextMapTimeFor( i ) );
+	*start = Q_max( CL_DemoKillStart( i ), CL_DemoMapTimeFor( i ) );
+	*end = Q_min( CL_DemoKillEnd( i ), CL_DemoNextMapTimeFor( i ) );
 	// a player's kills, or whoever's shown, only while they're the one shown,
 	// or seen from behind them (demofilter unshown)
 	if ( shown ) {
@@ -2304,7 +2329,7 @@ static void CL_DemoJumpToKill( qboolean next, qboolean shown ) {
 			continue;
 		}
 
-		target = Q_max( CL_DemoMapTimeFor( i ), CL_DemoKillStart( ev ) );
+		target = Q_max( CL_DemoMapTimeFor( i ), CL_DemoKillStart( i ) );
 		// a player's kills, or whoever's is shown, only while they're the one
 		// shown, or seen from behind them (demofilter unshown)
 		if ( CL_DemoKillersShown( player, shown ) ) {
