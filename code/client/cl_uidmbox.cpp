@@ -242,29 +242,18 @@ float UIDMBox::PrintWrap(UIFont *font, float x, float y, str text)
             break;
         }
 
-        font->Print(LineX(font, x, p1, p2 - p1), fY, p1, p2 - p1, getHighResScale());
+        font->Print(x, fY, p1, p2 - p1, getHighResScale());
         p1 = p2 + 1;
         l -= n;
         fY += font->getHeight();
     }
 
     if (*p1) {
-        font->Print(LineX(font, x, p1, strlen(p1)), fY, p1, l, getHighResScale());
+        font->Print(x, fY, p1, l, getHighResScale());
         fY += font->getHeight();
     }
 
     return fY - y;
-}
-
-// Added in OPM
-//  Where a line starts: in a demo, in the middle of the box, which is in the
-//  middle of the screen there (UI_PlaceMessageBoxes)
-float UIDMBox::LineX(UIFont *font, float x, const char *text, size_t len)
-{
-    if (!clc.demoplaying) {
-        return x;
-    }
-    return x - s_dmboxOffsetX + (m_frame.size.width / getHighResScale()[0] - font->getWidth(text, (int)len)) * 0.5f;
 }
 
 float UIDMBox::DrawItem(item_t *in, float x, float y, float alpha)

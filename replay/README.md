@@ -226,8 +226,8 @@ gun are drawn from the gun in their hand, firing, rechambering and
 reloading as it does, with their lean from their body (their ammo isn't in
 the demo), and their frags show "You killed <victim>", which the server told
 only them. The HUD shows their health, which the spectator views don't, and
-their hits kick their view and flash
-the screen red as they did for them, made again from
+their hits kick their view, flash
+the screen red and mark the compass as they did for them, made again from
 their health dropping (the demo doesn't have them for a player followed) and
 from the shot or explosion that came with it. A hit with neither, like a
 fall, flashes without a kick. In a demo, a player leaning where their eye
@@ -252,9 +252,8 @@ are their shots of a rifle with a scope that kill nobody and go as far, to
 where they hit. Where they stand, how their aim moves and where the shot lands
 are the demo's. `cg_demoscope 0` turns it off.
 
-Demos don't show the score and time left, top right, the compass, the weapons
-bar that pops up as the player shown changes weapons, the icons over players'
-heads, the stopwatch of planting
+Demos don't show the score and time left, top right, the weapons bar that
+pops up as the player shown changes weapons, the icons over players' heads, the stopwatch of planting
 or defusing a bomb, the weapons players carry on their bodies, which only some
 servers' mods put there (`cg_demoholsters 1` shows them), or the server's messages
 about players coming and going
@@ -265,9 +264,8 @@ up (ammo, health and weapons, the yellow messages), the bomb's messages
 (planted, defused, still set), "Will switch to new weapon next time you
 respawn" or what the players write (their chat, with
 the words of voice commands and the server console's): they fill the
-message box; the frags' messages stay, in the middle at the top of the
-screen. "You killed <victim>", which only the killer gets, shows from someone's
-eyes, not from behind them, on the left at the same height. In the middle of the screen, only the
+message box; the frags' messages stay. "You killed <victim>", which only the
+killer gets, shows from someone's eyes, not from behind them. In the middle of the screen, only the
 round results show ("Axis win!", in the server's language): not the server's
 welcome ("Welcome <player>, have fun!") or ads, "Press fire to join the
 battle!" or the warnings to the recorder about being idle. Of the texts some

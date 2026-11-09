@@ -1231,48 +1231,6 @@ static UIRect2D getDefaultDMBoxRectangle(void)
 
 /*
 ====================
-UI_PlaceMessageBoxes
-
-Added in OPM
-  In a demo, which shows no compass, the kills are in the middle at the top
-  of the screen, their lines in the middle too. The messages ("You killed
-  <victim>", round results) stay on the left, up where the compass was, their
-  first line level with the first of the kills
-====================
-*/
-static void UI_PlaceMessageBoxes(void)
-{
-    UIRect2D dmRect = getDefaultDMBoxRectangle();
-    UIRect2D gmRect = getDefaultGMBoxRectangle();
-    UIRect2D frame;
-
-    if (clc.demoplaying) {
-        float margin = uid.vidWidth * 0.2f;
-
-        dmRect = UIRect2D(margin, 0, uid.vidWidth - 2 * margin, dmRect.size.height);
-        // the kills' box draws its first line 8 (virtual) units down, the
-        // messages' at the top
-        gmRect.pos.y = dmRect.pos.y + 8.0f * uid.scaleRes[1];
-    }
-
-    if (dmbox) {
-        frame = dmbox->getFrame();
-        if (frame.pos.x != dmRect.pos.x || frame.pos.y != dmRect.pos.y || frame.size.width != dmRect.size.width
-            || frame.size.height != dmRect.size.height) {
-            dmbox->setFrame(dmRect);
-        }
-    }
-    if (gmbox) {
-        frame = gmbox->getFrame();
-        if (frame.pos.x != gmRect.pos.x || frame.pos.y != gmRect.pos.y || frame.size.width != gmRect.size.width
-            || frame.size.height != gmRect.size.height) {
-            gmbox->setFrame(gmRect);
-        }
-    }
-}
-
-/*
-====================
 UI_GetObjectivesTop
 ====================
 */
@@ -2082,8 +2040,7 @@ void UI_Update(void)
             }
 
             // draw the compass hud
-            // Changed in OPM: not in a demo
-            if (hud_compass && !clc.demoplaying) {
+            if (hud_compass) {
                 hud_compass->ForceShow();
                 frame = uWinMan.getFrame();
                 hud_compass->GetContainerWidget()->Display(frame, 1.0);
@@ -2111,9 +2068,6 @@ void UI_Update(void)
     if (dmbox) {
         dmbox->setRealShow(true);
     }
-
-    // Added in OPM
-    UI_PlaceMessageBoxes();
 
     currentMenu = menuManager.CurrentMenu();
 
@@ -2601,9 +2555,8 @@ void UI_Update(void)
         //
         // show the compass
         //
-        // Changed in OPM: not in a demo
         if (hud_compass) {
-            if (ui_compass->integer && !clc.demoplaying) {
+            if (ui_compass->integer) {
                 hud_compass->ForceShow();
             } else {
                 hud_compass->ForceHide();
