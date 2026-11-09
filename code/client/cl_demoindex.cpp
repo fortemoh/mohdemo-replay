@@ -1773,6 +1773,15 @@ static void DI_SetKillFights(demoIndex_t *index)
             if (shot->time < ev->fightStart - DEMO_FIGHT_GAP) {
                 break;
             }
+            if (ev->weapon == DEMOWEAPON_RIFLE || ev->weapon == DEMOWEAPON_SNIPER) {
+                // with a rifle, the shot before the one that kills, not each
+                // one missed before it
+                if (shot->client == ev->client && shot->time < ev->time) {
+                    ev->fightStart = shot->time;
+                    break;
+                }
+                continue;
+            }
             if (shot->client == ev->client || (ev->other >= 0 && shot->client == ev->other)) {
                 ev->fightStart = Q_min(ev->fightStart, shot->time);
             }

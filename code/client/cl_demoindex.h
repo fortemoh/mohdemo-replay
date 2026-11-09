@@ -88,8 +88,10 @@ typedef struct {
     int seen;
     // for a kill: when the fight that led to it began, the first shot of the
     // killer's or the victim's before it, each at most DEMO_FIGHT_GAP from
-    // the next, and when it ended, the killer's last shot after it, as
-    // close; its time without such shots (msec, as time)
+    // the next (with a rifle, with or without a scope, the killer's shot
+    // before the one that kills, if as close), and when it ended, the
+    // killer's last shot after it, as close; its time without such shots
+    // (msec, as time)
     int fightStart;
     int fightEnd;
     // for a level: the recorder's snapshots at a top speed only realism

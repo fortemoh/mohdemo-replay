@@ -201,7 +201,8 @@ binds, without the app:
 `cl_demoKillBefore` and `cl_demoKillAfter` set how many seconds of each kill
 are shown (2 and 2), around the fight it ends: a clip starts that long before
 the first shot of the fragger's or the victim's that led to the frag, each
-shot at most 3 seconds from the next, and ends that long after the fragger's
+shot at most 3 seconds from the next (with a rifle or a sniper rifle, only
+the fragger's shot before the one that frags, not each miss before it), and ends that long after the fragger's
 last shot that goes on with it, as close; however long the fight, a clip
 starts at most 5 seconds before the frag and ends at most 5 seconds after it,
 and a fight doesn't stretch it into the round before or the scores at its end.
