@@ -318,6 +318,25 @@ static void CG_ServerLag_f()
 
 /*
 =================
+CG_DemoHidesYouKilled
+
+Added in OPM
+  The "You killed <victim>" the server tells the killer only: not from behind
+  the recorder (cg_recordercamera), nor from behind a player not shown
+  (CG_DemoBehind) as the recorder kills. A player followed from their eyes
+  gets theirs (CG_FollowedKill)
+=================
+*/
+static qboolean CG_DemoHidesYouKilled(const char *text)
+{
+    static const char youKilled[] = HUD_MESSAGE_WHITE "You killed ";
+
+    return cg.demoPlayback && (CG_RecorderBehind() || CG_DemoBehind() >= 0)
+        && !strncmp(text, youKilled, sizeof(youKilled) - 1);
+}
+
+/*
+=================
 CG_ServerCommand
 
 The string has been tokenized and can be retrieved with
@@ -345,7 +364,10 @@ static void CG_ServerCommand(qboolean modelOnly)
     }
 
     if (!strcmp(cmd, "print") || !strcmp(cmd, "hudprint")) {
-        cgi.Printf("%s", cgi.Argv(1));
+        // Changed in OPM: not "You killed" from behind someone in a demo
+        if (!CG_DemoHidesYouKilled(cgi.Argv(1))) {
+            cgi.Printf("%s", cgi.Argv(1));
+        }
         // Added in OPM
         CG_FollowedKill(cgi.Argv(1));
         if (!strcmp(cmd, "hudprint")) {
