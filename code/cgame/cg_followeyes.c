@@ -347,7 +347,8 @@ void CG_FollowFromEyes(snapshot_t *snap)
     ps->stats[STAT_HEALTH]       = (body->eFlags & EF_DEAD) ? 0 : ps->stats[STAT_INFOCLIENT_HEALTH];
     ps->stats[STAT_INFOCLIENT]   = -1;
     ps->stats[STAT_INZOOM]       = ps->fov <= 30 ? (int)ps->fov : 0;
-    ps->stats[STAT_CROSSHAIR]    = !ps->stats[STAT_INZOOM];
+    // as a server has it: with a gun in hand, so not dead, nor with the scope on
+    ps->stats[STAT_CROSSHAIR]    = !ps->stats[STAT_INZOOM] && !(body->eFlags & EF_DEAD);
     if (body->eFlags & EF_AXIS) {
         ps->stats[STAT_TEAM] = TEAM_AXIS;
     } else if (body->eFlags & EF_ALLIES) {
@@ -360,6 +361,10 @@ void CG_FollowFromEyes(snapshot_t *snap)
         // no gun in their hand that's known: no arms
         body->eFlags |= EF_UNARMED;
         ps->stats[STAT_EQUIPPED_WEAPON] = 0;
+        // nothing in their hand: dropped as they died, or not in the demo
+        if (!gun) {
+            ps->stats[STAT_CROSSHAIR] = 0;
+        }
         ps->activeItems[1]              = -1;
         followed.gunModel               = 0;
     } else {
