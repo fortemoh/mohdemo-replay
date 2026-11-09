@@ -202,8 +202,9 @@ binds, without the app:
 are shown (2 and 2), around the fight it ends: a clip starts that long before
 the first shot of the fragger's or the victim's that led to the frag, each
 shot at most 3 seconds from the next, and ends that long after the fragger's
-last shot that goes on with it, as close; a fight adds 8 seconds at most on
-each side. The demo index has the shots, so the clip list's times and a video
+last shot that goes on with it, as close; however long the fight, a clip
+starts at most 5 seconds before the frag and ends at most 5 seconds after it.
+The demo index has the shots, so the clip list's times and a video
 split in parts are what is recorded. Kills less than a second apart play as one, without a
 jump, except for a player's kills or whoever's is shown when the player
 shown changes in between: that stays a cut. A multi-kill is two kills or

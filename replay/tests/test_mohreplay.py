@@ -734,13 +734,14 @@ class TestFunctions(unittest.TestCase):
 
     def test_fights(self):
         """2 s before and after a kill, or before the fight that led to it
-        and after the fragger's shots going on with it, up to 8 s more."""
+        and after the fragger's shots going on with it, 5 s from it at most."""
         demo = json.loads(json.dumps(DEMO))
         span = lambda **kill: mohreplay.kill_span(demo, dict(time=100000, **kill), 0, 600000)
         self.assertEqual(span(), (98000, 102000))
-        self.assertEqual(span(fightStart=97000, fightEnd=103500), (95000, 105500))
-        # 8 s more at most, and never less than the lead set
-        self.assertEqual(span(fightStart=80000, fightEnd=120000), (92000, 108000))
+        self.assertEqual(span(fightStart=98500, fightEnd=101500), (96500, 103500))
+        # 5 s from it at most, and never less than the lead set
+        self.assertEqual(span(fightStart=97000, fightEnd=103500), (95000, 105000))
+        self.assertEqual(span(fightStart=80000, fightEnd=120000), (95000, 105000))
         self.assertEqual(mohreplay.kill_span(demo, dict(time=100000, fightStart=80000), 0, 600000, 10000, 9000),
                          (90000, 109000))
 

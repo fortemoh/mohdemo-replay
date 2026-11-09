@@ -47,9 +47,10 @@ PIPE = "replay_pipe"
 GAME_CONFIG = os.path.join("main", "configs", "omconfig.cfg")
 KILL_BEFORE = 2000  # msec of a kill shown before it, as cl_demoKillBefore
 KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
-# msec at most a fight adds before and after a kill (the index's fightStart
-# and fightEnd, the shots of its killer and victim), as DEMO_FIGHT_MOST
-FIGHT_MOST = 8000
+# msec at most before and after a kill that a fight (the index's fightStart
+# and fightEnd, the shots of its killer and victim) makes its clip start and
+# end, as DEMO_FIGHT_MOST
+FIGHT_MOST = 5000
 # msec at most between a team kill and a kill of its killer that plays, for
 # the team kill to play too, as the engine's DEMO_TEAMKILL_NEAR
 TEAM_KILL_NEAR = 2000
@@ -1785,7 +1786,7 @@ def stretches(spans, switches=()):
 def kill_span(index, kill, start, end, before=KILL_BEFORE, after=KILL_AFTER):
     """When kill plays, in msec: from before it, or before the fight that led
     to it, to after it, or after the shots of its killer that go on with it
-    (each at most FIGHT_MOST more), while it can be played (start to end),
+    (a fight no more than FIGHT_MOST from it), while it can be played (start to end),
     inside its level, as the engine clamps it (CL_DemoKillStart, CL_DemoKillEnd)."""
     levels = [level["time"] for level in index.get("maps", [])]
     time = kill["time"]

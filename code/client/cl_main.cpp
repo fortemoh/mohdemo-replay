@@ -1376,11 +1376,11 @@ CL_DemoKillStart
 
 Added in OPM
 When a kill's stretch starts, before clamping: CL_DemoKillBefore before it,
-or before the fight that led to it (demoEvent_t fightStart), which can make
-it at most DEMO_FIGHT_MOST longer
+or before the fight that led to it (demoEvent_t fightStart), but no more
+than DEMO_FIGHT_MOST before it
 ====================
 */
-#define DEMO_FIGHT_MOST 8000
+#define DEMO_FIGHT_MOST 5000
 
 static int CL_DemoKillStart( const demoEvent_t *ev ) {
 	int start = ev->time - CL_DemoKillBefore();
@@ -1398,7 +1398,7 @@ CL_DemoKillEnd
 Added in OPM
 When a kill's stretch ends, before clamping: CL_DemoKillAfter after it, or
 after the last shot of its killer that goes on with it (demoEvent_t
-fightEnd), which can make it at most DEMO_FIGHT_MOST longer
+fightEnd), but no more than DEMO_FIGHT_MOST after it
 ====================
 */
 static int CL_DemoKillEnd( const demoEvent_t *ev ) {
