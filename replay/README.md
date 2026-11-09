@@ -226,8 +226,8 @@ gun are drawn from the gun in their hand, firing, rechambering and
 reloading as it does, with their lean from their body (their ammo isn't in
 the demo), and their frags show "You killed <victim>", which the server told
 only them. The HUD shows their health, which the spectator views don't, and
-their hits kick their view, flash
-the screen red and mark the compass as they did for them, made again from
+their hits kick their view and flash
+the screen red as they did for them, made again from
 their health dropping (the demo doesn't have them for a player followed) and
 from the shot or explosion that came with it. A hit with neither, like a
 fall, flashes without a kick. In a demo, a player leaning where their eye
@@ -252,7 +252,9 @@ are their shots of a rifle with a scope that kill nobody and go as far, to
 where they hit. Where they stand, how their aim moves and where the shot lands
 are the demo's. `cg_demoscope 0` turns it off.
 
-Demos don't show the score and time left, top right, the stopwatch of planting
+Demos don't show the score and time left, top right, the compass, the weapons
+bar that pops up as the player shown changes weapons, the icons over players'
+heads, the stopwatch of planting
 or defusing a bomb, the weapons players carry on their bodies, which only some
 servers' mods put there (`cg_demoholsters 1` shows them), or the server's messages
 about players coming and going
@@ -260,16 +262,20 @@ about players coming and going
 player enters, as at every round, has left the battle, has joined the
 Allies or the Axis, is preparing for deployment), what the player picks
 up (ammo, health and weapons, the yellow messages), the bomb's messages
-(planted, defused, still set) or what the players write (their chat, with
+(planted, defused, still set), "Will switch to new weapon next time you
+respawn" or what the players write (their chat, with
 the words of voice commands and the server console's): they fill the
-message box; the frags' messages stay. In the middle of the screen, only the
+message box; the frags' messages stay, in the middle at the top of the
+screen, as does "You killed <victim>" below them. In the middle of the screen, only the
 round results show ("Axis win!", in the server's language): not the server's
 welcome ("Welcome <player>, have fun!") or ads, "Press fire to join the
 battle!" or the warnings to the recorder about being idle. Of the texts some
 servers add to the screen, their welcome and web addresses aren't shown,
 also while they're typed out letter by letter. After a jump, the message
 boxes start empty: the messages of the time jumped over aren't shown, nor
-those from before it.
+those from before it. Of the commands a server sent the one who recorded it
+(the menus to choose a team or a weapon, settings it wanted, like
+`cg_3rd_person` or `r_fastsky`), a demo only runs its sounds and music.
 
 ## Recording
 
