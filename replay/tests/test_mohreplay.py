@@ -2551,7 +2551,7 @@ class TestRecording(FakeGameCase):
         buttons = {button.text() for button in window.findChildren(mohreplay.QPushButton)}
         self.assertTrue({"Pause", "Cancel", "Open folder"} <= buttons)
         more = next(button for button in window.findChildren(mohreplay.QToolButton) if button.text() == "More")
-        self.assertEqual([action.text() for action in more.menu().actions()], ["Record again", "Remove finished"])
+        self.assertEqual([action.text() for action in more.menu().actions()], ["Record again", "Play live", "Remove finished"])
         self.assertEqual(window.queue_summary.text(), "")
         self.assertFalse(window.pause_button.isEnabled())
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
@@ -2582,7 +2582,7 @@ class TestRecording(FakeGameCase):
             self.assertTrue(wait_until(lambda: all(job["status"] == "done" for job in window.jobs), 60))
         self.assertEqual(window.queue_summary.text(), "3 done")
         self.assertFalse(window.pause_button.isEnabled())
-        more.menu().actions()[1].trigger()
+        next(action for action in more.menu().actions() if action.text() == "Remove finished").trigger()
         self.assertEqual((window.jobs, window.queue_summary.text()), ([], ""))
 
     def test_queue_kept_when_closing(self):
