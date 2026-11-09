@@ -73,6 +73,7 @@ cvar_t	*cl_demoBehind;
 //  victim, for the scope cgame makes up for them (cg_demoscope)
 cvar_t	*cl_demoScopeKill;
 cvar_t	*cl_demoScopeVictim;
+cvar_t	*cl_demoScopeShot;
 //  the player who made the last kill demoonly played (cgame tells when they
 //  last fired, in cg_demoLastShot), -1 for none; with cl_demoKeepShooting, the
 //  time after a kill counts from their last shot
@@ -1909,16 +1910,44 @@ void CL_DemoSpectatorHud( void ) {
 
 /*
 ====================
+CL_DemoKillsAt
+
+Added in OPM
+Whether client kills someone at time, as the index has it
+====================
+*/
+static qboolean CL_DemoKillsAt( int client, int time ) {
+	const demoEvent_t	*ev;
+	int					i;
+
+	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
+		ev = &cl_demoIndex.events[i];
+		if ( ev->time > time + 50 ) {
+			break;
+		}
+		if ( ev->time >= time - 50 && ev->type == DEMOEVENT_KILL && ev->client == client ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+====================
 CL_UpdateDemoScope
 
 Added in OPM
 For the scope cgame makes up (cg_demoscope): the sniper kill of the player
-shown from behind that's coming, or was just made
+shown from behind that's coming, or was just made, or the shot of a rifle
+with a scope that kills nobody (cl_demoScopeShot: from where to where), if
+it comes first
 ====================
 */
 static void CL_UpdateDemoScope( int behind ) {
 	const demoEvent_t	*ev;
+	const demoShot_t	*shot;
 	int					kill = 0, victim = -1;
+	const char			*line = "";
 	int					time, i;
 
 	if ( behind >= 0 ) {
@@ -1938,12 +1967,34 @@ static void CL_UpdateDemoScope( int behind ) {
 				break;
 			}
 		}
+		for ( i = 0; i < cl_demoIndex.numShots; i++ ) {
+			shot = &cl_demoIndex.shots[i];
+			// past once its scope is off
+			if ( shot->client != behind || shot->time + 100 < time ) {
+				continue;
+			}
+			if ( shot->time - 2000 > time || ( kill && shot->time + clc.demoStartTime >= kill - 50 ) ) {
+				break;
+			}
+			// the shot of a kill isn't one that kills nobody
+			if ( CL_DemoKillsAt( behind, shot->time ) ) {
+				continue;
+			}
+			kill = shot->time + clc.demoStartTime;
+			victim = -1;
+			line = va( "%.1f %.1f %.1f %.1f %.1f %.1f", shot->start[0], shot->start[1], shot->start[2], shot->end[0],
+				shot->end[1], shot->end[2] );
+			break;
+		}
 	}
 	if ( kill != cl_demoScopeKill->integer ) {
 		Cvar_Set( "cl_demoScopeKill", va( "%i", kill ) );
 	}
 	if ( victim != cl_demoScopeVictim->integer ) {
 		Cvar_Set( "cl_demoScopeVictim", va( "%i", victim ) );
+	}
+	if ( strcmp( line, cl_demoScopeShot->string ) ) {
+		Cvar_Set( "cl_demoScopeShot", line );
 	}
 }
 
@@ -5458,6 +5509,7 @@ void CL_Init( void ) {
 	cl_demoBehind = Cvar_Get ("cl_demoBehind", "-1", CVAR_ROM );
 	cl_demoScopeKill = Cvar_Get ("cl_demoScopeKill", "0", CVAR_ROM );
 	cl_demoScopeVictim = Cvar_Get ("cl_demoScopeVictim", "-1", CVAR_ROM );
+	cl_demoScopeShot = Cvar_Get ("cl_demoScopeShot", "", CVAR_ROM );
 	//  Words starred out of the players' names and the messages, separated
 	//  by spaces or commas, however they're spelled (cl_censor.cpp)
 	cl_censor = Cvar_Get ("cl_censor", "", CVAR_TEMP );

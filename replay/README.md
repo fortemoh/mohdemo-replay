@@ -247,9 +247,10 @@ A demo doesn't tell whether a player it shows from behind while they aren't the
 one shown (`demofilter unshown`) has a scope on. So one is made up for their
 sniper kills from `cg_demoscopedist` units (1000) or more, of which nearly all
 had one, from `cg_demoscopetime` msec (400) before the shot until just after it,
-as a spectator following them sees it: the camera behind them zoomed in. Where
-they stand, how their aim moves and where the shot lands are the demo's.
-`cg_demoscope 0` turns it off.
+as a spectator following them sees it: the camera behind them zoomed in. So
+are their shots of a rifle with a scope that kill nobody and go as far, to
+where they hit. Where they stand, how their aim moves and where the shot lands
+are the demo's. `cg_demoscope 0` turns it off.
 
 Demos don't show the score and time left, top right, the stopwatch of planting
 or defusing a bomb, the weapons players carry on their bodies, which only some

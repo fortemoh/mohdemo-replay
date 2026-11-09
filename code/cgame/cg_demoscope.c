@@ -29,7 +29,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //  moment before the shot (cg_demoscopetime) and just after, as a spectator
 //  following them sees it: the camera behind them zoomed in. Where they stand
 //  and how their aim moves come from their entity, where it ends up from the
-//  shot in the demo.
+//  shot in the demo. A shot of theirs that kills nobody gets one too, if it
+//  goes far enough: the client tells where from and to (cl_demoScopeShot).
 
 #include "cg_local.h"
 
@@ -48,13 +49,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define DEMO_SCOPE_SHOT_NEAR 96
 
 typedef struct {
-    int      kill;     // its time, as the snapshots', 0 for none
+    int      kill;     // its time, as the snapshots', 0 for none (or of a shot that kills nobody)
     qboolean decided;  // whether it has one is settled
     qboolean on;       // it has one
     qboolean shot;     // the shot's line came
     int      shotTime; // the time drawn when it came
     vec3_t   hit;      // where it passes the victim, from their origin
     vec3_t   offset;   // what's added to the aim of their entity
+    qboolean missed;   // for a shot that kills nobody, which ends at end
+    vec3_t   end;
 } demoScope_t;
 
 static demoScope_t scope;
@@ -104,6 +107,8 @@ static int CG_DemoScope(void)
     }
 
     if (!scope.decided) {
+        vec3_t from;
+
         scope.decided = qtrue;
         victim        = cl_demoScopeVictim->integer;
         if (victim >= 0 && victim < MAX_CLIENTS && cg_entities[victim].currentValid) {
@@ -111,6 +116,23 @@ static int CG_DemoScope(void)
 
             scope.on = dist >= cg_demoscopedist->value;
             cgi.DPrintf("Scope for a sniper kill %.0f units away: %s\n", dist, scope.on ? "made up" : "none");
+        } else if (victim < 0
+                   && sscanf(
+                          cl_demoScopeShot->string,
+                          "%f %f %f %f %f %f",
+                          &from[0],
+                          &from[1],
+                          &from[2],
+                          &scope.end[0],
+                          &scope.end[1],
+                          &scope.end[2]
+                      ) == 6) {
+            // as far as it went, where it hit
+            float dist = Distance(from, scope.end);
+
+            scope.on     = dist >= cg_demoscopedist->value;
+            scope.missed = qtrue;
+            cgi.DPrintf("Scope for a sniper shot %.0f units long: %s\n", dist, scope.on ? "made up" : "none");
         }
     }
     return scope.on ? client : -1;
@@ -188,7 +210,8 @@ static void CG_DemoScopeEye(const vec3_t origin, const vec3_t angles, float heig
 CG_DemoScopeView
 
 The view with a made up scope, if there's one: their aim, closing in on the
-victim until the kill and off by the same after it, from behind them
+victim until the kill (where the shot goes, for one that kills nobody) and
+off by the same after it, from behind them
 ===============
 */
 qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
@@ -206,22 +229,28 @@ qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
 
     start = scope.kill - DEMO_SCOPE_SHOT_AHEAD - cg_demoscopetime->integer;
 
-    if (cg.time < scope.kill && victim >= 0 && victim < MAX_CLIENTS && cg_entities[victim].currentValid) {
+    if (cg.time < scope.kill
+        && (scope.missed || (victim >= 0 && victim < MAX_CLIENTS && cg_entities[victim].currentValid))) {
         CG_DemoScopeBody(&cg_entities[client], bodyOrigin, bodyAngles, &height, &lean);
 
-        other = &cg_entities[victim];
-        // where they're drawn this frame, which cg_smoothClients moves ahead
-        // of their entity
-        CG_CalcEntityLerpPositions(other);
-        VectorCopy(other->lerpOrigin, target);
-        if (scope.shot) {
-            frac = (float)(cg.time - scope.shotTime) / DEMO_SCOPE_SHOT_AHEAD;
-            frac = Q_clamp_float(frac, 0, 1);
-            target[0] += frac * scope.hit[0];
-            target[1] += frac * scope.hit[1];
-            target[2] += CG_DemoScopeMiddle(&other->currentState) * (1 - frac) + frac * scope.hit[2];
+        if (scope.missed) {
+            // closing in on where the shot goes
+            VectorCopy(scope.end, target);
         } else {
-            target[2] += CG_DemoScopeMiddle(&other->currentState);
+            other = &cg_entities[victim];
+            // where they're drawn this frame, which cg_smoothClients moves
+            // ahead of their entity
+            CG_CalcEntityLerpPositions(other);
+            VectorCopy(other->lerpOrigin, target);
+            if (scope.shot) {
+                frac = (float)(cg.time - scope.shotTime) / DEMO_SCOPE_SHOT_AHEAD;
+                frac = Q_clamp_float(frac, 0, 1);
+                target[0] += frac * scope.hit[0];
+                target[1] += frac * scope.hit[1];
+                target[2] += CG_DemoScopeMiddle(&other->currentState) * (1 - frac) + frac * scope.hit[2];
+            } else {
+                target[2] += CG_DemoScopeMiddle(&other->currentState);
+            }
         }
 
         CG_DemoScopeEye(bodyOrigin, bodyAngles, height, lean, eye);

@@ -2720,7 +2720,7 @@ class TestRealGame(FakeGameCase):
 
     def test_scope_on_long_sniper_frags(self):
         """A scope is made up by itself, only for sniper frags from far
-        enough."""
+        enough, and for their shots that kill nobody going far enough."""
         demo = "ff7c4057553458d4-obj-obj_team4"
         path = os.path.join(REAL_DEMOS, demo + ".dm3")
         if not os.path.isfile(path):
@@ -2736,14 +2736,18 @@ class TestRealGame(FakeGameCase):
         window.game.send("set developer 1", *kill_filter.commands(), "timescale 4",
                          "demoseek " + mohreplay.seconds(spans[0][0]), "demoonly kills")
 
-        def scopes():
-            matches = (re.search(r"Scope for a sniper kill (\d+) units away: (made up|none)", line) for line in lines)
+        def scopes(what=r"kill (\d+) units away"):
+            matches = (re.search(rf"Scope for a sniper {what}: (made up|none)", line) for line in lines)
             return [(int(match.group(1)), match.group(2)) for match in matches if match]
 
+        def shots():
+            return scopes(r"shot (\d+) units long")
+
         def both():
-            return {made for _, made in scopes()} == {"made up", "none"}
-        self.assertTrue(wait_until(both, 30), scopes())
-        for distance, made in scopes():
+            # a fragger misses twice from over 3,000 units before their frag at 1:58
+            return {made for _, made in scopes()} == {"made up", "none"} and ("made up" in {made for _, made in shots()})
+        self.assertTrue(wait_until(both, 30), (scopes(), shots()))
+        for distance, made in scopes() + shots():
             self.assertEqual(made, "made up" if distance >= 1000 else "none", distance)
 
     def test_kill_filter(self):

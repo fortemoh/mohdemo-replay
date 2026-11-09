@@ -92,6 +92,15 @@ typedef struct {
     int defaultTicks;
 } demoEvent_t;
 
+// a shot of a rifle with a scope, as cgame reads it from the demo, for the
+// scope made up for a player shown from behind
+typedef struct {
+    int    time;   // msec from the demo's first snapshot, as an event's
+    int    client; // who fired it
+    vec3_t start;  // their eyes
+    vec3_t end;    // where it hit
+} demoShot_t;
+
 typedef struct {
     int          numEvents;
     demoEvent_t *events;
@@ -100,6 +109,10 @@ typedef struct {
     char         recorderName[MAX_NAME_LENGTH];
     qboolean     truncated; // stopped at broken data
     int          maxEvents; // allocated
+    // not in DemoIndex_ToJSON
+    int          numShots;
+    demoShot_t  *shots;
+    int          maxShots; // allocated
 } demoIndex_t;
 
 // reads up to len bytes, returns how many were read

@@ -1458,10 +1458,224 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
 
 /*
 ===============
+DI_AddShot
+
+A shot cgame is told of: kept if a player with a rifle with a scope in
+their hand fires it, where they stand (from their eyes), in the last
+snapshot, the one of the message
+===============
+*/
+static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end)
+{
+    const entityState_t *ent;
+    const char          *model;
+    demoShot_t          *shot;
+    float                best = Square(96), dist;
+    int                  shooter = -1;
+    int                  i;
+
+    if (!p->started || !p->snap.valid) {
+        return;
+    }
+
+    for (i = 0; i < p->snap.numEntities; i++) {
+        ent = &p->parseEntities[(p->snap.parseEntitiesNum + i) & (DI_PARSE_ENTITIES - 1)];
+        if (ent->number < 0 || ent->number >= MAX_CLIENTS || (ent->eFlags & EF_DEAD)) {
+            continue;
+        }
+        dist = Square(ent->origin[0] - start[0]) + Square(ent->origin[1] - start[1]);
+        if (dist < best) {
+            best    = dist;
+            shooter = ent->number;
+        }
+    }
+    if (shooter < 0) {
+        return;
+    }
+
+    for (i = 0; i < p->snap.numEntities; i++) {
+        ent = &p->parseEntities[(p->snap.parseEntitiesNum + i) & (DI_PARSE_ENTITIES - 1)];
+        if (ent->parent != shooter || ent->modelindex <= 0 || ent->modelindex >= MAX_MODELS) {
+            continue;
+        }
+        model = DI_ConfigString(p, CS_MODELS + ent->modelindex);
+        if (Q_stristr(model, "sniper") || Q_stristr(model, "springfield")) {
+            break;
+        }
+    }
+    if (i == p->snap.numEntities) {
+        return;
+    }
+
+    if (p->index->numShots == p->index->maxShots) {
+        p->index->maxShots = p->index->maxShots ? p->index->maxShots * 2 : 64;
+        p->index->shots    = (demoShot_t *)realloc(p->index->shots, p->index->maxShots * sizeof(demoShot_t));
+    }
+    shot         = &p->index->shots[p->index->numShots++];
+    shot->time   = p->snap.serverTime - p->startTime;
+    shot->client = shooter;
+    VectorCopy(start, shot->start);
+    VectorCopy(end, shot->end);
+}
+
+/*
+===============
+DI_ReadCoords
+===============
+*/
+static void DI_ReadCoords(msg_t *msg, vec3_t v)
+{
+    v[0] = MSG_ReadCoord(msg);
+    v[1] = MSG_ReadCoord(msg);
+    v[2] = MSG_ReadCoord(msg);
+}
+
+/*
+===============
+DI_ParseCGMessage
+
+The cgame messages, as CG_ParseCGMessage_ver_6 reads them, for the shots
+(those of protocols from Spearhead on aren't read)
+===============
+*/
+static void DI_ParseCGMessage(diParser_t *p, msg_t *msg)
+{
+    vec3_t start, end, tmp;
+    int    type, count, i;
+
+    if (com_protocol->integer >= PROTOCOL_MOHTA_MIN) {
+        return;
+    }
+
+    do {
+        if (msg->readcount > (int)msg->cursize) {
+            return;
+        }
+
+        type = MSG_ReadBits(msg, 6);
+        switch (type) {
+        case CGM6_BULLET_1:
+        case CGM6_BULLET_2:
+        case CGM6_BULLET_5:
+            if (type == CGM6_BULLET_1) {
+                DI_ReadCoords(msg, tmp); // the barrel
+            }
+            DI_ReadCoords(msg, start);
+            DI_ReadCoords(msg, end);
+            MSG_ReadBits(msg, 1);
+            if (type != CGM6_BULLET_5 && msg->readcount <= (int)msg->cursize) {
+                DI_AddShot(p, start, end);
+            }
+            break;
+        case CGM6_BULLET_3:
+        case CGM6_BULLET_4:
+            if (type == CGM6_BULLET_3) {
+                DI_ReadCoords(msg, tmp);
+                MSG_ReadBits(msg, 6);
+            }
+            DI_ReadCoords(msg, start);
+            MSG_ReadBits(msg, 1);
+            count = MSG_ReadBits(msg, 6);
+            for (i = 0; i < count; i++) {
+                DI_ReadCoords(msg, end);
+            }
+            break;
+        case CGM6_BULLET_6:
+        case CGM6_BULLET_7:
+        case CGM6_BULLET_8:
+        case CGM6_BULLET_9:
+        case CGM6_BULLET_10:
+            DI_ReadCoords(msg, start);
+            MSG_ReadByte(msg); // a direction
+            MSG_ReadBits(msg, 1);
+            break;
+        case CGM6_MELEE_IMPACT:
+            DI_ReadCoords(msg, start);
+            DI_ReadCoords(msg, end);
+            break;
+        case CGM6_EXPLOSION_EFFECT_1:
+        case CGM6_EXPLOSION_EFFECT_2:
+            DI_ReadCoords(msg, start);
+            break;
+        case CGM6_MAKE_EFFECT_1:
+        case CGM6_MAKE_EFFECT_2:
+        case CGM6_MAKE_EFFECT_3:
+        case CGM6_MAKE_EFFECT_4:
+        case CGM6_MAKE_EFFECT_5:
+        case CGM6_MAKE_EFFECT_6:
+        case CGM6_MAKE_EFFECT_7:
+        case CGM6_MAKE_EFFECT_8:
+            DI_ReadCoords(msg, start);
+            MSG_ReadByte(msg);
+            break;
+        case CGM6_MAKE_CRATE_DEBRIS:
+        case CGM6_MAKE_WINDOW_DEBRIS:
+            DI_ReadCoords(msg, start);
+            MSG_ReadByte(msg);
+            break;
+        case CGM6_BULLET_NO_BARREL_1:
+            DI_ReadCoords(msg, tmp);
+            DI_ReadCoords(msg, start);
+            DI_ReadCoords(msg, end);
+            MSG_ReadBits(msg, 1);
+            break;
+        case CGM6_BULLET_NO_BARREL_2:
+            DI_ReadCoords(msg, start);
+            DI_ReadCoords(msg, end);
+            MSG_ReadBits(msg, 1);
+            break;
+        case CGM6_HUDDRAW_SHADER:
+        case CGM6_HUDDRAW_STRING:
+        case CGM6_HUDDRAW_FONT:
+            MSG_ReadByte(msg);
+            MSG_ReadString(msg);
+            break;
+        case CGM6_HUDDRAW_ALIGN:
+            MSG_ReadByte(msg);
+            MSG_ReadBits(msg, 2);
+            MSG_ReadBits(msg, 2);
+            break;
+        case CGM6_HUDDRAW_RECT:
+            MSG_ReadByte(msg);
+            for (i = 0; i < 4; i++) {
+                MSG_ReadShort(msg);
+            }
+            break;
+        case CGM6_HUDDRAW_VIRTUALSIZE:
+            MSG_ReadByte(msg);
+            MSG_ReadBits(msg, 1);
+            break;
+        case CGM6_HUDDRAW_COLOR:
+            for (i = 0; i < 4; i++) {
+                MSG_ReadByte(msg);
+            }
+            break;
+        case CGM6_HUDDRAW_ALPHA:
+            MSG_ReadByte(msg);
+            MSG_ReadByte(msg);
+            break;
+        case CGM6_NOTIFY_HIT:
+        case CGM6_NOTIFY_KILL:
+            break;
+        case CGM6_VOICE_CHAT:
+            DI_ReadCoords(msg, start);
+            MSG_ReadBits(msg, 1);
+            MSG_ReadBits(msg, 6);
+            MSG_ReadString(msg);
+            break;
+        default:
+            // not known: the rest can't be read
+            return;
+        }
+    } while (MSG_ReadBits(msg, 1));
+}
+
+/*
+===============
 DI_ParseMessage
 
-Like CL_ParseServerMessage. The cgame messages come last, and only cgame
-knows how to read them, so the message ends there.
+Like CL_ParseServerMessage. The cgame messages come last, read for their
+shots (DI_ParseCGMessage), so the message ends there.
 ===============
 */
 static qboolean DI_ParseMessage(diParser_t *p, msg_t *msg)
@@ -1481,7 +1695,9 @@ static qboolean DI_ParseMessage(diParser_t *p, msg_t *msg)
         cmd = MSG_ReadByte(msg);
         switch (cmd) {
         case svc_EOF:
+            return qtrue;
         case svc_cgameMessage:
+            DI_ParseCGMessage(p, msg);
             return qtrue;
         case svc_nop:
             break;
@@ -1581,6 +1797,7 @@ DemoIndex_Free
 void DemoIndex_Free(demoIndex_t *index)
 {
     free(index->events);
+    free(index->shots);
     memset(index, 0, sizeof(*index));
     index->recorder = -1;
 }
