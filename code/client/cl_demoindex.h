@@ -86,19 +86,30 @@ typedef struct {
     // before it, as their entity (seen by the recorder, or in the area they
     // could see), -1 if not in the last one
     int seen;
+    // for a kill: when the fight that led to it began, the first shot of the
+    // killer's or the victim's before it, each at most DEMO_FIGHT_GAP from
+    // the next, and when it ended, the killer's last shot after it, as
+    // close; its time without such shots (msec, as time)
+    int fightStart;
+    int fightEnd;
     // for a level: the recorder's snapshots at a top speed only realism
     // servers give, and at one only default servers give
     int realismTicks;
     int defaultTicks;
 } demoEvent_t;
 
-// a shot of a rifle with a scope, as cgame reads it from the demo, for the
-// scope made up for a player shown from behind
+// msec at most between the shots of a fight (demoEvent_t fightStart)
+#define DEMO_FIGHT_GAP 3000
+
+// a shot of a player, as cgame reads it from the demo: for the fights before
+// and after kills, and, of a rifle with a scope, the scope made up for a
+// player shown from behind
 typedef struct {
-    int    time;   // msec from the demo's first snapshot, as an event's
-    int    client; // who fired it
-    vec3_t start;  // their eyes
-    vec3_t end;    // where it hit
+    int      time;   // msec from the demo's first snapshot, as an event's
+    int      client; // who fired it
+    qboolean scoped; // from a rifle with a scope
+    vec3_t   start;  // their eyes
+    vec3_t   end;    // where it hit
 } demoShot_t;
 
 typedef struct {

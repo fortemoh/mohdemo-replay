@@ -1460,12 +1460,12 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
 ===============
 DI_AddShot
 
-A shot cgame is told of: kept if a player with a rifle with a scope in
-their hand fires it, where they stand (from their eyes), in the last
-snapshot, the one of the message
+A shot cgame is told of, kept with the player who stands where it starts
+(from their eyes), in the last snapshot, the one of the message; scoped if
+canScope and they have a rifle with a scope in their hand
 ===============
 */
-static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end)
+static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end, qboolean canScope)
 {
     const entityState_t *ent;
     const char          *model;
@@ -1493,7 +1493,7 @@ static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end)
         return;
     }
 
-    for (i = 0; i < p->snap.numEntities; i++) {
+    for (i = 0; canScope && i < p->snap.numEntities; i++) {
         ent = &p->parseEntities[(p->snap.parseEntitiesNum + i) & (DI_PARSE_ENTITIES - 1)];
         if (ent->parent != shooter || ent->modelindex <= 0 || ent->modelindex >= MAX_MODELS) {
             continue;
@@ -1503,9 +1503,6 @@ static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end)
             break;
         }
     }
-    if (i == p->snap.numEntities) {
-        return;
-    }
 
     if (p->index->numShots == p->index->maxShots) {
         p->index->maxShots = p->index->maxShots ? p->index->maxShots * 2 : 64;
@@ -1514,6 +1511,7 @@ static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end)
     shot         = &p->index->shots[p->index->numShots++];
     shot->time   = p->snap.serverTime - p->startTime;
     shot->client = shooter;
+    shot->scoped = canScope && i < p->snap.numEntities;
     VectorCopy(start, shot->start);
     VectorCopy(end, shot->end);
 }
@@ -1563,8 +1561,9 @@ static void DI_ParseCGMessage(diParser_t *p, msg_t *msg)
             DI_ReadCoords(msg, start);
             DI_ReadCoords(msg, end);
             MSG_ReadBits(msg, 1);
-            if (type != CGM6_BULLET_5 && msg->readcount <= (int)msg->cursize) {
-                DI_AddShot(p, start, end);
+            if (msg->readcount <= (int)msg->cursize) {
+                // under water, a bubble trail: not a scope's
+                DI_AddShot(p, start, end, type != CGM6_BULLET_5);
             }
             break;
         case CGM6_BULLET_3:
@@ -1578,6 +1577,10 @@ static void DI_ParseCGMessage(diParser_t *p, msg_t *msg)
             count = MSG_ReadBits(msg, 6);
             for (i = 0; i < count; i++) {
                 DI_ReadCoords(msg, end);
+            }
+            // a shotgun's pellets: one shot
+            if (count && msg->readcount <= (int)msg->cursize) {
+                DI_AddShot(p, start, end, qfalse);
             }
             break;
         case CGM6_BULLET_6:
@@ -1614,15 +1617,16 @@ static void DI_ParseCGMessage(diParser_t *p, msg_t *msg)
             MSG_ReadByte(msg);
             break;
         case CGM6_BULLET_NO_BARREL_1:
-            DI_ReadCoords(msg, tmp);
-            DI_ReadCoords(msg, start);
-            DI_ReadCoords(msg, end);
-            MSG_ReadBits(msg, 1);
-            break;
         case CGM6_BULLET_NO_BARREL_2:
+            if (type == CGM6_BULLET_NO_BARREL_1) {
+                DI_ReadCoords(msg, tmp);
+            }
             DI_ReadCoords(msg, start);
             DI_ReadCoords(msg, end);
             MSG_ReadBits(msg, 1);
+            if (msg->readcount <= (int)msg->cursize) {
+                DI_AddShot(p, start, end, qfalse);
+            }
             break;
         case CGM6_HUDDRAW_SHADER:
         case CGM6_HUDDRAW_STRING:
@@ -1735,6 +1739,59 @@ static qboolean DI_ParseMessage(diParser_t *p, msg_t *msg)
 
 /*
 ===============
+DI_SetKillFights
+
+The fight each kill ends (demoEvent_t fightStart, fightEnd), from the shots
+===============
+*/
+static void DI_SetKillFights(demoIndex_t *index)
+{
+    demoEvent_t      *ev;
+    const demoShot_t *shot;
+    int               first = 0; // the first shot at or after the kill
+    int               i, j;
+
+    for (i = 0; i < index->numEvents; i++) {
+        ev = &index->events[i];
+        if (ev->type != DEMOEVENT_KILL) {
+            continue;
+        }
+        ev->fightStart = ev->time;
+        ev->fightEnd   = ev->time;
+        if (ev->client < 0) {
+            continue;
+        }
+
+        while (first < index->numShots && index->shots[first].time < ev->time) {
+            first++;
+        }
+        // back: the killer's and the victim's shots, the killing one too
+        for (j = first; j < index->numShots && index->shots[j].time == ev->time; j++) {
+        }
+        for (j--; j >= 0; j--) {
+            shot = &index->shots[j];
+            if (shot->time < ev->fightStart - DEMO_FIGHT_GAP) {
+                break;
+            }
+            if (shot->client == ev->client || (ev->other >= 0 && shot->client == ev->other)) {
+                ev->fightStart = Q_min(ev->fightStart, shot->time);
+            }
+        }
+        // on: the killer's, as the victim is dead
+        for (j = first; j < index->numShots; j++) {
+            shot = &index->shots[j];
+            if (shot->time > ev->fightEnd + DEMO_FIGHT_GAP) {
+                break;
+            }
+            if (shot->client == ev->client) {
+                ev->fightEnd = Q_max(ev->fightEnd, shot->time);
+            }
+        }
+    }
+}
+
+/*
+===============
 DemoIndex_Build
 ===============
 */
@@ -1781,6 +1838,7 @@ void DemoIndex_Build(demoIndex_t *index, demoIndexRead_t read, void *ctx)
 
     // events after the last snapshot
     DI_SetEventTimes(p, p->lastTime);
+    DI_SetKillFights(index);
 
     if (p->started) {
         index->duration = p->lastTime - p->startTime;
@@ -1926,6 +1984,12 @@ static void DI_EventsToJSON(diBuffer_t *b, const demoIndex_t *index, demoEventTy
             }
             if (ev->idle >= 0) {
                 DI_Printf(b, ", \"idle\": %d", ev->idle);
+            }
+            if (ev->fightStart != ev->time) {
+                DI_Printf(b, ", \"fightStart\": %d", ev->fightStart);
+            }
+            if (ev->fightEnd != ev->time) {
+                DI_Printf(b, ", \"fightEnd\": %d", ev->fightEnd);
             }
             if (ev->seen >= 0) {
                 DI_Printf(b, ", \"seen\": %d", ev->seen);

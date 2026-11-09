@@ -1372,6 +1372,46 @@ static int CL_DemoKillAfter( void ) {
 
 /*
 ====================
+CL_DemoKillStart
+
+Added in OPM
+When a kill's stretch starts, before clamping: CL_DemoKillBefore before it,
+or before the fight that led to it (demoEvent_t fightStart), which can make
+it at most DEMO_FIGHT_MOST longer
+====================
+*/
+#define DEMO_FIGHT_MOST 8000
+
+static int CL_DemoKillStart( const demoEvent_t *ev ) {
+	int start = ev->time - CL_DemoKillBefore();
+
+	if ( ev->fightStart < ev->time ) {
+		start = Q_min( start, Q_max( ev->fightStart - CL_DemoKillBefore(), ev->time - DEMO_FIGHT_MOST ) );
+	}
+	return start;
+}
+
+/*
+====================
+CL_DemoKillEnd
+
+Added in OPM
+When a kill's stretch ends, before clamping: CL_DemoKillAfter after it, or
+after the last shot of its killer that goes on with it (demoEvent_t
+fightEnd), which can make it at most DEMO_FIGHT_MOST longer
+====================
+*/
+static int CL_DemoKillEnd( const demoEvent_t *ev ) {
+	int end = ev->time + CL_DemoKillAfter();
+
+	if ( ev->fightEnd > ev->time ) {
+		end = Q_max( end, Q_min( ev->fightEnd + CL_DemoKillAfter(), ev->time + DEMO_FIGHT_MOST ) );
+	}
+	return end;
+}
+
+/*
+====================
 CL_DemoMapTimeFor
 ====================
 */
@@ -1646,8 +1686,8 @@ static qboolean CL_DemoKillStretch( int i, int *start, int *end ) {
 		return qfalse;
 	}
 
-	*start = Q_max( ev->time - CL_DemoKillBefore(), CL_DemoMapTimeFor( i ) );
-	*end = Q_min( ev->time + CL_DemoKillAfter(), CL_DemoNextMapTimeFor( i ) );
+	*start = Q_max( CL_DemoKillStart( ev ), CL_DemoMapTimeFor( i ) );
+	*end = Q_min( CL_DemoKillEnd( ev ), CL_DemoNextMapTimeFor( i ) );
 	// a player's kills, or whoever's shown, only while they're the one shown,
 	// or seen from behind them (demofilter unshown)
 	if ( shown ) {
@@ -1681,11 +1721,11 @@ static int CL_DemoBehindAt( int time, qboolean *shown ) {
 	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
 		ev = &cl_demoIndex.events[i];
 		// the events go forward in time: a kill's stretch starts before it
-		// and ends at most CL_DemoKillAfter after
-		if ( ev->type != DEMOEVENT_KILL || ev->time + CL_DemoKillAfter() < time ) {
+		// and ends at most CL_DemoKillAfter or DEMO_FIGHT_MOST after
+		if ( ev->type != DEMOEVENT_KILL || ev->time + Q_max( CL_DemoKillAfter(), DEMO_FIGHT_MOST ) < time ) {
 			continue;
 		}
-		if ( ev->time - CL_DemoKillBefore() > time ) {
+		if ( ev->time - Q_max( CL_DemoKillBefore(), DEMO_FIGHT_MOST ) > time ) {
 			break;
 		}
 		if ( CL_DemoKillStretch( i, &start, &end ) && start <= time && time < end ) {
@@ -1970,7 +2010,7 @@ static void CL_UpdateDemoScope( int behind ) {
 		for ( i = 0; i < cl_demoIndex.numShots; i++ ) {
 			shot = &cl_demoIndex.shots[i];
 			// past once its scope is off
-			if ( shot->client != behind || shot->time + 100 < time ) {
+			if ( shot->client != behind || !shot->scoped || shot->time + 100 < time ) {
 				continue;
 			}
 			if ( shot->time - 2000 > time || ( kill && shot->time + clc.demoStartTime >= kill - 50 ) ) {
@@ -2264,7 +2304,7 @@ static void CL_DemoJumpToKill( qboolean next, qboolean shown ) {
 			continue;
 		}
 
-		target = Q_max( CL_DemoMapTimeFor( i ), ev->time - CL_DemoKillBefore() );
+		target = Q_max( CL_DemoMapTimeFor( i ), CL_DemoKillStart( ev ) );
 		// a player's kills, or whoever's is shown, only while they're the one
 		// shown, or seen from behind them (demofilter unshown)
 		if ( CL_DemoKillersShown( player, shown ) ) {
@@ -5497,10 +5537,11 @@ void CL_Init( void ) {
 	//  Write demoindex.json and demostate.json for the replay app
 	cl_demoFiles = Cvar_Get ("cl_demoFiles", "0", CVAR_TEMP );
 	//  Seconds of each kill shown by demonextkill and demoonly kills
-	cl_demoKillBefore = Cvar_Get ("cl_demoKillBefore", "4", CVAR_ARCHIVE );
+	cl_demoKillBefore = Cvar_Get ("cl_demoKillBefore", "2", CVAR_ARCHIVE );
 	cl_demoKillAfter = Cvar_Get ("cl_demoKillAfter", "2", CVAR_ARCHIVE );
 	cl_demoShooter = Cvar_Get ("cl_demoShooter", "-1", CVAR_ROM );
-	cl_demoKeepShooting = Cvar_Get ("cl_demoKeepShooting", "1", 0 );
+	//  Off: the index has the shots that go on after a kill (demoEvent_t fightEnd)
+	cl_demoKeepShooting = Cvar_Get ("cl_demoKeepShooting", "0", 0 );
 	//  Seconds at most between a player's kills in a multi-kill
 	cl_demoMultiKill = Cvar_Get ("cl_demoMultiKill", "3", CVAR_ARCHIVE );
 	//  The number drawn on the first clip demoonly plays, the next ones

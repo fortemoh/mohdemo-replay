@@ -45,8 +45,11 @@ from PySide6.QtWidgets import (
 PIPE = "replay_pipe"
 # the game's settings in its home folder, which is thrown away after each game
 GAME_CONFIG = os.path.join("main", "configs", "omconfig.cfg")
-KILL_BEFORE = 4000  # msec of a kill shown before it, as cl_demoKillBefore
+KILL_BEFORE = 2000  # msec of a kill shown before it, as cl_demoKillBefore
 KILL_AFTER = 2000  # and after it, as cl_demoKillAfter
+# msec at most a fight adds before and after a kill (the index's fightStart
+# and fightEnd, the shots of its killer and victim), as DEMO_FIGHT_MOST
+FIGHT_MOST = 8000
 # msec at most between a team kill and a kill of its killer that plays, for
 # the team kill to play too, as the engine's DEMO_TEAMKILL_NEAR
 TEAM_KILL_NEAR = 2000
@@ -1117,7 +1120,7 @@ class Game:
             pass  # none kept yet
         vm = "1" if (viewmodel is None or str(viewmodel) in ("1", "true", "True")) else "0"
         fm = "1" if (forcemodel is None or str(forcemodel) in ("1", "true", "True")) else "0"
-        kb = str(kill_before if kill_before is not None else "4.0")
+        kb = str(kill_before if kill_before is not None else "2.0")
         ka = str(kill_after if kill_after is not None else "2.0")
         with open(os.path.join(main, "replay.cfg"), "w") as f:
             f.writelines(f'bind {key} "{command}"\n' for key, command in BINDS.items())
@@ -1805,13 +1808,21 @@ def stretches(spans, switches=()):
 
 
 def kill_span(index, kill, start, end, before=KILL_BEFORE, after=KILL_AFTER):
-    """When kill plays, in msec: from before it to after it, while it can be
-    played (start to end), inside its level, as the engine clamps it."""
+    """When kill plays, in msec: from before it, or before the fight that led
+    to it, to after it, or after the shots of its killer that go on with it
+    (each at most FIGHT_MOST more), while it can be played (start to end),
+    inside its level, as the engine clamps it (CL_DemoKillStart, CL_DemoKillEnd)."""
     levels = [level["time"] for level in index.get("maps", [])]
-    i = bisect.bisect_right(levels, kill["time"])
+    time = kill["time"]
+    i = bisect.bisect_right(levels, time)
     first = levels[i - 1] if i else 0
     last = levels[i] if i < len(levels) else index.get("duration", 0)
-    return max(start, first, kill["time"] - before), min(end, last, kill["time"] + after)
+    begin, finish = time - before, time + after
+    if kill.get("fightStart", time) < time:
+        begin = min(begin, max(kill["fightStart"] - before, time - FIGHT_MOST))
+    if kill.get("fightEnd", time) > time:
+        finish = max(finish, min(kill["fightEnd"] + after, time + FIGHT_MOST))
+    return max(start, first, begin), min(end, last, finish)
 
 
 def demoonly_plan(index, only="", kill_before=None, kill_after=None, kill_filter=None):
@@ -1958,11 +1969,14 @@ class RecordDialog(QDialog):
 
         left.addSpacing(12)
         left.addWidget(heading("How long"))
-        self.kill_before = seconds_box(settings, "rec/kill_before", 4.0,
-                                       "Time recorded before each frag (cl_demoKillBefore)", "kill_before")
+        self.kill_before = seconds_box(settings, "rec/kill_before", 2.0,
+                                       "Time recorded before each frag, or before the fight that led to it: "
+                                       "the fragger's and the victim's shots, each at most 3 s from the next, "
+                                       "up to 8 s more (cl_demoKillBefore)", "kill_before")
         self.kill_after = seconds_box(settings, "rec/kill_after", 2.0,
                                       "Time recorded after each frag, or after the fragger's last shot if they "
-                                      "go on firing before it's over (cl_demoKillAfter)", "kill_after")
+                                      "go on firing, each at most 3 s from the next, up to 8 s more "
+                                      "(cl_demoKillAfter)", "kill_after")
         row = QHBoxLayout()
         row.addWidget(QLabel("Each frag"))
         row.addLayout(lead_row(self.kill_before, self.kill_after, "it"), 1)
@@ -2221,7 +2235,7 @@ class Recorder(QObject):
         driver = "offscreen" if sys.platform.startswith("linux") else None
         viewmodel = job.get("viewmodel", settings.value("rec/viewmodel", settings.value("viewmodel", "1")))
         forcemodel = job.get("forcemodel", settings.value("rec/forcemodel", settings.value("forcemodel", "1")))
-        kill_before = job.get("kill_before", settings.value("rec/kill_before", settings.value("kill_before", "4.0")))
+        kill_before = job.get("kill_before", settings.value("rec/kill_before", settings.value("kill_before", "2.0")))
         kill_after = job.get("kill_after", settings.value("rec/kill_after", settings.value("kill_after", "2.0")))
         self.game.start(settings.value("exe"), settings.value("game"), job.get("demos") or settings.value("demos"),
                         job["width"], job["height"], extra, driver,
@@ -2937,7 +2951,7 @@ class Window(QMainWindow):
     def get_rec_kill_times(self):
         """Pre-kill and post-kill times in msec from settings for recording."""
         try:
-            kb = int(float(self.settings.value("rec/kill_before", self.settings.value("kill_before", 4.0))) * 1000)
+            kb = int(float(self.settings.value("rec/kill_before", self.settings.value("kill_before", 2.0))) * 1000)
         except (ValueError, TypeError):
             kb = KILL_BEFORE
         try:

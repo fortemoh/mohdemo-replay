@@ -144,6 +144,12 @@ def unspecced_demo():
             "rounds": [], "roundEnds": []}
 
 
+
+def plan_4s(*args, **kwargs):
+    """demoonly_plan with 4 s before each kill, as the tests of what plays
+    and joins were written for (the default is 2 s)."""
+    return mohreplay.demoonly_plan(*args, kill_before=4000, **kwargs)
+
 class Messages:
     """Takes the place of QMessageBox's static functions, which would wait."""
 
@@ -310,7 +316,7 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.quoted('say "hi"'), "\"say 'hi'\"")
 
     def test_demoonly_plan(self):
-        plan, kf = mohreplay.demoonly_plan, mohreplay.KillFilter
+        plan, kf = plan_4s, mohreplay.KillFilter
         self.assertEqual(plan(DEMO), (0, [(0, 600000)]))
         # anyone's kills, wherever the recorder looks, but the deaths of the
         # player shown: t-'s at 3:20, Phil's at 6:40
@@ -321,7 +327,7 @@ class TestFunctions(unittest.TestCase):
                          (5, [(6000, 16500), (300000, 305500)]))
 
     def test_demoonly_plan_with_a_kill_filter(self):
-        plan, kf = mohreplay.demoonly_plan, mohreplay.KillFilter
+        plan, kf = plan_4s, mohreplay.KillFilter
         # anyone's, whoever is shown
         self.assertEqual(plan(DEMO, "kills", kill_filter=kf(weapons=["rifle"])), (2, [(6000, 14000)]))
         self.assertEqual(plan(DEMO, "kills", kill_filter=kf(victims=["BOB"])), (2, [(8000, 14000), (246000, 252000)]))
@@ -342,7 +348,7 @@ class TestFunctions(unittest.TestCase):
                            {"time": 40500, "client": 0, "name": "t-"}]
         demo["kills"] = [{"time": time, "killer": 0, "killerName": "t-", "victim": 1, "victimName": "^1Phil",
                           "text": "Phil was rifled by t-"} for time in (20000, 26800, 38000, 44000)]
-        plan, kf = mohreplay.demoonly_plan, mohreplay.KillFilter
+        plan, kf = plan_4s, mohreplay.KillFilter
         cut = [(16000, 28800), (34000, 40000), (40500, 46000)]
         self.assertEqual(plan(demo, "kills", kill_filter=kf(recorder=True, specced=True))[1], cut)
         self.assertEqual(plan(demo, "kills", kill_filter=kf(["t-"]))[1], cut)
@@ -489,7 +495,7 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.filter_kills(summary, kf(["ace"], unshown=True)), (2, {"ace": ["Ace", 2]}))
         self.assertEqual(mohreplay.filter_kills(summary, kf(unshown=True)), (3, {"ace": ["Ace", 2], "cid": ["Cid", 1]}))
         # from when they're in the demo at most, and inside the level
-        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", kill_filter=kf(specced=True, unshown=True)),
+        self.assertEqual(plan_4s(demo, "kills", kill_filter=kf(specced=True, unshown=True)),
                          (4, [(16000, 22000), (30000, 34000), (66000, 72000), (86000, 90000)]))
         # indexes from before: not known to be in the demo
         old = json.loads(json.dumps(demo))
@@ -695,7 +701,7 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.summarize(demo)["players"]["t-"], ["t-", 2])
 
     def test_team_kills(self):
-        plan, demo = mohreplay.demoonly_plan, team_demo()
+        plan, demo = plan_4s, team_demo()
         # not counted, and only played with a kill of their killer at most 2 s
         # away: not Phil's 1.5 s after killing t-, who's shown, at 3:20
         self.assertEqual(plan(demo, "kills"), (4, [(6000, 18000), (246000, 252000)]))
@@ -703,7 +709,7 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(mohreplay.summarize(demo)["players"]["t-"], ["t-", 3])
 
     def test_grenade_kills(self):
-        plan, demo = mohreplay.demoonly_plan, grenade_demo()
+        plan, demo = plan_4s, grenade_demo()
         self.assertEqual([mohreplay.is_grenade(kill) for kill in demo["kills"]][2:5], [False, True, True])
         # not counted, not played
         self.assertEqual(plan(demo, "kills", kill_filter=mohreplay.KillFilter(["T-"])), (3, [(6000, 16500)]))
@@ -718,13 +724,25 @@ class TestFunctions(unittest.TestCase):
         demo["kills"].append({"time": 257000, "killer": 0, "killerName": "t-", "victim": 2, "victimName": "Bob",
                               "text": "Bob was rifled by t-"})
         demo["kills"].sort(key=lambda kill: kill["time"])
-        self.assertEqual(mohreplay.demoonly_plan(demo, "kills", kill_filter=mohreplay.KillFilter(["T-"])),
+        self.assertEqual(plan_4s(demo, "kills", kill_filter=mohreplay.KillFilter(["T-"])),
                          (4, [(6000, 16500), (256000, 259000)]))
         kill = {"time": 255000}
-        self.assertEqual(mohreplay.kill_span(demo, kill, 0, 600000), (251000, 256000))
-        self.assertEqual(mohreplay.kill_span(demo, dict(kill, time=257000), 0, 600000), (256000, 259000))
+        self.assertEqual(mohreplay.kill_span(demo, kill, 0, 600000, 4000), (251000, 256000))
+        self.assertEqual(mohreplay.kill_span(demo, dict(kill, time=257000), 0, 600000, 4000), (256000, 259000))
         # and the demo's end
-        self.assertEqual(mohreplay.kill_span(demo, dict(kill, time=599000), 0, 602000), (595000, 600000))
+        self.assertEqual(mohreplay.kill_span(demo, dict(kill, time=599000), 0, 602000, 4000), (595000, 600000))
+
+    def test_fights(self):
+        """2 s before and after a kill, or before the fight that led to it
+        and after the fragger's shots going on with it, up to 8 s more."""
+        demo = json.loads(json.dumps(DEMO))
+        span = lambda **kill: mohreplay.kill_span(demo, dict(time=100000, **kill), 0, 600000)
+        self.assertEqual(span(), (98000, 102000))
+        self.assertEqual(span(fightStart=97000, fightEnd=103500), (95000, 105500))
+        # 8 s more at most, and never less than the lead set
+        self.assertEqual(span(fightStart=80000, fightEnd=120000), (92000, 108000))
+        self.assertEqual(mohreplay.kill_span(demo, dict(time=100000, fightStart=80000), 0, 600000, 10000, 9000),
+                         (90000, 109000))
 
     def test_lead_in_and_out(self):
         plan, t = mohreplay.demoonly_plan, mohreplay.KillFilter(["T-"])
@@ -1828,9 +1846,9 @@ class TestRecording(FakeGameCase):
         job, = self.done(window)
         self.assertEqual(job["item"].text(1), "first, frags from the recorder")
         video = self.video("first recfrags.mp4")
-        # from just before the first kill
+        # from just before the first kill, at 10 s
         self.assertEqual((video["start"], video["only"], video["player"], video["filter"].get("recorder")),
-                         (6000, "kills", "", True))
+                         (8000, "kills", "", True))
 
     def test_record_kills_with_a_weapon(self):
         window = self.window()
@@ -1844,7 +1862,7 @@ class TestRecording(FakeGameCase):
         job, = self.done(window)
         self.assertEqual(job["item"].text(1), "first, frags of bob or phil with rifle")
         video = self.video("rifle.mp4")
-        self.assertEqual((video["start"], video["only"], video["player"]), (6000, "kills", ""))
+        self.assertEqual((video["start"], video["only"], video["player"]), (8000, "kills", ""))
         self.assertEqual(video["filter"], {"shown": False, "killers": [], "victims": ["bob", "phil"], "weapons": ["rifle"]})
 
     def test_record_nothing_listed(self):
@@ -2701,30 +2719,39 @@ class TestRealGame(FakeGameCase):
         start, stop = spans[followed]
         self.assertTrue(any(start <= t <= stop for t in samples), "the followed player's kill wasn't played")
 
-    def test_clip_goes_on_while_firing(self):
-        """A clip ends the time after a frag from its fragger's last shot, past
-        where it's planned to end while they fire."""
+    def test_clips_go_round_the_fights(self):
+        """A frag's clip starts before the fight that led to it, as planned
+        from the index's shots: demoonly jumps to the starts planned, some of
+        them pulled back by a fight."""
         window = self.window()
         index = self.real_demo(window)
+        kills = index["kills"]
+        self.assertTrue(all(k.get("fightStart", k["time"]) <= k["time"] <= k.get("fightEnd", k["time"]) for k in kills))
         lines, output = [], window.game.on_output
         window.game.on_output = lambda line: (lines.append(line), output(line))
         kill_filter = mohreplay.KillFilter(recorder=True, specced=True)
         spans = mohreplay.demoonly_plan(index, "kills", kill_filter=kill_filter)[1]
-        window.game.send("set developer 1", *kill_filter.commands(), "timescale 4",
-                         "demoseek " + mohreplay.seconds(spans[0][0]), "demoonly kills")
-
-        def clips_gone_on():
-            matches = (re.search(r"Played on to ([\d:.]+): the last shot was at ([\d:.]+)", line) for line in lines)
-            return [match for match in matches if match]
-        wait_until(lambda: len(clips_gone_on()) >= 3, 20)
-        played = clips_gone_on()
-        self.assertTrue(played, "no clip went on")
+        plain = json.loads(json.dumps(index))
+        for kill in plain["kills"]:
+            kill.pop("fightStart", None)
+            kill.pop("fightEnd", None)
+        plain_spans = mohreplay.demoonly_plan(plain, "kills", kill_filter=kill_filter)[1]
+        self.assertGreater(mohreplay.length(spans), mohreplay.length(plain_spans), "no fight made a clip longer")
+        window.game.send(*kill_filter.commands(), "timescale 4", "demoseek " + mohreplay.seconds(spans[0][0]),
+                         "demoonly kills")
 
         def msec(text):
             minutes, seconds = text.split(":")
-            return int(minutes) * 60000 + float(seconds) * 1000
-        for match in played:
-            self.assertAlmostEqual(msec(match.group(1)) - msec(match.group(2)), mohreplay.KILL_AFTER, delta=300)
+            return round(int(minutes) * 60000 + float(seconds) * 1000)
+
+        def seeks():
+            return [msec(match.group(1)) for match in (re.search(r"Seeking to ([\d:.]+)", line) for line in lines)
+                    if match]
+        wanted = [start for start, _ in spans[1:4]]
+        # after the demoseek (and demoonly's to the first), from one stretch to the next
+        later = lambda: [time for time in seeks() if time > spans[0][0]]
+        self.assertTrue(wait_until(lambda: len(later()) >= len(wanted), 40), (seeks(), spans[:4]))
+        self.assertEqual(later()[:len(wanted)], wanted)
 
     def test_scope_on_long_sniper_frags(self):
         """A scope is made up by itself, only for sniper frags from far
