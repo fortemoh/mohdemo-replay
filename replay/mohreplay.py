@@ -35,7 +35,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
     QSizePolicy, QSlider,
     QSpinBox, QSplitter, QStyle, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -1417,31 +1417,6 @@ def parse_size(text):
     return (width, height) if width > 0 and height > 0 else None
 
 
-def seconds_box(settings, key, default, tip, fallback=None):
-    """A box for a time in seconds, as kept in key, else in fallback."""
-    box = QDoubleSpinBox()
-    box.setRange(0.5, 30.0)
-    box.setSingleStep(0.5)
-    box.setSuffix(" s")
-    box.setToolTip(tip)
-    try:
-        box.setValue(float(settings.value(key, settings.value(fallback, default) if fallback else default)))
-    except (ValueError, TypeError):
-        box.setValue(default)
-    return box
-
-
-def lead_row(before, after, text):
-    """Before and after boxes in a row: "4.00 s before, 2.00 s after"."""
-    row = QHBoxLayout()
-    row.addWidget(before)
-    row.addWidget(QLabel("before,"))
-    row.addWidget(after)
-    row.addWidget(QLabel("after " + text))
-    row.addStretch(1)
-    return row
-
-
 def browse_row(edit, browse):
     row = QHBoxLayout()
     row.addWidget(edit, 1)
@@ -1911,15 +1886,15 @@ def model_menu(models, axis, chosen):
 
 
 class RecordDialog(QDialog):
-    """All about the videos of a Record: what to record, how long, how it looks
-    and where it goes, kept in the settings, with what Settings sets in a line.
+    """All about the videos of a Record: what to record, how it looks and
+    where it goes, kept in the settings, with what Settings sets in a line.
+    How long before and after each frag isn't a choice: 2 s around the fight
+    it ends (kill_span).
 
     choices: [(key, label, enabled)], what can be recorded, and a stretch of
-    time from time when it isn't None. join: offer one video for all.
-    relabel(before, after): the choices again for that lead-in and out, in
-    msec, as their lengths change with them."""
+    time from time when it isn't None. join: offer one video for all."""
 
-    def __init__(self, settings, choices, time=None, join=False, parent=None, relabel=None):
+    def __init__(self, settings, choices, time=None, join=False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Record a video")
         self.setMinimumWidth(780)
@@ -1968,19 +1943,6 @@ class RecordDialog(QDialog):
             self.join.hide()
 
         left.addSpacing(12)
-        left.addWidget(heading("How long"))
-        self.kill_before = seconds_box(settings, "rec/kill_before", 2.0,
-                                       "Time recorded before each frag, or before the fight that led to it: "
-                                       "the fragger's and the victim's shots, each at most 3 s from the next, "
-                                       "up to 8 s more (cl_demoKillBefore)", "kill_before")
-        self.kill_after = seconds_box(settings, "rec/kill_after", 2.0,
-                                      "Time recorded after each frag, or after the fragger's last shot if they "
-                                      "go on firing, each at most 3 s from the next, up to 8 s more "
-                                      "(cl_demoKillAfter)", "kill_after")
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Each frag"))
-        row.addLayout(lead_row(self.kill_before, self.kill_after, "it"), 1)
-        left.addLayout(row)
         self.numbers = QCheckBox("Number the clips")
         self.numbers.setToolTip("A number on each clip of the video, and next to it the list of the clips with "
                                 "their frags (a .csv of the same name)")
@@ -2005,12 +1967,6 @@ class RecordDialog(QDialog):
         row.addStretch(1)
         left.addLayout(row)
         left.addStretch(1)
-        if relabel:
-            # once they stop changing, as a choice of many demos takes a while
-            timer = QTimer(self, singleShot=True, interval=150)
-            timer.timeout.connect(lambda: self.relabel(relabel(*self.kill_times())))
-            self.kill_before.valueChanged.connect(lambda _: timer.start())
-            self.kill_after.valueChanged.connect(lambda _: timer.start())
 
         right = QVBoxLayout()
         right.setSpacing(4)
@@ -2089,10 +2045,6 @@ class RecordDialog(QDialog):
         if self.parent().edit_settings("video"):
             self.summary.setText(video_summary(self.settings))
 
-    def kill_times(self):
-        """The lead-in and out chosen, in msec."""
-        return int(self.kill_before.value() * 1000), int(self.kill_after.value() * 1000)
-
     def relabel(self, choices):
         for key, label, enabled in choices:
             self.choices[key].setText(label)
@@ -2128,8 +2080,6 @@ class RecordDialog(QDialog):
                 QMessageBox.warning(self, "Record a video", "The start and end times aren't right.")
                 return
         for key, value in (("folder", self.folder.text()), ("pattern", self.pattern.text()),
-                           ("kill_before", str(self.kill_before.value())),
-                           ("kill_after", str(self.kill_after.value())),
                            ("numbers", "true" if self.numbers.isChecked() else "false"),
                            ("split", "true" if self.split.isChecked() else "false"),
                            ("split_minutes", str(self.split_minutes.value())),
@@ -2164,8 +2114,6 @@ class RecordDialog(QDialog):
             jobs.append({"label": label + (f" (part {number} of {len(parts)})" if suffix else ""),
                          "clips": numbered(part, self.numbers.isChecked(), first),
                          "numbers": self.numbers.isChecked(), **video_settings(self.settings),
-                         "kill_before": str(self.kill_before.value()),
-                         "kill_after": str(self.kill_after.value()),
                          "output": os.path.join(self.folder.text(), name + suffix + ".mp4"),
                          "status": "waiting"})
             first += sum(len(clip["spans"] or [None]) - bool(clip.get("continued")) for clip in part)
@@ -2235,8 +2183,9 @@ class Recorder(QObject):
         driver = "offscreen" if sys.platform.startswith("linux") else None
         viewmodel = job.get("viewmodel", settings.value("rec/viewmodel", settings.value("viewmodel", "1")))
         forcemodel = job.get("forcemodel", settings.value("rec/forcemodel", settings.value("forcemodel", "1")))
-        kill_before = job.get("kill_before", settings.value("rec/kill_before", settings.value("kill_before", "2.0")))
-        kill_after = job.get("kill_after", settings.value("rec/kill_after", settings.value("kill_after", "2.0")))
+        # the lead of a video queued when it was a choice, as its clips were
+        # planned with it, else the game's
+        kill_before, kill_after = job.get("kill_before"), job.get("kill_after")
         self.game.start(settings.value("exe"), settings.value("game"), job.get("demos") or settings.value("demos"),
                         job["width"], job["height"], extra, driver,
                         viewmodel=viewmodel, forcemodel=forcemodel,
@@ -2948,18 +2897,6 @@ class Window(QMainWindow):
         # the game has the folder it started with
         self.game.stop()
 
-    def get_rec_kill_times(self):
-        """Pre-kill and post-kill times in msec from settings for recording."""
-        try:
-            kb = int(float(self.settings.value("rec/kill_before", self.settings.value("kill_before", 2.0))) * 1000)
-        except (ValueError, TypeError):
-            kb = KILL_BEFORE
-        try:
-            ka = int(float(self.settings.value("rec/kill_after", self.settings.value("kill_after", 2.0))) * 1000)
-        except (ValueError, TypeError):
-            ka = KILL_AFTER
-        return max(500, kb), max(500, ka)
-
     def edit_settings(self, tab="setup"):
         """Whether anything was set. The next game starts with it."""
         program = self.settings.value("exe", "")
@@ -2982,10 +2919,9 @@ class Window(QMainWindow):
             width, height = 1280, 720
         # as the videos are
         video = video_settings(self.settings)
-        before, after = self.get_rec_kill_times()
         self.game.start(self.settings.value("exe"), self.settings.value("game"), self.settings.value("demos"), width, height,
-                        viewmodel=video["viewmodel"], forcemodel=video["forcemodel"], kill_before=before / 1000,
-                        kill_after=after / 1000, followed=video["followed"], censor=video["censor"], camera=video["camera"])
+                        viewmodel=video["viewmodel"], forcemodel=video["forcemodel"], followed=video["followed"],
+                        censor=video["censor"], camera=video["camera"])
         self.tell("Starting the game…", 5000)
         # for its keys that go to frags
         self.game.send(*self.kill_filter().commands())
@@ -3170,11 +3106,11 @@ class Window(QMainWindow):
             text = f"{len(chosen):,} of the {listed:,} demos selected"
         else:
             text = f"{found:,} demo{'s' if found != 1 else ''}" if listed == found else f"{listed:,} of {found:,} demos listed"
-        # at most what the clips take, as those of frags close together are one
+        # roughly what the clips take: those of frags close together are one,
+        # fights make them longer
         frags = sum(self.demo_frags.get(name, 0) for name in chosen)
         if frags:
-            before, after = self.get_rec_kill_times()
-            text += f", {frags:,} frag{'s' if frags != 1 else ''}, {about(frags * (before + after))}"
+            text += f", {frags:,} frag{'s' if frags != 1 else ''}, {about(frags * (KILL_BEFORE + KILL_AFTER))}"
         self.demo_count.setText(text)
         tip = [f"{found:,} demos in the folder, {indexed:,} of them indexed"]
         if found > indexed:
@@ -3236,14 +3172,13 @@ class Window(QMainWindow):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         indexes = {name: self.library.index(name) for name in names}
 
-        def plans_for(before, after):
-            """What each choice records of each demo with that lead-in and
-            out, from the indexes kept: {key: {name: (count, spans or None)}},
-            the demos with some."""
+        def plans_for():
+            """What each choice records of each demo, from the indexes kept:
+            {key: {name: (count, spans or None)}}, the demos with some."""
             plans = {"kills": {}, "everything": {}}
             for name, index in indexes.items():
                 plans["everything"][name] = demoonly_plan(index) if index else (0, None)
-                plan = demoonly_plan(index, "kills", before, after, kill_filter) if index else (0, [])
+                plan = demoonly_plan(index, "kills", kill_filter=kill_filter) if index else (0, [])
                 if plan[0]:
                     plans["kills"][name] = plan
             return plans
@@ -3258,11 +3193,11 @@ class Window(QMainWindow):
                      + (", " + about(sum(length(s) for s in whole)) if None not in whole else ""), True)]
 
         try:
-            offered = choices(plans_for(*self.get_rec_kill_times()))
+            plans = plans_for()
+            offered = choices(plans)
         finally:
             QApplication.restoreOverrideCursor()
-        dialog = RecordDialog(self.settings, offered, 0 if len(names) == 1 else None, join=len(names) > 1, parent=self,
-                              relabel=lambda before, after: choices(plans_for(before, after)))
+        dialog = RecordDialog(self.settings, offered, 0 if len(names) == 1 else None, join=len(names) > 1, parent=self)
         if not dialog.exec():
             return
         what = dialog.what()
@@ -3276,7 +3211,6 @@ class Window(QMainWindow):
                                       names[0], player))
             self.play_live(live)
             return
-        plans = plans_for(*dialog.kill_times())
         chosen = list(plans[what])
         only, kind = ("kills", "frags" + kill_filter.words()) if what == "kills" else ("", "")
         player = player if only else ""

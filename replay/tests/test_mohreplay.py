@@ -1810,25 +1810,26 @@ class TestRecording(FakeGameCase):
         self.assertEqual(video["cvars"]["s_loopback"], "0")
         self.assertIn("-an", video["cvars"]["cl_aviPipeFormat"])
 
-    def test_lengths_follow_the_lead_in_and_out(self):
+    def test_lead_in_and_out_not_a_choice(self):
+        """Each frag plays 2 s around the fight it ends, whatever a lead kept
+        from when it was a choice says."""
         window = self.window()
         self.ready(window)
         self.choose(window, killer="t-")
+        self.settings.setValue("rec/kill_before", "30.0")
+        self.settings.setValue("rec/kill_after", "30.0")
 
         def setup(dialog):
+            self.assertFalse(hasattr(dialog, "kill_before") or hasattr(dialog, "kill_after"))
             self.assertEqual(dialog.choices["kills"].text(), "The 3 frags listed, under a minute")
-            dialog.kill_before.setValue(30)
-            dialog.kill_after.setValue(30)
-            # 0:00 to 0:44.5, while t- is shown
-            self.assertTrue(wait_until(lambda: dialog.choices["kills"].text() == "The 3 frags listed, about 1 min", 2),
-                            dialog.choices["kills"].text())
             dialog.choices["kills"].setChecked(True)
-            dialog.pattern.setText("long")
+            dialog.pattern.setText("lead")
         self.record(window, setup)
-        self.done(window)
-        video = self.video("long.mp4")
+        job, = self.done(window)
+        self.assertNotIn("kill_before", job)
+        video = self.video("lead.mp4")
         self.assertEqual((video["start"], video["cvars"]["cl_demoKillBefore"], video["cvars"]["cl_demoKillAfter"]),
-                         (0, "30.0", "30.0"))
+                         (8000, "2.0", "2.0"))
 
     def test_record_recorder_frags(self):
         window = self.window()
@@ -2431,13 +2432,14 @@ class TestRecording(FakeGameCase):
         self.assertEqual((items(dialog.followed_axis)[-1], dialog.followed_axis.currentData()), ("allied_pilot", "allied_pilot"))
         self.assertFalse(dialog.viewmodel.isChecked() or dialog.forcemodel.isChecked())
 
-        # a game watching a demo looks the same
+        # a game watching a demo looks the same, with the lead of the videos,
+        # not one kept from when it was a choice
         self.settings.setValue("rec/kill_before", "3.0")
         self.playing(window)
         args = window.game.args
         self.assertEqual([args[args.index(name) + 1] for name in ("cg_recordercamera", "cg_followcamera",
                                                                   "cg_drawviewmodel", "cg_forceModel", "cl_demoKillBefore")],
-                         ["1", "2", "0", "0", "3.0"])
+                         ["1", "2", "0", "0", "2.0"])
 
     def test_cameras_recorded(self):
         """A video has the cameras chosen when it was queued; by default, the

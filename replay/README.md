@@ -115,8 +115,9 @@ open keeps them: another one doesn't write over its list, and asks before
 closing with videos left, which aren't kept. A video records from the
 folder of demos it was queued from, also when another folder is opened
 before its turn. Each lands in the folder chosen, named from a pattern
-(`{demo}`, the demo's file name, `{start}`, `{player}`, `{date}`), with each
-frag played from how long before it to how long after.
+(`{demo}`, the demo's file name, `{start}`, `{player}`, `{date}`). Each frag
+plays from 2 s before the fight it ends to 2 s after it (see `cl_demoKillBefore`
+below): how long isn't a choice.
 
 How it looks, in Record, is what the videos show: the cameras of the recorder
 and of the player they follow, the model of the player followed, and only them,
