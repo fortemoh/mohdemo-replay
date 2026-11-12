@@ -863,6 +863,36 @@ int CG_DemoBehind(void)
 
 /*
 ===============
+CG_DemoBodyPlays
+
+Added in OPM
+  Whether a player's body plays an animation of more than weight whose name
+  has part in it, and part2 too if not NULL
+===============
+*/
+static qboolean CG_DemoBodyPlays(const entityState_t *es, float weight, const char *part, const char *part2)
+{
+    dtiki_t    *tiki = CG_FollowedBodyTiki(es);
+    const char *name;
+    int         i;
+
+    if (!tiki) {
+        return qfalse;
+    }
+    for (i = 0; i < MAX_FRAMEINFOS; i++) {
+        if (es->frameInfo[i].weight <= weight) {
+            continue;
+        }
+        name = cgi.Anim_NameForNum(tiki, es->frameInfo[i].index);
+        if (name && strstr(name, part) && (!part2 || strstr(name, part2))) {
+            return qtrue;
+        }
+    }
+    return qfalse;
+}
+
+/*
+===============
 CG_DemoJumpStart
 
 Added in OPM
@@ -874,23 +904,42 @@ Added in OPM
 */
 static qboolean CG_DemoJumpStart(const entityState_t *es)
 {
-    dtiki_t    *tiki = CG_FollowedBodyTiki(es);
-    const char *name;
-    int         i;
+    return CG_DemoBodyPlays(es, 0.3f, "_jump_", "_takeoff");
+}
 
-    if (!tiki) {
-        return qfalse;
-    }
-    for (i = 0; i < MAX_FRAMEINFOS; i++) {
-        if (es->frameInfo[i].weight <= 0.3f) {
-            continue;
+/*
+===============
+CG_DemoHeadTurn
+
+Added in OPM
+  How many times more a player's view turns from their body than their head
+  does when only their head turns, 0 when not: on a ladder their head turns by
+  half of it, on a turret by all of it, their torso, arms and pelvis staying at
+  rest (PmoveAdjustAngleSettings). Of 17,976 such snapshots of players
+  followed in 400 demos from stock servers, 17,397 were on ladders and 571 on
+  a turret. Their animations tell which, as a small pitch can leave only the
+  head turned otherwise, the others' share rounding to nothing
+===============
+*/
+static float CG_DemoHeadTurn(const entityState_t *es)
+{
+    int i, j;
+
+    // bone controllers 0 to 3: head, torso, arms, pelvis
+    for (i = 1; i <= 3; i++) {
+        for (j = 0; j < 3; j++) {
+            if (es->bone_angles[i][j]) {
+                return 0;
+            }
         }
-        name = cgi.Anim_NameForNum(tiki, es->frameInfo[i].index);
-        if (name && strstr(name, "_jump_") && strstr(name, "_takeoff")) {
-            return qtrue;
-        }
     }
-    return qfalse;
+    if (CG_DemoBodyPlays(es, 0, "ladder_", NULL)) {
+        return 2;
+    }
+    if (CG_DemoBodyPlays(es, 0, "turret", NULL)) {
+        return 1;
+    }
+    return 0;
 }
 
 /*
@@ -900,24 +949,32 @@ CG_DemoBehindState
 Added in OPM
   What a stock server's camera behind a player goes by, from their entity: its
   place and yaw, their pitch that their head, torso, arms and pelvis share
-  between them (PmoveAdjustAngleSettings), and their eyes' height that their
-  box tells (standing or crouching), lower as they take off for a jump. A box
-  comes a snapshot after the height when they crouch or stand up, which is
-  left: telling it from their animations put the camera wrong as often. Dead,
-  their bones are at rest, while a server keeps the pitch they had
+  between them (PmoveAdjustAngleSettings), or their head alone on a ladder or
+  a turret, and their eyes' height that their box tells (standing or
+  crouching), lower as they take off for a jump. A box comes a snapshot after
+  the height when they crouch or stand up, which is left: telling it from
+  their animations put the camera wrong as often. Dead, their bones are at
+  rest, while a server keeps the pitch they had
 ===============
 */
 void CG_DemoBehindState(const entityState_t *es, playerState_t *ps)
 {
     static float alivePitch[MAX_CLIENTS];
     vec3_t       mins, maxs;
+    float        head;
     int          i;
 
     memset(ps, 0, sizeof(*ps));
     VectorCopy(es->origin, ps->origin);
     ps->viewangles[YAW] = es->angles[YAW];
-    for (i = 0; i < 4; i++) {
-        ps->viewangles[PITCH] += AngleNormalize180(es->bone_angles[i][PITCH]);
+    head = CG_DemoHeadTurn(es);
+    if (head) {
+        ps->viewangles[PITCH] = head * AngleNormalize180(es->bone_angles[0][PITCH]);
+        ps->viewangles[YAW] += head * AngleNormalize180(es->bone_angles[0][YAW]);
+    } else {
+        for (i = 0; i < 4; i++) {
+            ps->viewangles[PITCH] += AngleNormalize180(es->bone_angles[i][PITCH]);
+        }
     }
     if (es->number >= 0 && es->number < MAX_CLIENTS) {
         if (es->eFlags & EF_DEAD) {
