@@ -77,6 +77,7 @@ int serverTimeResidual;
 
 	// Added in OPM
 	int				vmAnimTime;		// server time the view model's animation began
+	int				demoBehind;		// CL_DemoBehindIn
 } clSnapshot_t;
 
 
@@ -660,9 +661,11 @@ void CL_ParseServerMessage( msg_t *msg );
 // Added in OPM
 void CL_DemoShowFollowed( playerState_t *ps, int messageNum );
 void CL_DemoHitSource( const vec3_t start, const vec3_t end );
+void CL_DemoHitFlesh( const vec3_t pos, qboolean large );
 qboolean CL_DemoShownFromBehind( const playerState_t *ps );
 qboolean CL_DemoHidesHealth( void );
 qboolean CL_DemoFollowedFromEyes( void );
+qboolean CL_DemoUnspeccedFromEyes( void );
 void CL_DemoSpectatorHud( void );
 void CL_UpdateDemoBehind( void );
 int CL_DemoBehindIn( int serverTime );

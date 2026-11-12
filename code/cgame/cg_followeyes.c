@@ -487,8 +487,9 @@ their body is in it, after their gun is put in it (CG_DemoGuns): from their
 eyes, where their body is and aims, as the camera behind them goes by
 (CG_DemoBehindState), and moving as it does. All the rooms are drawn: the
 recorder's say what they see. A demo holds nothing of their health or zoom:
-alive, they have 100, and the scope of a long sniper shot is made up as the
-view is drawn (CG_DemoScopeEyes)
+alive, they have 100, their hits are made up by the client from the pain and
+blood the server sends (CL_DemoFollowedHits), and the scope of a long sniper
+shot as the view is drawn (CG_DemoScopeEyes)
 ===============
 */
 void CG_UnspeccedFromEyes(snapshot_t *snap)
@@ -538,12 +539,12 @@ void CG_UnspeccedFromEyes(snapshot_t *snap)
     // the recorder's: crouched, hit, frozen or on a turret
     ps->pm_flags &= ~(PMF_DUCKED | PMF_DAMAGE_ANGLES | PMF_FROZEN | PMF_NO_MOVE | PMF_VIEW_DUCK_RUN
                       | PMF_VIEW_JUMP_START | PMF_TURRET);
-    ps->fov                   = cg_fov->value;
-    ps->stats[STAT_INZOOM]    = 0;
-    ps->stats[STAT_HEALTH]    = (body->eFlags & EF_DEAD) ? 0 : 100;
-    ps->stats[STAT_DAMAGEDIR] = 0;
-    VectorClear(ps->damage_angles);
-    ps->blend[3] = 0;
+    ps->fov                = cg_fov->value;
+    ps->stats[STAT_INZOOM] = 0;
+    // their hits, the kick (damage_angles), the red flash and the mark on the
+    // compass, are the client's, made again from what the demo has
+    // (CL_DemoFollowedHits)
+    ps->stats[STAT_HEALTH] = (body->eFlags & EF_DEAD) ? 0 : 100;
     memset(snap->areamask, 0, sizeof(snap->areamask));
 
     CG_FromEyes(snap, client, body);

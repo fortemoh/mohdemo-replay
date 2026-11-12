@@ -273,8 +273,12 @@ snapshots is a straight sweep. All the level's rooms are drawn, as the
 recorder's say what the recorder could see. The demo has neither their health
 nor their scope: the HUD has no health, and the scope made up for a long sniper
 shot is theirs, with its sight and no gun or crosshair, from once it's half way
-zoomed in. The recorder's sounds come from where they are, and the recorder's
-own hit and kill sounds aren't played.
+zoomed in. Their hits kick their view, flash the screen red and mark the
+compass as a player followed's do: the server plays their pain for each hit
+they live through, and how hard it was is told by the blood on them, about 23
+for a small bullet's and 76 for a rifle's (10 without blood, as for a fall).
+The recorder's sounds come from where they are, and the recorder's own hit and
+kill sounds aren't played.
 
 Demos don't show the score and time left, top right, the weapons bar that
 pops up as the player shown changes weapons, the icons over players' heads, the stopwatch of planting

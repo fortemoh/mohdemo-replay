@@ -346,6 +346,8 @@ functions exported to the main executable
         //  What came with a snapshot of a demo that can hurt: a shot from
         //  start to end, or an explosion at start, without an end
         void (*DemoHitSource)(const vec3_t start, const vec3_t end);
+        //  and where a bullet drew blood, large for a rifle's
+        void (*DemoHitFlesh)(const vec3_t pos, qboolean large);
         void (*SetTime)(int time);
         void (*GetCurrentSnapshotNumber)(int *snapshotNumber, int *serverTime);
         void (*GetGlconfig)(glconfig_t *glconfig);

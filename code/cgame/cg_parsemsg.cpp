@@ -1443,6 +1443,9 @@ void CG_ParseCGMessage_ver_15()
                 }
                 break;
             case CGM_BULLET_8:
+                // Added in OPM
+                //  blood: a player hit
+                cgi.DemoHitFlesh(vStart, iLarge);
                 if (flesh_impact_count < MAX_IMPACTS) {
                     // negative
                     VectorNegate(vEnd, vEnd);
@@ -1453,6 +1456,9 @@ void CG_ParseCGMessage_ver_15()
                 }
                 break;
             case CGM_BULLET_9:
+                // Added in OPM
+                //  blood: a player hit
+                cgi.DemoHitFlesh(vStart, iLarge);
                 if (flesh_impact_count < MAX_IMPACTS) {
                     // negative
                     VectorNegate(vEnd, vEnd);
@@ -1876,6 +1882,9 @@ void CG_ParseCGMessage_ver_6()
                 }
                 break;
             case CGM6_BULLET_7:
+                // Added in OPM
+                //  blood: a player hit
+                cgi.DemoHitFlesh(vStart, iLarge);
                 if (flesh_impact_count < MAX_IMPACTS) {
                     // negative
                     VectorNegate(vEnd, vEnd);
@@ -1886,6 +1895,9 @@ void CG_ParseCGMessage_ver_6()
                 }
                 break;
             case CGM6_BULLET_8:
+                // Added in OPM
+                //  blood: a player hit
+                cgi.DemoHitFlesh(vStart, iLarge);
                 if (flesh_impact_count < MAX_IMPACTS) {
                     // negative
                     VectorNegate(vEnd, vEnd);

@@ -270,7 +270,15 @@ view kick and red flash of their hits, nor where they came from: those are
 made again from their health dropping, as the server makes them
 (Player::DamageFeedback), from the shots and explosions that come with it,
 after the snapshot in the same message (CL_DemoFollowedHitsEnd), and shown
-with their health (CL_DemoShowFollowed).
+with their health (CL_DemoShowFollowed). With cg_unspeccedcamera 2, a player
+the demo doesn't show, seen from their eyes, gets theirs too, though their
+health isn't in it: a hit is the pain the server plays on them for each one
+they live through (Player::Pain), on CHAN_DIALOG_SECONDARY (96% of the hits
+of players followed in 150 demos from stock servers, with a false one in all
+of them), and how much it took from the blood their bullets drew (CGM6_BULLET_7
+and 8 there: 98% of it with a hit): 23 for a small one, the middle of 20 to 25,
+and 76 for a large one (a rifle's), of 64 to 85; without blood, 10, mostly a
+fall's.
 ================
 */
 typedef struct {
@@ -283,12 +291,29 @@ typedef struct {
 } demoFollowedHits_t;
 
 #define MAX_DEMO_HIT_SOURCES 64
+#define DEMO_HIT_SMALL 23
+#define DEMO_HIT_LARGE 76
+#define DEMO_HIT_BLOODLESS 10
+// a hit whose damage the blood that comes with it tells (CL_DemoFollowedHitsEnd)
+#define DEMO_HIT_PAIN -1
+// where blood is on a player, around their origin
+#define DEMO_HIT_BLOOD_SIDE 32
+#define DEMO_HIT_BLOOD_BOTTOM -8
+#define DEMO_HIT_BLOOD_TOP 104
+
+typedef struct {
+	vec3_t		pos;
+	qboolean	large;
+} demoHitFlesh_t;
 
 static demoFollowedHits_t cl_demoFollowedHits[PACKET_BACKUP];
 static demoHitSource_t cl_demoHitSources[MAX_DEMO_HIT_SOURCES];
 static int cl_demoNumHitSources;
+static demoHitFlesh_t cl_demoHitFlesh[MAX_DEMO_HIT_SOURCES];
+static int cl_demoNumHitFlesh;
 static struct {
 	int		client; // -1 when not followed from their eyes
+	qboolean	unspecced; // a player the demo doesn't show (cg_unspeccedcamera 2)
 	int		health;
 	int		serverTime;
 	int		damage; // of this message, until what came with it is read
@@ -311,6 +336,39 @@ void CL_DemoHitSource( const vec3_t start, const vec3_t end ) {
 	}
 }
 
+void CL_DemoHitFlesh( const vec3_t pos, qboolean large ) {
+	if ( !clc.demoplaying || cl_demoNumHitFlesh >= MAX_DEMO_HIT_SOURCES ) {
+		return;
+	}
+	VectorCopy( pos, cl_demoHitFlesh[cl_demoNumHitFlesh].pos );
+	cl_demoHitFlesh[cl_demoNumHitFlesh].large = large;
+	cl_demoNumHitFlesh++;
+}
+
+/*
+================
+CL_DemoSnapshotEntity
+
+Added in OPM
+The entity number of a snapshot read, NULL if it isn't in it
+================
+*/
+static const entityState_t *CL_DemoSnapshotEntity( const clSnapshot_t *snap, int number ) {
+	const entityState_t	*ent;
+	int					i;
+
+	if ( number < 0 || number >= MAX_CLIENTS ) {
+		return NULL;
+	}
+	for ( i = 0; i < snap->numEntities; i++ ) {
+		ent = &cl.parseEntities[( snap->parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 )];
+		if ( ent->number == number ) {
+			return ent;
+		}
+	}
+	return NULL;
+}
+
 static void CL_DemoFollowedHitsKeep( demoFollowedHits_t *hits ) {
 	hits->dir = cl_demoHits.dir;
 	hits->alpha = cl_demoHits.feedback.alpha;
@@ -322,7 +380,8 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	int					client = snap->ps.stats[STAT_INFOCLIENT];
 	int					health = snap->ps.stats[STAT_INFOCLIENT_HEALTH];
 	int					damage, i;
-	qboolean			body = qfalse;
+	const entityState_t	*body = NULL;
+	qboolean			unspecced = qfalse, pain = qfalse;
 
 	hits->messageNum = -1;
 	if ( !clc.demoplaying ) {
@@ -331,6 +390,7 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	hits->messageNum = snap->messageNum;
 	hits->followed = qfalse;
 	cl_demoNumHitSources = 0;
+	cl_demoNumHitFlesh = 0;
 	cl_demoHits.damage = 0;
 
 	if ( snap->ps.stats[STAT_DAMAGEDIR] != cl_demoHits.ownDir ) {
@@ -342,19 +402,35 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	}
 	hits->dir = cl_demoHits.dir;
 
-	if ( Cvar_VariableIntegerValue( "cg_followcamera" ) == 2
-		&& ( snap->ps.pm_flags & PMF_CAMERA_VIEW ) && client >= 0 && client < MAX_CLIENTS ) {
-		// as cgame does, when their entity is in it
-		for ( i = 0; i < snap->numEntities && !body; i++ ) {
-			body = cl.parseEntities[( snap->parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 )].number == client;
+	// as cgame does, when their entity is in it: a player the demo doesn't
+	// show, seen from their eyes, or else the one followed
+	if ( Cvar_VariableIntegerValue( "cg_unspeccedcamera" ) == 2 ) {
+		body = CL_DemoSnapshotEntity( snap, snap->demoBehind );
+		if ( body ) {
+			unspecced = qtrue;
+			client = snap->demoBehind;
 		}
+	}
+	if ( !body && Cvar_VariableIntegerValue( "cg_followcamera" ) == 2 && ( snap->ps.pm_flags & PMF_CAMERA_VIEW ) ) {
+		body = CL_DemoSnapshotEntity( snap, client );
 	}
 	if ( !body ) {
 		cl_demoHits.client = -1;
 		return;
 	}
 
-	if ( client != cl_demoHits.client || snap->serverTime < cl_demoHits.serverTime
+	if ( unspecced ) {
+		health = ( body->eFlags & EF_DEAD ) ? 0 : 1;
+		for ( i = 0; i < snap->number_of_sounds; i++ ) {
+			const server_sound_t *sound = &snap->sounds[i];
+
+			if ( sound->entity_number == client && sound->channel == CHAN_DIALOG_SECONDARY && !sound->stop_flag ) {
+				pain = qtrue;
+			}
+		}
+	}
+
+	if ( client != cl_demoHits.client || unspecced != cl_demoHits.unspecced || snap->serverTime < cl_demoHits.serverTime
 		|| snap->serverTime - cl_demoHits.serverTime > 1000 ) {
 		// someone else, or a jump: nothing going on
 		DemoHits_Clear( &cl_demoHits.feedback );
@@ -365,16 +441,22 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 		damage = cl_demoHits.health - health;
 		if ( health <= 0 ) {
 			DemoHits_Clear( &cl_demoHits.feedback );
+		} else if ( unspecced ) {
+			if ( pain ) {
+				cl_demoHits.damage = DEMO_HIT_PAIN;
+			}
 		} else if ( damage > 0 ) {
 			cl_demoHits.damage = damage;
 		}
 	}
 	cl_demoHits.client = client;
+	cl_demoHits.unspecced = unspecced;
 	cl_demoHits.health = health;
 	cl_demoHits.serverTime = snap->serverTime;
 
 	hits->followed = qtrue;
-	hits->health = health;
+	// not theirs when not shown, which the HUD leaves out
+	hits->health = unspecced ? -1 : health;
 	CL_DemoFollowedHitsKeep( hits );
 }
 
@@ -392,6 +474,19 @@ qboolean CL_DemoFollowedFromEyes( void ) {
 
 /*
 ================
+CL_DemoUnspeccedFromEyes
+
+Added in OPM
+Whether the last snapshot shows a player the demo doesn't show from their eyes
+(cg_unspeccedcamera 2), with their hits
+================
+*/
+qboolean CL_DemoUnspeccedFromEyes( void ) {
+	return cl_demoHits.client >= 0 && cl_demoHits.unspecced;
+}
+
+/*
+================
 CL_DemoFollowedHitsEnd
 
 Added in OPM
@@ -401,11 +496,39 @@ The end of a message: a hit of its snapshot, now that what came with it is read
 static void CL_DemoFollowedHitsEnd( void ) {
 	demoHitPlayer_t		others[MAX_CLIENTS];
 	demoFollowedHits_t	*hits;
-	vec3_t				dir;
+	vec3_t				dir, origin;
+	float				yaw;
 	int					numOthers = 0, i;
 
 	if ( !clc.demoplaying || !cl_demoHits.damage ) {
 		return;
+	}
+
+	VectorCopy( cl.snap.ps.origin, origin );
+	yaw = cl.snap.ps.viewangles[YAW];
+	if ( cl_demoHits.unspecced ) {
+		const entityState_t *body = CL_DemoSnapshotEntity( &cl.snap, cl_demoHits.client );
+
+		if ( !body ) {
+			cl_demoHits.damage = 0;
+			return;
+		}
+		VectorCopy( body->netorigin, origin );
+		yaw = body->netangles[YAW];
+
+		// as much as the blood on them tells
+		cl_demoHits.damage = 0;
+		for ( i = 0; i < cl_demoNumHitFlesh; i++ ) {
+			const demoHitFlesh_t *flesh = &cl_demoHitFlesh[i];
+
+			if ( fabs( flesh->pos[0] - origin[0] ) <= DEMO_HIT_BLOOD_SIDE && fabs( flesh->pos[1] - origin[1] ) <= DEMO_HIT_BLOOD_SIDE
+				&& flesh->pos[2] - origin[2] >= DEMO_HIT_BLOOD_BOTTOM && flesh->pos[2] - origin[2] <= DEMO_HIT_BLOOD_TOP ) {
+				cl_demoHits.damage += flesh->large ? DEMO_HIT_LARGE : DEMO_HIT_SMALL;
+			}
+		}
+		if ( !cl_demoHits.damage ) {
+			cl_demoHits.damage = DEMO_HIT_BLOODLESS;
+		}
 	}
 
 	for ( i = 0; i < cl.snap.numEntities; i++ ) {
@@ -418,8 +541,8 @@ static void CL_DemoFollowedHitsEnd( void ) {
 		}
 	}
 
-	DemoHits_Direction( cl.snap.ps.origin, cl_demoHits.damage, cl_demoHitSources, cl_demoNumHitSources, others, numOthers, dir );
-	DemoHits_Hit( &cl_demoHits.feedback, cl_demoHits.damage, dir, cl.snap.ps.viewangles[YAW] );
+	DemoHits_Direction( origin, cl_demoHits.damage, cl_demoHitSources, cl_demoNumHitSources, others, numOthers, dir );
+	DemoHits_Hit( &cl_demoHits.feedback, cl_demoHits.damage, dir, yaw );
 	cl_demoHits.dir = DemoHits_DirStat( dir, cl_demoHits.dir );
 	cl_demoHits.damage = 0;
 
@@ -448,12 +571,17 @@ void CL_DemoShowFollowed( playerState_t *ps, int messageNum ) {
 	if ( !hits->followed ) {
 		return;
 	}
-	ps->stats[STAT_HEALTH] = hits->health;
+	if ( hits->health >= 0 ) {
+		ps->stats[STAT_HEALTH] = hits->health;
+	}
 	VectorCopy( hits->angles, ps->damage_angles );
 	if ( hits->alpha > 0 ) {
 		ps->blend[0] = 1;
 		ps->blend[1] = ps->blend[2] = 0;
 		ps->blend[3] = hits->alpha;
+	} else if ( hits->health < 0 ) {
+		// not the recorder's
+		ps->blend[3] = 0;
 	}
 }
 
@@ -586,6 +714,7 @@ void CL_ParseSnapshot( msg_t *msg ) {
 	}
 
 	// Added in OPM
+	newSnap.demoBehind = CL_DemoBehindIn( newSnap.serverTime );
 	CL_DemoFollowedHits( &newSnap );
 
 	// copy to the current good spot

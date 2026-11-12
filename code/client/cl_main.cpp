@@ -1945,7 +1945,8 @@ CL_DemoSpectatorHud
 Added in OPM
 What the HUD, drawn from cl.snap (the snapshots kept stay as they came), has
 for a spectator following someone, while a demo shows them from behind: no
-weapons, ammo, crosshair or scope, and no red flash
+weapons, ammo, crosshair or scope, and no red flash, but the one of their own
+hits from their eyes (CL_DemoUnspeccedFromEyes)
 ====================
 */
 void CL_DemoSpectatorHud( void ) {
@@ -1970,7 +1971,9 @@ void CL_DemoSpectatorHud( void ) {
 	for ( i = 0; i < MAX_AMMOCOUNT; i++ ) {
 		ps->ammo_amount[i] = 0;
 	}
-	ps->blend[3] = 0;
+	if ( !CL_DemoUnspeccedFromEyes() ) {
+		ps->blend[3] = 0;
+	}
 }
 
 /*

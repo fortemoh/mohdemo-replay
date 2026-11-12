@@ -203,7 +203,7 @@ qboolean	CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
 	// Added in OPM
 	snapshot->vmAnimTime = clSnap->vmAnimTime;
 	CL_DemoShowFollowed( &snapshot->ps, snapshotNumber );
-	snapshot->demoBehind = CL_DemoBehindIn( clSnap->serverTime );
+	snapshot->demoBehind = clSnap->demoBehind;
 
 	// wombat: sounds
 	count = clSnap->number_of_sounds;
@@ -911,6 +911,7 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->GetSnapshot				= CL_GetSnapshot;
 	cgi->GetServerStartTime			= CL_GetServerStartTime;
 	cgi->DemoHitSource				= CL_DemoHitSource;
+	cgi->DemoHitFlesh				= CL_DemoHitFlesh;
 	cgi->SetTime					= CL_SetTime;
 	cgi->GetCurrentSnapshotNumber	= CL_GetCurrentSnapshotNumber;
 
