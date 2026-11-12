@@ -665,6 +665,7 @@ qboolean CL_DemoHidesHealth( void );
 qboolean CL_DemoFollowedFromEyes( void );
 void CL_DemoSpectatorHud( void );
 void CL_UpdateDemoBehind( void );
+int CL_DemoBehindIn( int serverTime );
 
 int		CL_MSG_ReadBits( int bits );
 int		CL_MSG_ReadChar( void );

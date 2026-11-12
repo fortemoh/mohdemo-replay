@@ -690,7 +690,7 @@ static void CG_AddDoorsNotInSnapshot(void)
     refEntity_t ent;
     int         i;
 
-    if (CG_DemoBehind() < 0) {
+    if (CG_DemoBehind() < 0 && CG_UnspeccedEyes() < 0) {
         return;
     }
 

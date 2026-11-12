@@ -60,7 +60,8 @@ older version are indexed again once for it). From says who the frags are
 from, any of these together, and remembers it: Recorder is the recorder's own
 frags, while they play; Specced those of the players the recorder spectated,
 while they followed them; Unspecced those made while the demo shows someone
-else, filmed from behind the fragger, when the demo has them for 3 s before and
+else, filmed from behind the fragger (or from their eyes, as How it looks in
+Record chooses), when the demo has them for 3 s before and
 their victim in view then (about half of those frags): the server only sends
 the players the recorder could see. It may send a player without the gun in
 their hand, so that one is worked out from what their body is doing, with its
@@ -119,8 +120,9 @@ before its turn. Each lands in the folder chosen, named from a pattern
 plays from 2 s before the fight it ends to 2 s after it (see `cl_demoKillBefore`
 below): how long isn't a choice.
 
-How it looks, in Record, is what the videos show: the cameras of the recorder
-and of the player they follow, the model of the player followed, and only them,
+How it looks, in Record, is what the videos show: the cameras of the recorder,
+of the player they follow and of the fragger of an Unspecced frag, the model of
+the player followed, and only them,
 one when they're Allies and one when they're Axis, from that team's player
 models in the game files, or as in the demo (`cg_followedModel`,
 `cg_followedGermanModel`), the gun in the player's hands, and Force models,
@@ -258,6 +260,21 @@ as a spectator following them sees it: the camera behind them zoomed in. So
 are their shots of a rifle with a scope that kill nobody and go as far, to
 where they hit. Where they stand, how their aim moves and where the shot lands
 are the demo's. `cg_demoscope 0` turns it off.
+
+`cg_unspeccedcamera 2` (1, the default, is from behind) shows those kills from
+the killer's own eyes, as `cg_followcamera 2` does for a player followed, but
+from their entity alone: where they are, aim, crouch and lean, their arms and
+gun from the gun in their hand (or the one worked out from their body), firing,
+rechambering and reloading as it does, bobbing as they move, and "You killed
+<victim>". At each of the server's snapshots, 20 a second, where they are is
+the server's, to the unit, and their aim within a quarter of a degree; in
+between, it's smoothed as for a player followed, so a flick between two
+snapshots is a straight sweep. All the level's rooms are drawn, as the
+recorder's say what the recorder could see. The demo has neither their health
+nor their scope: the HUD has no health, and the scope made up for a long sniper
+shot is theirs, with its sight and no gun or crosshair, from once it's half way
+zoomed in. The recorder's sounds come from where they are, and the recorder's
+own hit and kill sounds aren't played.
 
 Demos don't show the score and time left, top right, the weapons bar that
 pops up as the player shown changes weapons, the icons over players' heads, the stopwatch of planting

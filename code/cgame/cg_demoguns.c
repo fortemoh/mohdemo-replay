@@ -248,7 +248,8 @@ void CG_DemoHolsters(snapshot_t *snap)
 CG_DemoGuns
 
 Puts the guns of the players who have none in the snapshot, while the demo
-shows someone from behind
+shows someone from behind, or the snapshot is drawn for someone not shown
+(its demoBehind)
 ===============
 */
 void CG_DemoGuns(snapshot_t *snap)
@@ -305,7 +306,8 @@ void CG_DemoGuns(snapshot_t *snap)
         }
     }
 
-    if (cl_demoBehind->integer < 0 || cl_demoBehind->integer >= MAX_CLIENTS) {
+    if ((cl_demoBehind->integer < 0 || cl_demoBehind->integer >= MAX_CLIENTS)
+        && (snap->demoBehind < 0 || snap->demoBehind >= MAX_CLIENTS)) {
         return;
     }
 

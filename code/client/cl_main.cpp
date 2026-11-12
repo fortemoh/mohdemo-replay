@@ -2099,6 +2099,37 @@ static int CL_DemoSnapshotMsec( void ) {
 
 /*
 ====================
+CL_DemoBehindIn
+
+Added in OPM
+Whose kill a snapshot of serverTime is drawn for while they aren't shown, as
+CL_UpdateDemoBehind tells it for the time drawn, -1 if no one's: also for the
+snapshot just before their stretch begins, as its first frames are drawn from
+it, and, between stretches, for whoever is shown from behind now
+====================
+*/
+int CL_DemoBehindIn( int serverTime ) {
+	qboolean	shown, shownAfter;
+	int			time, behind;
+
+	if ( cl_demoOnly == DEMOONLY_ALL || cl_demoOnly == DEMOONLY_WATCHED || !clc.demoplaying || clc.state != CA_ACTIVE ) {
+		return -1;
+	}
+
+	time = serverTime - clc.demoStartTime;
+	behind = CL_DemoBehindAt( time, &shown );
+	if ( behind < 0 ) {
+		behind = CL_DemoBehindAt( time + CL_DemoSnapshotMsec() - 1, &shownAfter );
+		shown |= shownAfter;
+	}
+	if ( behind < 0 && !shown ) {
+		behind = cl_demoBehind->integer;
+	}
+	return behind;
+}
+
+/*
+====================
 CL_UpdateDemoShooter
 
 Added in OPM

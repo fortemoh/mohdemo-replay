@@ -2403,7 +2403,9 @@ class TestRecording(FakeGameCase):
         def setup(dialog):
             self.assertEqual(items(dialog.recorder_camera), ["In their eyes", "Behind them"])
             self.assertEqual(items(dialog.followed_camera), ["Behind them", "In their eyes", "As the server shows them"])
-            self.assertEqual((dialog.recorder_camera.currentData(), dialog.followed_camera.currentData()), ("eyes", "behind"))
+            self.assertEqual(items(dialog.unspecced_camera), ["Behind them", "In their eyes"])
+            self.assertEqual((dialog.recorder_camera.currentData(), dialog.followed_camera.currentData(),
+                              dialog.unspecced_camera.currentData()), ("eyes", "behind", "behind"))
             # someone's own in both
             self.assertEqual(items(dialog.followed_allies), ["As in the demo", "allied_pilot", "american_army", "own_skin"])
             self.assertEqual(items(dialog.followed_axis), ["As in the demo", "german_scientist", "it_soldier", "own_skin"])
@@ -2411,6 +2413,7 @@ class TestRecording(FakeGameCase):
             self.assertTrue(dialog.viewmodel.isChecked() and dialog.forcemodel.isChecked())
             dialog.recorder_camera.setCurrentIndex(1)
             dialog.followed_camera.setCurrentIndex(1)
+            dialog.unspecced_camera.setCurrentIndex(1)
             dialog.followed_axis.setCurrentText("german_scientist")
             dialog.viewmodel.setChecked(False)
             dialog.forcemodel.setChecked(False)
@@ -2420,11 +2423,11 @@ class TestRecording(FakeGameCase):
         self.record(window, setup)
         self.done(window)
         cvars = self.video("looks.mp4")["cvars"]
-        self.assertEqual([cvars[name] for name in ("cg_recordercamera", "cg_followcamera", "cg_followedGermanModel",
-                                                   "cg_drawviewmodel", "cg_forceModel")],
-                         ["1", "2", "german_scientist", "0", "0"])
+        self.assertEqual([cvars[name] for name in ("cg_recordercamera", "cg_followcamera", "cg_unspeccedcamera",
+                                                   "cg_followedGermanModel", "cg_drawviewmodel", "cg_forceModel")],
+                         ["1", "2", "2", "german_scientist", "0", "0"])
         self.assertNotIn("cg_followedModel", cvars)
-        self.assertEqual(mohreplay.cameras(self.settings), ["behind", "eyes"])
+        self.assertEqual(mohreplay.cameras(self.settings), ["behind", "eyes", "eyes"])
         self.assertEqual(mohreplay.followed_models(self.settings), ["", "german_scientist"])
 
         # kept; one of the other team or no more in the game files still shows
@@ -2434,7 +2437,8 @@ class TestRecording(FakeGameCase):
         with mock.patch.object(mohreplay.RecordDialog, "exec", lambda dialog: dialogs.append(dialog) or 0):
             window.record_button.click()
         dialog = dialogs[0]
-        self.assertEqual((dialog.recorder_camera.currentData(), dialog.followed_camera.currentData()), ("behind", "eyes"))
+        self.assertEqual((dialog.recorder_camera.currentData(), dialog.followed_camera.currentData(),
+                          dialog.unspecced_camera.currentData()), ("behind", "eyes", "eyes"))
         self.assertEqual((items(dialog.followed_allies)[-1], dialog.followed_allies.currentData()), ("my_own", "my_own"))
         self.assertEqual((items(dialog.followed_axis)[-1], dialog.followed_axis.currentData()), ("allied_pilot", "allied_pilot"))
         self.assertFalse(dialog.viewmodel.isChecked() or dialog.forcemodel.isChecked())
@@ -2445,24 +2449,30 @@ class TestRecording(FakeGameCase):
         self.playing(window)
         args = window.game.args
         self.assertEqual([args[args.index(name) + 1] for name in ("cg_recordercamera", "cg_followcamera",
-                                                                  "cg_drawviewmodel", "cg_forceModel", "cl_demoKillBefore")],
-                         ["1", "2", "0", "0", "2.0"])
+                                                                  "cg_unspeccedcamera", "cg_drawviewmodel", "cg_forceModel",
+                                                                  "cl_demoKillBefore")],
+                         ["1", "2", "2", "0", "0", "2.0"])
 
     def test_cameras_recorded(self):
         """A video has the cameras chosen when it was queued; by default, the
-        recorder in their eyes and the player followed behind them. The game
-        makes up a scope by itself, whatever a video queued before says."""
+        recorder in their eyes and the player followed and a player not shown
+        behind them, as in a video queued before the last had a choice. The
+        game makes up a scope by itself, whatever a video queued before says."""
         window = self.window()
         self.ready(window)
         with mock.patch.dict(os.environ, {"FAKEGAME_SPEED": "1"}):
             self.stretch(window, "1:00", "default")
             self.settings.setValue("camera_recorder", "behind")
             self.settings.setValue("camera_followed", "eyes")
+            self.settings.setValue("camera_unspecced", "eyes")
             self.stretch(window, "1:10", "chosen")
             self.settings.setValue("camera_followed", "server")
+            self.settings.setValue("camera_unspecced", "behind")
             self.done(window, 2)
         cvars = [self.video(name)["cvars"] for name in ("default.mp4", "chosen.mp4")]
-        self.assertEqual([(c["cg_recordercamera"], c["cg_followcamera"]) for c in cvars], [("0", "1"), ("1", "2")])
+        self.assertEqual([(c["cg_recordercamera"], c["cg_followcamera"], c["cg_unspeccedcamera"]) for c in cvars],
+                         [("0", "1", "1"), ("1", "2", "2")])
+        self.assertEqual(dict(mohreplay.camera_cvars(["behind", "eyes"]))["cg_unspeccedcamera"], "1")
         for c in cvars:
             self.assertNotIn("cg_demoscope", c)
 

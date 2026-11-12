@@ -201,25 +201,33 @@ def censored_words(settings):
     return " ".join(w for w in re.split(r"[\s,]+", settings.value("censor_words", CENSOR_WORDS) or "") if w)
 
 
-# where the camera is for a demo's recorder and for the player they follow:
-# {key: (label, cg_recordercamera or cg_followcamera)}, the first the default
+# where the camera is for a demo's recorder, for the player they follow and for
+# a player whose frags play while the demo doesn't show them (Unspecced frags):
+# {key: (label, cg_recordercamera, cg_followcamera or cg_unspeccedcamera)}, the
+# first the default
 RECORDER_CAMERAS = {"eyes": ("In their eyes", "0"), "behind": ("Behind them", "1")}
 FOLLOWED_CAMERAS = {"behind": ("Behind them", "1"), "eyes": ("In their eyes", "2"),
                     "server": ("As the server shows them", "0")}
+UNSPECCED_CAMERAS = {"behind": ("Behind them", "1"), "eyes": ("In their eyes", "2")}
 
 
 def cameras(settings):
-    """The cameras chosen, [recorder's, followed player's], keys of
-    RECORDER_CAMERAS and FOLLOWED_CAMERAS."""
+    """The cameras chosen, [recorder's, followed player's, unspecced player's],
+    keys of RECORDER_CAMERAS, FOLLOWED_CAMERAS and UNSPECCED_CAMERAS."""
     recorder = settings.value("camera_recorder", "eyes")
     followed = settings.value("camera_followed", "behind")
+    unspecced = settings.value("camera_unspecced", "behind")
     return [recorder if recorder in RECORDER_CAMERAS else "eyes",
-            followed if followed in FOLLOWED_CAMERAS else "behind"]
+            followed if followed in FOLLOWED_CAMERAS else "behind",
+            unspecced if unspecced in UNSPECCED_CAMERAS else "behind"]
 
 
 def camera_cvars(chosen):
-    """The game's settings for cameras chosen (cameras())."""
-    return [("cg_recordercamera", RECORDER_CAMERAS[chosen[0]][1]), ("cg_followcamera", FOLLOWED_CAMERAS[chosen[1]][1])]
+    """The game's settings for cameras chosen (cameras()); a video queued before
+    unspecced players had one has them behind."""
+    unspecced = chosen[2] if len(chosen) > 2 else "behind"
+    return [("cg_recordercamera", RECORDER_CAMERAS[chosen[0]][1]), ("cg_followcamera", FOLLOWED_CAMERAS[chosen[1]][1]),
+            ("cg_unspeccedcamera", UNSPECCED_CAMERAS[unspecced][1])]
 
 
 # how a player model's name tells its team, as the game goes by it
@@ -1246,7 +1254,8 @@ class Game:
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
     def start(self, exe, game, demos, width, height, extra=(), driver=None, viewmodel=None, forcemodel=None,
-              kill_before=None, kill_after=None, videos=None, followed=("", ""), censor="", camera=("eyes", "behind")):
+              kill_before=None, kill_after=None, videos=None, followed=("", ""), censor="",
+              camera=("eyes", "behind", "behind")):
         """videos: the folder its videos go to, instead of its home; followed:
         the models of the player followed when allies and axis, "" for
         theirs; censor: the words starred out (cl_censor); camera: the
@@ -2020,7 +2029,7 @@ def length(spans):
 
 
 def camera_menu(choices, chosen):
-    """A menu of cameras (RECORDER_CAMERAS or FOLLOWED_CAMERAS)."""
+    """A menu of cameras (RECORDER_CAMERAS, FOLLOWED_CAMERAS or UNSPECCED_CAMERAS)."""
     menu = QComboBox()
     for key, (label, _) in choices.items():
         menu.addItem(label, key)
@@ -2127,12 +2136,16 @@ class RecordDialog(QDialog):
         right = QVBoxLayout()
         right.setSpacing(4)
         right.addWidget(heading("How it looks"))
-        recorder, followed = cameras(settings)
+        recorder, followed, unspecced = cameras(settings)
         self.recorder_camera = camera_menu(RECORDER_CAMERAS, recorder)
         self.recorder_camera.setToolTip("In their eyes as recorded, or behind them as when following a player")
         self.followed_camera = camera_menu(FOLLOWED_CAMERAS, followed)
         self.followed_camera.setToolTip("Behind them, in their eyes (made from their gun and body, as their own view "
                                         "isn't recorded) or as the server showed them")
+        self.unspecced_camera = camera_menu(UNSPECCED_CAMERAS, unspecced)
+        self.unspecced_camera.setToolTip("For Unspecced frags: behind them, or in their eyes (made from their gun and "
+                                         "body; the demo doesn't say when a sniper had the scope on, so it's guessed "
+                                         "from how far the shot went)")
         models = player_models(settings.value("game", ""))
         allies, axis = followed_models(settings)
         self.followed_allies = model_menu(models, False, allies)
@@ -2141,6 +2154,7 @@ class RecordDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.addRow("Recorder's camera", self.recorder_camera)
         form.addRow("Followed player's camera", self.followed_camera)
+        form.addRow("Unspecced player's camera", self.unspecced_camera)
         form.addRow("Their skin as Allies", self.followed_allies)
         form.addRow("Their skin as Axis", self.followed_axis)
         right.addLayout(form)
@@ -2243,7 +2257,8 @@ class RecordDialog(QDialog):
                            ("forcemodel", "1" if self.forcemodel.isChecked() else "0")):
             self.settings.setValue("rec/" + key, value)
         for key, menu in (("camera_recorder", self.recorder_camera), ("camera_followed", self.followed_camera),
-                          ("followed_allies", self.followed_allies), ("followed_axis", self.followed_axis)):
+                          ("camera_unspecced", self.unspecced_camera), ("followed_allies", self.followed_allies),
+                          ("followed_axis", self.followed_axis)):
             self.settings.setValue(key, menu.currentData())
         if self.offers_join:
             self.settings.setValue("rec/join", "true" if self.join.isChecked() else "false")

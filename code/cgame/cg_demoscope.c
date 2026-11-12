@@ -29,7 +29,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //  moment before the shot (cg_demoscopetime) and just after, as a spectator
 //  following them sees it: the camera behind them zoomed in. Where they stand
 //  and how their aim moves come from their entity, where it ends up from the
-//  shot in the demo. A shot of theirs that kills nobody gets one too, if it
+//  shot in the demo. From their eyes (cg_unspeccedcamera 2), the scope is
+//  theirs. A shot of theirs that kills nobody gets one too, if it
 //  goes far enough: the client tells where from and to (cl_demoScopeShot).
 
 #include "cg_local.h"
@@ -81,12 +82,12 @@ static float CG_DemoScopeMiddle(const entityState_t *es)
 ===============
 CG_DemoScope
 
-The player a scope is made up for now, -1 for none
+The player a scope is made up for now, -1 for none, of client, who the demo
+shows from behind or from their eyes while it doesn't show them
 ===============
 */
-static int CG_DemoScope(void)
+static int CG_DemoScope(int client)
 {
-    int client = CG_DemoBehind();
     int kill, start, victim;
 
     if (client < 0 || !cg_demoscope->integer) {
@@ -207,22 +208,23 @@ static void CG_DemoScopeEye(const vec3_t origin, const vec3_t angles, float heig
 
 /*
 ===============
-CG_DemoScopeView
+CG_DemoScopeAim
 
-The view with a made up scope, if there's one: their aim, closing in on the
-victim until the kill (where the shot goes, for one that kills nobody) and
-off by the same after it, from behind them
+The aim with a made up scope of client, if there's one (scope.offset, added to
+the aim of their entity): closing in on the victim until the kill (where the
+shot goes, for one that kills nobody) and off by the same after it; and the
+zoom, as a spectator's goes
 ===============
 */
-qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
+static qboolean CG_DemoScopeAim(int client, float *fov)
 {
-    int        client = CG_DemoScope();
     int        victim = cl_demoScopeVictim->integer;
     int        start;
     centity_t *other;
     vec3_t     bodyOrigin, bodyAngles, eye, target, dir, aim;
     float      height, lean, frac;
 
+    client = CG_DemoScope(client);
     if (client < 0) {
         return qfalse;
     }
@@ -265,12 +267,63 @@ qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
         scope.offset[YAW]   = frac * AngleSubtract(aim[YAW], bodyAngles[YAW]);
     }
 
-    // as a spectator's: where their camera is, zooming as they do
-    CG_DemoBehindCamera(client, scope.offset, origin, angles);
     frac = (float)Q_min(cg.time - start, scope.kill + DEMO_SCOPE_AFTER - cg.time) / DEMO_SCOPE_ZOOM_TIME;
     frac = Q_clamp_float(frac, 0, 1);
     *fov = cg_fov->value + frac * (DEMO_SCOPE_FOV - cg_fov->value);
     return qtrue;
+}
+
+/*
+===============
+CG_DemoScopeView
+
+The view with a made up scope, if there's one, from behind the player shown
+there (CG_DemoBehind), as a spectator's: where their camera is, zooming as
+they do
+===============
+*/
+qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
+{
+    int client = CG_DemoBehind();
+
+    if (!CG_DemoScopeAim(client, fov)) {
+        return qfalse;
+    }
+    CG_DemoBehindCamera(client, scope.offset, origin, angles);
+    return qtrue;
+}
+
+/*
+===============
+CG_DemoScopeEyes
+
+The made up scope from the eyes of a player not shown (CG_UnspeccedEyes), set
+in the playerstate drawn: their aim closing in as from behind, and once
+zoomed in half way, their scope on, as a player's own is, with no gun nor
+crosshair
+===============
+*/
+void CG_DemoScopeEyes(void)
+{
+    int      client = CG_UnspeccedEyes();
+    float    fov;
+    qboolean zoomed = qfalse;
+
+    if (client < 0) {
+        return;
+    }
+
+    if (CG_DemoScopeAim(client, &fov)) {
+        cg.predicted_player_state.viewangles[PITCH] += scope.offset[PITCH];
+        cg.predicted_player_state.viewangles[YAW] += scope.offset[YAW];
+        zoomed = fov < (cg_fov->value + DEMO_SCOPE_FOV) / 2;
+    }
+
+    cg.snap->ps.stats[STAT_INZOOM]    = zoomed ? DEMO_SCOPE_FOV : 0;
+    cg.snap->ps.stats[STAT_CROSSHAIR] = zoomed ? 0 : CG_UnspeccedCrosshair();
+    cg.predicted_player_state.stats[STAT_INZOOM]    = cg.snap->ps.stats[STAT_INZOOM];
+    cg.predicted_player_state.stats[STAT_CROSSHAIR] = cg.snap->ps.stats[STAT_CROSSHAIR];
+    cg.camera_fov = zoomed ? DEMO_SCOPE_FOV : cg_fov->value;
 }
 
 /*

@@ -388,6 +388,7 @@ static snapshot_t *CG_ReadNextSnapshot(void)
             CG_FollowFromEyes(dest);
             CG_DemoHolsters(dest);
             CG_DemoGuns(dest);
+            CG_UnspeccedFromEyes(dest);
             CG_DemoShots(dest);
             return dest;
         }

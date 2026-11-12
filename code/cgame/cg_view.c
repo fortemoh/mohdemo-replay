@@ -855,14 +855,16 @@ CG_DemoBehind
 Added in OPM
   The player a demo shows from behind, -1 for none: the killer of a kill
   demoonly plays while they aren't the one shown (demofilter unshown,
-  cl_demoBehind), when their entity is in the snapshot
+  cl_demoBehind), when their entity is in the snapshot, unless they're seen
+  from their eyes (cg_unspeccedcamera 2, CG_UnspeccedEyes)
 ===============
 */
 int CG_DemoBehind(void)
 {
     int client = cl_demoBehind->integer;
 
-    if (!cg.demoPlayback || !cg.snap || client < 0 || client >= MAX_CLIENTS || !cg_entities[client].currentValid) {
+    if (!cg.demoPlayback || !cg.snap || client < 0 || client >= MAX_CLIENTS || !cg_entities[client].currentValid
+        || cg_unspeccedcamera->integer == 2) {
         return -1;
     }
     return client;
@@ -947,6 +949,19 @@ static float CG_DemoHeadTurn(const entityState_t *es)
         return 1;
     }
     return 0;
+}
+
+/*
+===============
+CG_DemoOnLadder
+
+Added in OPM
+  Whether a player's body is on a ladder, as CG_DemoHeadTurn tells it
+===============
+*/
+qboolean CG_DemoOnLadder(const entityState_t *es)
+{
+    return CG_DemoHeadTurn(es) == 2;
 }
 
 /*
@@ -1492,6 +1507,8 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
 
     // update cg.predicted_player_state
     CG_PredictPlayerState();
+    // Added in OPM
+    CG_DemoScopeEyes();
 
     // Added in OPM
     CG_UpdateFollowPlayer();
@@ -1637,6 +1654,15 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
         cgi.S_UpdateEntity(
             cg.snap->ps.clientNum, cg.predicted_player_state.origin, cg.predicted_player_state.velocity, qfalse
         );
+        cgi.S_Respatialize(ENTITYNUM_NONE, cg.SoundOrg, cg.SoundAxis);
+    } else if (CG_UnspeccedEyes() >= 0) {
+        // and from their eyes, as the client would take the recorder's sounds
+        // as one's own: theirs, their gun's, come from where they are
+        int    recorder;
+        vec3_t origin, velocity;
+
+        CG_UnspeccedRecorder(&recorder, origin, velocity);
+        cgi.S_UpdateEntity(recorder, origin, velocity, qfalse);
         cgi.S_Respatialize(ENTITYNUM_NONE, cg.SoundOrg, cg.SoundAxis);
     } else {
         cgi.S_Respatialize(cg.snap->ps.clientNum, cg.SoundOrg, cg.SoundAxis);

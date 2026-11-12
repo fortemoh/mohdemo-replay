@@ -66,6 +66,9 @@ extern "C" {
 
         // Added in OPM
         int vmAnimTime; // server time ps.iViewModelAnim began, from the snapshots before
+        // the player whose kill it's drawn for while the demo doesn't show them
+        // (cl_demoBehind), -1 for none
+        int demoBehind;
     } snapshot_t;
 
     typedef struct stopWatch_s {

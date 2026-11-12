@@ -536,6 +536,7 @@ extern "C" {
     extern cvar_t *cg_followcamera;
     extern cvar_t *cg_recordercamera;
     extern cvar_t *cl_demoBehind;
+    extern cvar_t *cg_unspeccedcamera;
     extern cvar_t *cg_demoguns;
     extern cvar_t *cg_demoscope;
     extern cvar_t *cg_demoscopedist;
@@ -641,6 +642,7 @@ extern "C" {
     qboolean CG_RecorderBehind(void);
     int      CG_DemoBehind(void);
     void     CG_DemoBehindState(const entityState_t *es, playerState_t *ps);
+    qboolean CG_DemoOnLadder(const entityState_t *es);
     void     CG_DemoBehindCamera(int client, const vec3_t offset, vec3_t origin, vec3_t angles);
 
     //
@@ -648,6 +650,7 @@ extern "C" {
     //
     // Added in OPM
     qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov);
+    void     CG_DemoScopeEyes(void);
     void     CG_DemoScopeShot(const vec3_t start, const vec3_t end);
     void     CG_CalcEntityLerpPositions(centity_t *cent);
 
@@ -657,7 +660,13 @@ extern "C" {
     // Added in OPM
     //  set on a snapshot made as if the player followed recorded it
 #define SNAPFLAG_FOLLOWED_FROM_EYES 0x100
+    //  and on one made from the eyes of a player the demo doesn't show
+#define SNAPFLAG_UNSPECCED_FROM_EYES 0x200
     void CG_FollowFromEyes(snapshot_t *snap);
+    void CG_UnspeccedFromEyes(snapshot_t *snap);
+    int  CG_UnspeccedEyes(void);
+    void CG_UnspeccedRecorder(int *client, vec3_t origin, vec3_t velocity);
+    int  CG_UnspeccedCrosshair(void);
     qboolean CG_FollowedGun(const entityState_t *es, const entityState_t *body);
     dtiki_t *CG_FollowedBodyTiki(const entityState_t *body);
     void CG_DemoHolsters(snapshot_t *snap);

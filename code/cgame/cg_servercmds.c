@@ -323,15 +323,16 @@ CG_DemoHidesYouKilled
 Added in OPM
   The "You killed <victim>" the server tells the killer only: not from behind
   the recorder (cg_recordercamera), nor from behind a player not shown
-  (CG_DemoBehind) as the recorder kills. A player followed from their eyes
-  gets theirs (CG_FollowedKill)
+  (CG_DemoBehind) or from their eyes (CG_UnspeccedEyes) as the recorder
+  kills. A player followed from their eyes, or not shown, gets theirs
+  (CG_FollowedKill)
 =================
 */
 static qboolean CG_DemoHidesYouKilled(const char *text)
 {
     static const char youKilled[] = HUD_MESSAGE_WHITE "You killed ";
 
-    return cg.demoPlayback && (CG_RecorderBehind() || CG_DemoBehind() >= 0)
+    return cg.demoPlayback && (CG_RecorderBehind() || CG_DemoBehind() >= 0 || CG_UnspeccedEyes() >= 0)
         && !strncmp(text, youKilled, sizeof(youKilled) - 1);
 }
 

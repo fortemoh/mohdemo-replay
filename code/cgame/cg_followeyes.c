@@ -29,6 +29,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //  they had recorded it, so that the first person view draws them as it
 //  draws a recorder: their arms and gun, firing, rechambering and
 //  reloading as their gun does, bobbing as they walk, and the scope.
+//  With cg_unspeccedcamera 2, a kill of a player it doesn't show
+//  (cl_demoBehind) is made from their eyes too, from their entity alone.
 
 #include "cg_local.h"
 
@@ -288,38 +290,41 @@ void CG_FollowedKill(const char *text)
 
 /*
 ===============
-CG_FollowFromEyes
+CG_SnapshotBody
 
-Makes snap as if the player it follows had recorded it, with cg_followcamera
-2 in a demo, when their entity is in it
+The entity of client in snap, NULL if it isn't in it
 ===============
 */
-void CG_FollowFromEyes(snapshot_t *snap)
+static entityState_t *CG_SnapshotBody(snapshot_t *snap, int client)
 {
-    playerState_t          *ps = &snap->ps;
-    entityState_t          *body = NULL;
-    const entityState_t    *gun  = NULL;
-    const followedWeapon_t *weapon;
-    int                     client, anim, vmAnim, item;
-    float                   time;
-    int                     i;
-
-    if (cg_followcamera->integer != 2 || !cg.demoPlayback || !(ps->pm_flags & PMF_CAMERA_VIEW)) {
-        return;
-    }
-    client = ps->stats[STAT_INFOCLIENT];
-    if (client < 0 || client >= MAX_CLIENTS) {
-        return;
-    }
+    int i;
 
     for (i = 0; i < snap->numEntities; i++) {
         if (snap->entities[i].number == client) {
-            body = &snap->entities[i];
+            return &snap->entities[i];
         }
     }
-    if (!body) {
-        return;
-    }
+    return NULL;
+}
+
+/*
+===============
+CG_FromEyes
+
+Makes snap as if client, whose body is body, had recorded it: their gun and
+what it does, their lean, crosshair and team. Where they are and look, their
+health and their zoom (STAT_INZOOM) are set before
+===============
+*/
+static void CG_FromEyes(snapshot_t *snap, int client, entityState_t *body)
+{
+    playerState_t          *ps  = &snap->ps;
+    const entityState_t    *gun = NULL;
+    const followedWeapon_t *weapon;
+    int                     anim, vmAnim, item;
+    float                   time;
+    int                     i;
+
     for (i = 0; i < snap->numEntities; i++) {
         if (CG_FollowedGun(&snap->entities[i], body)) {
             gun = &snap->entities[i];
@@ -343,12 +348,10 @@ void CG_FollowFromEyes(snapshot_t *snap)
     ps->groundEntityNum = body->groundEntityNum;
     ps->walking         = body->groundEntityNum != ENTITYNUM_NONE;
     // the pelvis (bone controller 3) rolls by 0.8 times the lean
-    ps->fLeanAngle               = AngleNormalize180(body->bone_angles[3][2]) / 0.8f;
-    ps->stats[STAT_HEALTH]       = (body->eFlags & EF_DEAD) ? 0 : ps->stats[STAT_INFOCLIENT_HEALTH];
-    ps->stats[STAT_INFOCLIENT]   = -1;
-    ps->stats[STAT_INZOOM]       = ps->fov <= 30 ? (int)ps->fov : 0;
+    ps->fLeanAngle             = AngleNormalize180(body->bone_angles[3][2]) / 0.8f;
+    ps->stats[STAT_INFOCLIENT] = -1;
     // as a server has it: with a gun in hand, so not dead, nor with the scope on
-    ps->stats[STAT_CROSSHAIR]    = !ps->stats[STAT_INZOOM] && !(body->eFlags & EF_DEAD);
+    ps->stats[STAT_CROSSHAIR]  = !ps->stats[STAT_INZOOM] && !(body->eFlags & EF_DEAD);
     if (body->eFlags & EF_AXIS) {
         ps->stats[STAT_TEAM] = TEAM_AXIS;
     } else if (body->eFlags & EF_ALLIES) {
@@ -411,4 +414,185 @@ void CG_FollowFromEyes(snapshot_t *snap)
     // for these
     snap->vmAnimTime = followed.vmAnimTime;
     snap->snapFlags |= SNAPFLAG_FOLLOWED_FROM_EYES;
+}
+
+/*
+===============
+CG_UnspeccedBody
+
+The body of the player snap is drawn for while the demo doesn't show them,
+with cg_unspeccedcamera 2, if it's in it
+===============
+*/
+static entityState_t *CG_UnspeccedBody(snapshot_t *snap)
+{
+    if (cg_unspeccedcamera->integer != 2 || !cg.demoPlayback || snap->demoBehind < 0
+        || snap->demoBehind >= MAX_CLIENTS) {
+        return NULL;
+    }
+    return CG_SnapshotBody(snap, snap->demoBehind);
+}
+
+/*
+===============
+CG_FollowFromEyes
+
+Makes snap as if the player it follows had recorded it, with cg_followcamera
+2 in a demo, when their entity is in it, unless it's drawn from the eyes of a
+player it doesn't show (CG_UnspeccedFromEyes)
+===============
+*/
+void CG_FollowFromEyes(snapshot_t *snap)
+{
+    playerState_t *ps = &snap->ps;
+    entityState_t *body;
+    int            client;
+
+    if (cg_followcamera->integer != 2 || !cg.demoPlayback || !(ps->pm_flags & PMF_CAMERA_VIEW)
+        || CG_UnspeccedBody(snap)) {
+        return;
+    }
+    client = ps->stats[STAT_INFOCLIENT];
+    if (client < 0 || client >= MAX_CLIENTS) {
+        return;
+    }
+
+    body = CG_SnapshotBody(snap, client);
+    if (!body) {
+        return;
+    }
+
+    // where they are, look, crouch and zoom are theirs
+    ps->stats[STAT_HEALTH] = (body->eFlags & EF_DEAD) ? 0 : ps->stats[STAT_INFOCLIENT_HEALTH];
+    ps->stats[STAT_INZOOM] = ps->fov <= 30 ? (int)ps->fov : 0;
+    CG_FromEyes(snap, client, body);
+}
+
+// for the snapshots drawn from the eyes of a player not shown, by slot of
+// cg.activeSnapshots: the recorder, and the crosshair without a scope
+static struct {
+    int    client;
+    vec3_t origin;
+    vec3_t velocity;
+    int    crosshair;
+} unspecced[2];
+
+/*
+===============
+CG_UnspeccedFromEyes
+
+Makes snap as if the player whose kill it's drawn for while the demo doesn't
+show them (its demoBehind) had recorded it, with cg_unspeccedcamera 2, when
+their body is in it, after their gun is put in it (CG_DemoGuns): from their
+eyes, where their body is and aims, as the camera behind them goes by
+(CG_DemoBehindState), and moving as it does. All the rooms are drawn: the
+recorder's say what they see. A demo holds nothing of their health or zoom:
+alive, they have 100, and the scope of a long sniper shot is made up as the
+view is drawn (CG_DemoScopeEyes)
+===============
+*/
+void CG_UnspeccedFromEyes(snapshot_t *snap)
+{
+    static vec3_t  lastOrigin[MAX_CLIENTS];
+    static int     lastTime[MAX_CLIENTS];
+    playerState_t *ps   = &snap->ps;
+    entityState_t *body = CG_UnspeccedBody(snap);
+    playerState_t  eyes;
+    int            client, slot, msec;
+
+    if (!body) {
+        return;
+    }
+    client = body->number;
+    slot   = snap == &cg.activeSnapshots[1];
+
+    // the recorder, heard where they are
+    unspecced[slot].client = ps->clientNum;
+    VectorCopy(ps->origin, unspecced[slot].origin);
+    VectorCopy(ps->velocity, unspecced[slot].velocity);
+
+    CG_DemoBehindState(body, &eyes);
+    VectorCopy(eyes.origin, ps->origin);
+    VectorCopy(eyes.viewangles, ps->viewangles);
+    ps->viewheight = eyes.viewheight;
+
+    // the velocity of their entity, which servers that smooth players send
+    // (g_smoothClients), or else how they moved since the snapshot before
+    VectorCopy(body->pos.trDelta, ps->velocity);
+    msec = snap->serverTime - lastTime[client];
+    if (VectorCompare(ps->velocity, vec3_origin) && lastTime[client] && msec > 0 && msec <= 200) {
+        VectorSubtract(body->origin, lastOrigin[client], ps->velocity);
+        VectorScale(ps->velocity, 1000.0f / msec, ps->velocity);
+    }
+    VectorCopy(body->origin, lastOrigin[client]);
+    lastTime[client] = snap->serverTime;
+
+    if (body->eFlags & EF_DEAD) {
+        ps->pm_type = PM_DEAD;
+    } else if (CG_DemoOnLadder(body)) {
+        // their eyes turn about their neck as on a ladder
+        ps->pm_type = PM_CLIMBWALL;
+    } else {
+        ps->pm_type = PM_NORMAL;
+    }
+    // the recorder's: crouched, hit, frozen or on a turret
+    ps->pm_flags &= ~(PMF_DUCKED | PMF_DAMAGE_ANGLES | PMF_FROZEN | PMF_NO_MOVE | PMF_VIEW_DUCK_RUN
+                      | PMF_VIEW_JUMP_START | PMF_TURRET);
+    ps->fov                   = cg_fov->value;
+    ps->stats[STAT_INZOOM]    = 0;
+    ps->stats[STAT_HEALTH]    = (body->eFlags & EF_DEAD) ? 0 : 100;
+    ps->stats[STAT_DAMAGEDIR] = 0;
+    VectorClear(ps->damage_angles);
+    ps->blend[3] = 0;
+    memset(snap->areamask, 0, sizeof(snap->areamask));
+
+    CG_FromEyes(snap, client, body);
+    unspecced[slot].crosshair = ps->stats[STAT_CROSSHAIR];
+    snap->snapFlags |= SNAPFLAG_UNSPECCED_FROM_EYES;
+}
+
+/*
+===============
+CG_UnspeccedEyes
+
+The player drawn from their eyes while the demo doesn't show them
+(CG_UnspeccedFromEyes), -1 for none
+===============
+*/
+int CG_UnspeccedEyes(void)
+{
+    if (!cg.snap || !(cg.snap->snapFlags & SNAPFLAG_UNSPECCED_FROM_EYES)) {
+        return -1;
+    }
+    return cg.snap->ps.clientNum;
+}
+
+/*
+===============
+CG_UnspeccedRecorder
+
+The recorder as cg.snap had them, before it was made from the eyes of a
+player not shown
+===============
+*/
+void CG_UnspeccedRecorder(int *client, vec3_t origin, vec3_t velocity)
+{
+    int slot = cg.snap == &cg.activeSnapshots[1];
+
+    *client = unspecced[slot].client;
+    VectorCopy(unspecced[slot].origin, origin);
+    VectorCopy(unspecced[slot].velocity, velocity);
+}
+
+/*
+===============
+CG_UnspeccedCrosshair
+
+Whether cg.snap, made from the eyes of a player not shown, has a crosshair
+without a scope
+===============
+*/
+int CG_UnspeccedCrosshair(void)
+{
+    return unspecced[cg.snap == &cg.activeSnapshots[1]].crosshair;
 }
