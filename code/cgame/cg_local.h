@@ -739,6 +739,16 @@ extern "C" {
         qboolean     cliptoentities,
         const char  *description
     );
+    void CG_SnapshotTrace(
+        trace_t          *result,
+        const snapshot_t *snap,
+        const vec3_t      start,
+        const vec3_t      mins,
+        const vec3_t      maxs,
+        const vec3_t      end,
+        int               skipNumber,
+        int               mask
+    );
     void CG_PredictPlayerState(void);
 
     //

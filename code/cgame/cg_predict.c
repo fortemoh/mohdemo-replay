@@ -187,6 +187,72 @@ void CG_ClipMoveToEntities(
     }
 }
 
+/*
+====================
+CG_SnapshotTrace
+
+Added in OPM
+  A trace through the world and the solid entities of snap, where they are in
+  it, as the server traced then: not where they're drawn this frame, which
+  cg_smoothClients moves ahead of them
+====================
+*/
+void CG_SnapshotTrace(
+    trace_t          *result,
+    const snapshot_t *snap,
+    const vec3_t      start,
+    const vec3_t      mins,
+    const vec3_t      maxs,
+    const vec3_t      end,
+    int               skipNumber,
+    int               mask
+)
+{
+    trace_t              t, trace;
+    const entityState_t *ent;
+    clipHandle_t         cmodel;
+    vec3_t               bmins, bmaxs, angles;
+    int                  i;
+
+    cgi.CM_BoxTrace(&t, start, end, mins, maxs, 0, mask, qfalse);
+    t.entityNum = t.fraction != 1.0 || t.startsolid ? ENTITYNUM_WORLD : ENTITYNUM_NONE;
+
+    for (i = 0; i < snap->numEntities; i++) {
+        ent = &snap->entities[i];
+        if (ent->number == skipNumber || !ent->solid || ent->eType == ET_ITEM || ent->eType == ET_PUSH_TRIGGER
+            || ent->eType == ET_TELEPORT_TRIGGER) {
+            continue;
+        }
+
+        if (ent->solid == SOLID_BMODEL) {
+            cmodel = cgi.CM_InlineModel(ent->modelindex);
+            if (!cmodel) {
+                continue;
+            }
+        } else {
+            IntegerToBoundingBox(ent->solid, bmins, bmaxs);
+            cmodel = cgi.CM_TempBoxModel(bmins, bmaxs, CONTENTS_BBOX);
+        }
+
+        if (ent->eFlags & EF_LINKANGLES) {
+            VectorCopy(ent->angles, angles);
+        } else {
+            VectorClear(angles);
+        }
+
+        cgi.CM_TransformedBoxTrace(&trace, start, end, mins, maxs, cmodel, mask, ent->origin, angles, qfalse);
+
+        if (trace.allsolid || trace.fraction < t.fraction) {
+            trace.entityNum = ent->number;
+            t               = trace;
+        } else if (trace.startsolid) {
+            t.startsolid = qtrue;
+        }
+    }
+
+    *result = t;
+}
+
 void CG_ShowTrace(trace_t *trace, int passent, const char *reason)
 {
     char text[1024];

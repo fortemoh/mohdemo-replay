@@ -689,11 +689,12 @@ Added in OPM
   their entity (their lean): 56 units behind their eyes and 24 above, moved
   aside when they lean, pulled in by walls and looking 2 degrees lower, as
   Player::GetSpectateFollowOrientation does with the default
-  g_spectatefollow_ values; client is theirs
+  g_spectatefollow_ values; client is theirs, and snap the snapshot of ps,
+  where the players and doors in the way are
 ===============
 */
 static void CG_StockFollowCameraAt(
-    const playerState_t *ps, const entityState_t *es, int client, vec3_t origin, vec3_t angles
+    const playerState_t *ps, const entityState_t *es, int client, const snapshot_t *snap, vec3_t origin, vec3_t angles
 )
 {
     static const vec3_t mins = {-2, -2, 2};
@@ -730,7 +731,7 @@ static void CG_StockFollowCameraAt(
     VectorCopy(ps->origin, start);
     start[2] += top - 2;
 
-    CG_Trace(&trace, start, mins, maxs, end, client, MASK_SHOT, qfalse, qtrue, "CG_StockFollowCameraAt");
+    CG_SnapshotTrace(&trace, snap, start, mins, maxs, end, client, MASK_SHOT);
 
     angles[PITCH] += 2 * trace.fraction;
     VectorCopy(trace.endpos, origin);
@@ -763,7 +764,12 @@ static void CG_StockFollowCamera(void)
     cent   = &cg_entities[client];
 
     CG_StockFollowCameraAt(
-        &cg.snap->ps, cent->currentValid ? &cent->currentState : NULL, client, cg.camera_origin, cg.camera_angles
+        &cg.snap->ps,
+        cent->currentValid ? &cent->currentState : NULL,
+        client,
+        cg.snap,
+        cg.camera_origin,
+        cg.camera_angles
     );
 
     // interpolate it like a camera from the server
@@ -780,6 +786,7 @@ static void CG_StockFollowCamera(void)
         next,
         cent->interpolate ? &cent->nextState : (cent->currentValid ? &cent->currentState : NULL),
         client,
+        cg.nextSnap,
         origin,
         angles
     );
@@ -828,12 +835,12 @@ static void CG_RecorderBehindCamera(const playerState_t *ps, vec3_t origin, vec3
     if (!cg_recordersmooth->integer || !cg.nextSnap || cg.nextSnap->serverTime <= cg.snap->serverTime
         || !cent->interpolate || cg.nextFrameCameraCut
         || (cg.nextSnap->ps.pm_flags & (PMF_SPECTATING | PMF_CAMERA_VIEW))) {
-        CG_StockFollowCameraAt(ps, &cent->currentState, ps->clientNum, origin, angles);
+        CG_StockFollowCameraAt(ps, &cent->currentState, ps->clientNum, cg.snap, origin, angles);
         return;
     }
 
-    CG_StockFollowCameraAt(&cg.snap->ps, &cent->currentState, ps->clientNum, origin, angles);
-    CG_StockFollowCameraAt(&cg.nextSnap->ps, &cent->nextState, ps->clientNum, nextOrigin, nextAngles);
+    CG_StockFollowCameraAt(&cg.snap->ps, &cent->currentState, ps->clientNum, cg.snap, origin, angles);
+    CG_StockFollowCameraAt(&cg.nextSnap->ps, &cent->nextState, ps->clientNum, cg.nextSnap, nextOrigin, nextAngles);
 
     for (i = 0; i < 3; i++) {
         origin[i] += cg.frameInterpolation * (nextOrigin[i] - origin[i]);
@@ -1014,7 +1021,7 @@ void CG_DemoBehindCamera(int client, const vec3_t offset, vec3_t origin, vec3_t 
 
     CG_DemoBehindState(&cent->currentState, &ps);
     VectorAdd(ps.viewangles, offset, ps.viewangles);
-    CG_StockFollowCameraAt(&ps, &cent->currentState, client, origin, angles);
+    CG_StockFollowCameraAt(&ps, &cent->currentState, client, cg.snap, origin, angles);
 
     if (!cent->interpolate) {
         return;
@@ -1022,7 +1029,7 @@ void CG_DemoBehindCamera(int client, const vec3_t offset, vec3_t origin, vec3_t 
 
     CG_DemoBehindState(&cent->nextState, &ps);
     VectorAdd(ps.viewangles, offset, ps.viewangles);
-    CG_StockFollowCameraAt(&ps, &cent->nextState, client, nextOrigin, nextAngles);
+    CG_StockFollowCameraAt(&ps, &cent->nextState, client, cg.nextSnap, nextOrigin, nextAngles);
 
     for (i = 0; i < 3; i++) {
         origin[i] += cg.frameInterpolation * (nextOrigin[i] - origin[i]);
