@@ -141,36 +141,68 @@ static int CG_DemoScope(int client)
 
 /*
 ===============
-CG_DemoScopeBody
+CG_DemoScopeBodyState
 
-Where a player stands and aims, from the snapshot to the next, as the camera
-behind them goes
+Where a player stands and aims in an entity of theirs, as the camera behind
+them goes, and their lean
 ===============
 */
-static void CG_DemoScopeBody(const centity_t *cent, vec3_t origin, vec3_t angles, float *height, float *lean)
+static void CG_DemoScopeBodyState(const entityState_t *es, playerState_t *ps)
 {
-    playerState_t ps;
-    float         frac = cg.frameInterpolation;
-    int           i;
+    CG_DemoBehindState(es, ps);
+    // the pelvis (bone controller 3) rolls by 0.8 times the lean
+    ps->fLeanAngle = AngleNormalize180(es->bone_angles[3][2]) / 0.8f;
+}
 
-    CG_DemoBehindState(&cent->currentState, &ps);
+/*
+===============
+CG_DemoScopeBody
+
+Where client stands and aims, from the snapshot to the next, as the camera
+behind them goes. From their eyes (CG_UnspeccedEyes), the snapshots' own: the
+view is theirs, and drawing it turns their entity's bones as it looks
+(PmoveAdjustAngleSettings_Client), each frame, while the snapshots were made
+from their body as the demo has it
+===============
+*/
+static void CG_DemoScopeBody(int client, vec3_t origin, vec3_t angles, float *height, float *lean)
+{
+    const centity_t *cent = &cg_entities[client];
+    playerState_t    ps, next;
+    float            frac = cg.frameInterpolation;
+    qboolean         interpolate;
+    int              i;
+
+    if (client == CG_UnspeccedEyes()) {
+        ps          = cg.snap->ps;
+        interpolate = cg.nextSnap && (cg.nextSnap->snapFlags & SNAPFLAG_UNSPECCED_FROM_EYES)
+                   && cg.nextSnap->ps.clientNum == client && cg.nextSnap->serverTime > cg.snap->serverTime;
+        if (interpolate) {
+            next = cg.nextSnap->ps;
+        }
+    } else {
+        CG_DemoScopeBodyState(&cent->currentState, &ps);
+        interpolate = cent->interpolate;
+        if (interpolate) {
+            CG_DemoScopeBodyState(&cent->nextState, &next);
+        }
+    }
+
     VectorCopy(ps.origin, origin);
     VectorCopy(ps.viewangles, angles);
     *height = ps.viewheight;
-    // the pelvis (bone controller 3) rolls by 0.8 times the lean
-    *lean = AngleNormalize180(cent->currentState.bone_angles[3][2]) / 0.8f;
+    *lean   = ps.fLeanAngle;
 
-    if (!cent->interpolate) {
+    if (!interpolate) {
         return;
     }
 
-    CG_DemoBehindState(&cent->nextState, &ps);
     for (i = 0; i < 3; i++) {
-        origin[i] += frac * (ps.origin[i] - origin[i]);
-        angles[i] = LerpAngle(angles[i], ps.viewangles[i], frac);
+        origin[i] += frac * (next.origin[i] - origin[i]);
+        angles[i] = LerpAngle(angles[i], next.viewangles[i], frac);
     }
-    *height += frac * (ps.viewheight - *height);
-    *lean += frac * (AngleNormalize180(cent->nextState.bone_angles[3][2]) / 0.8f - *lean);
+    *height += frac * (next.viewheight - *height);
+    *lean += frac * (next.fLeanAngle - *lean);
 }
 
 /*
@@ -233,7 +265,7 @@ static qboolean CG_DemoScopeAim(int client, float *fov)
 
     if (cg.time < scope.kill
         && (scope.missed || (victim >= 0 && victim < MAX_CLIENTS && cg_entities[victim].currentValid))) {
-        CG_DemoScopeBody(&cg_entities[client], bodyOrigin, bodyAngles, &height, &lean);
+        CG_DemoScopeBody(client, bodyOrigin, bodyAngles, &height, &lean);
 
         if (scope.missed) {
             // closing in on where the shot goes
