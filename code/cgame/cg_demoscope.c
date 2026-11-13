@@ -29,9 +29,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //  moment before the shot (cg_demoscopetime) and just after, as a spectator
 //  following them sees it: the camera behind them zoomed in. Where they stand
 //  and how their aim moves come from their entity, where it ends up from the
-//  shot in the demo. From their eyes (cg_unspeccedcamera 2), the scope is
-//  theirs. A shot of theirs that kills nobody gets one too, if it
-//  goes far enough: the client tells where from and to (cl_demoScopeShot).
+//  shot in the demo: where it passes through the victim, as the client's
+//  index has it before the demo plays (cl_demoScopeHit), on them as they
+//  move. From their eyes (cg_unspeccedcamera 2), the scope is theirs. A shot
+//  of theirs that kills nobody gets one too, if it goes far enough: the client
+//  tells where from and to (cl_demoScopeShot).
 
 #include "cg_local.h"
 
@@ -53,6 +55,7 @@ typedef struct {
     int      kill;     // its time, as the snapshots', 0 for none (or of a shot that kills nobody)
     qboolean decided;  // whether it has one is settled
     qboolean on;       // it has one
+    qboolean ahead;    // where the shot passes the victim is known from the start (cl_demoScopeHit)
     qboolean shot;     // the shot's line came
     int      shotTime; // the time drawn when it came
     vec3_t   hit;      // where it passes the victim, from their origin
@@ -116,6 +119,8 @@ static int CG_DemoScope(int client)
             float dist = Distance(cg_entities[client].currentState.origin, cg_entities[victim].currentState.origin);
 
             scope.on = dist >= cg_demoscopedist->value;
+            scope.ahead =
+                sscanf(cl_demoScopeHit->string, "%f %f %f", &scope.hit[0], &scope.hit[1], &scope.hit[2]) == 3;
             cgi.DPrintf("Scope for a sniper kill %.0f units away: %s\n", dist, scope.on ? "made up" : "none");
         } else if (victim < 0
                    && sscanf(
@@ -243,9 +248,11 @@ static void CG_DemoScopeEye(const vec3_t origin, const vec3_t angles, float heig
 CG_DemoScopeAim
 
 The aim with a made up scope of client, if there's one (scope.offset, added to
-the aim of their entity): closing in on the victim until the kill (where the
-shot goes, for one that kills nobody) and off by the same after it; and the
-zoom, as a spectator's goes
+the aim of their entity): closing in on the victim until the kill, where the
+shot passes through them (scope.hit), as they're drawn, or their middle until
+the shot's message tells it when the index doesn't have it (where the shot
+goes, for one that kills nobody), and off by the same after it; and the zoom,
+as a spectator's goes
 ===============
 */
 static qboolean CG_DemoScopeAim(int client, float *fov)
@@ -276,7 +283,9 @@ static qboolean CG_DemoScopeAim(int client, float *fov)
             // ahead of their entity
             CG_CalcEntityLerpPositions(other);
             VectorCopy(other->lerpOrigin, target);
-            if (scope.shot) {
+            if (scope.ahead) {
+                VectorAdd(target, scope.hit, target);
+            } else if (scope.shot) {
                 frac = (float)(cg.time - scope.shotTime) / DEMO_SCOPE_SHOT_AHEAD;
                 frac = Q_clamp_float(frac, 0, 1);
                 target[0] += frac * scope.hit[0];
@@ -362,7 +371,8 @@ void CG_DemoScopeEyes(void)
 ===============
 CG_DemoScopeShot
 
-A shot of the demo: the one of the kill tells where it hit
+A shot of the demo: the one of the kill tells where it hit, when the index
+didn't (scope.ahead)
 ===============
 */
 void CG_DemoScopeShot(const vec3_t start, const vec3_t end)
@@ -373,7 +383,7 @@ void CG_DemoScopeShot(const vec3_t start, const vec3_t end)
     float                along;
     int                  number, time, i;
 
-    if (!scope.on || scope.shot || scope.kill != cl_demoScopeKill->integer) {
+    if (!scope.on || scope.ahead || scope.shot || scope.kill != cl_demoScopeKill->integer) {
         return;
     }
 

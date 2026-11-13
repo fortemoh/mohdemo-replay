@@ -544,6 +544,7 @@ extern "C" {
     extern cvar_t *cl_demoScopeKill;
     extern cvar_t *cl_demoScopeVictim;
     extern cvar_t *cl_demoScopeShot;
+    extern cvar_t *cl_demoScopeHit;
     extern cvar_t *cg_recordersmooth;
     extern cvar_t *cg_demoholsters;
     extern cvar_t *cl_demoShooter;

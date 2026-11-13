@@ -134,6 +134,7 @@ cvar_t *cg_demoscopetime;
 cvar_t *cl_demoScopeKill;
 cvar_t *cl_demoScopeVictim;
 cvar_t *cl_demoScopeShot;
+cvar_t *cl_demoScopeHit;
 cvar_t *cg_recordersmooth;
 cvar_t *cg_demoholsters;
 cvar_t *cl_demoShooter;
@@ -262,6 +263,7 @@ void CG_RegisterCvars(void)
     cl_demoScopeKill   = cgi.Cvar_Get("cl_demoScopeKill", "0", CVAR_ROM);
     cl_demoScopeVictim = cgi.Cvar_Get("cl_demoScopeVictim", "-1", CVAR_ROM);
     cl_demoScopeShot   = cgi.Cvar_Get("cl_demoScopeShot", "", CVAR_ROM);
+    cl_demoScopeHit    = cgi.Cvar_Get("cl_demoScopeHit", "", CVAR_ROM);
     cg_recordersmooth = cgi.Cvar_Get("cg_recordersmooth", "1", 0);
     cg_demoholsters = cgi.Cvar_Get("cg_demoholsters", "0", 0);
     cl_demoShooter = cgi.Cvar_Get("cl_demoShooter", "-1", CVAR_ROM);

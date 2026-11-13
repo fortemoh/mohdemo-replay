@@ -1456,6 +1456,58 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
     return qtrue;
 }
 
+// how far from a player's origin, across and up, a shot passes through them
+#define DI_SHOT_HIT_ACROSS 32
+#define DI_SHOT_HIT_UP     112
+
+/*
+===============
+DI_ShotHit
+
+The player other than shooter that a shot from start to end passes through,
+-1 for none, and where it passes them (hit), from their origin, in the
+snapshot of the shot: the point of the line above their origin, nearest it
+across, up to its end, or a little past for one that stops in them. Dead
+ones too, as the one it kills is in it
+===============
+*/
+static int DI_ShotHit(diParser_t *p, int shooter, const vec3_t start, const vec3_t end, vec3_t hit)
+{
+    const entityState_t *ent;
+    vec3_t               dir, point;
+    float                flat, len, along, across;
+    float                best    = Square(DI_SHOT_HIT_ACROSS);
+    int                  victim  = -1;
+    int                  i;
+
+    VectorSubtract(end, start, dir);
+    flat = Square(dir[0]) + Square(dir[1]);
+    len  = VectorLength(dir);
+    if (flat < 1) {
+        return -1;
+    }
+
+    for (i = 0; i < p->snap.numEntities; i++) {
+        ent = &p->parseEntities[(p->snap.parseEntitiesNum + i) & (DI_PARSE_ENTITIES - 1)];
+        if (ent->number < 0 || ent->number >= MAX_CLIENTS || ent->number == shooter) {
+            continue;
+        }
+        along = ((ent->origin[0] - start[0]) * dir[0] + (ent->origin[1] - start[1]) * dir[1]) / flat;
+        if (along < 0 || along > 1 + DI_SHOT_HIT_ACROSS / len) {
+            continue;
+        }
+        VectorMA(start, along, dir, point);
+        across = Square(point[0] - ent->origin[0]) + Square(point[1] - ent->origin[1]);
+        if (across >= best || point[2] < ent->origin[2] - 16 || point[2] > ent->origin[2] + DI_SHOT_HIT_UP) {
+            continue;
+        }
+        best   = across;
+        victim = ent->number;
+        VectorSubtract(point, ent->origin, hit);
+    }
+    return victim;
+}
+
 /*
 ===============
 DI_AddShot
@@ -1514,6 +1566,8 @@ static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end, qboo
     shot->scoped = canScope && i < p->snap.numEntities;
     VectorCopy(start, shot->start);
     VectorCopy(end, shot->end);
+    VectorClear(shot->hit);
+    shot->hitClient = DI_ShotHit(p, shooter, start, end, shot->hit);
 }
 
 /*

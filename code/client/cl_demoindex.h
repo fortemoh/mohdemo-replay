@@ -112,6 +112,10 @@ typedef struct {
     qboolean scoped; // from a rifle with a scope
     vec3_t   start;  // their eyes
     vec3_t   end;    // where it hit
+    // the player it passes through, -1 for none, and where it passes them,
+    // from their origin, in the snapshot of the shot
+    int      hitClient;
+    vec3_t   hit;
 } demoShot_t;
 
 typedef struct {

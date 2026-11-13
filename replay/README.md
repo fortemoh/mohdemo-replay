@@ -261,7 +261,9 @@ had one, from `cg_demoscopetime` msec (400) before the shot until just after it,
 as a spectator following them sees it: the camera behind them zoomed in. So
 are their shots of a rifle with a scope that kill nobody and go as far, to
 where they hit. Where they stand, how their aim moves and where the shot lands
-are the demo's. `cg_demoscope 0` turns it off.
+are the demo's: the aim closes in on the spot of the victim the shot went
+through, their head for a headshot, as they move. `cg_demoscope 0` turns it
+off.
 
 `cg_unspeccedcamera 2` (1, the default, is from behind) shows those kills from
 the killer's own eyes, as `cg_followcamera 2` does for a player followed, but
