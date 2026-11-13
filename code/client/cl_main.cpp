@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../server/server.h"
 #include "cl_ui.h"
 #include "cl_demoindex.h"
+#include "cl_demohud.h"
 #include "../corepp/tiki.h"
 #include "../qcommon/cm_terrain.h"
 #include "../qcommon/localization.h"
@@ -698,6 +699,10 @@ static void CL_PlayDemo( const char *demoName ) {
 	// copied as disconnecting may overwrite it
 	Q_strncpyz( arg, demoName, sizeof( arg ) );
 
+	// Added in OPM
+	//  what's worked out of its players goes from its start
+	CL_DemoHudClear();
+
 	// make sure a local server is killed
 	// 2 means don't force disconnect of local client
 	Cvar_Set( "sv_killserver", "2" );
@@ -1040,6 +1045,10 @@ Reads the whole demo once to list its kills, round ends, levels and who is
 watched, for the commands that go through them and the app
 ====================
 */
+const demoIndex_t *CL_DemoIndex( void ) {
+	return clc.demoplaying ? &cl_demoIndex : NULL;
+}
+
 static void CL_IndexDemo( void ) {
 	char			path[MAX_OSPATH];
 	char			*json;
@@ -1925,13 +1934,14 @@ CL_DemoHidesHealth
 Added in OPM
 Whether the HUD leaves out the health: in a demo, seen as a spectator sees
 someone, from behind or as the server shows them. Seen from their own eyes,
-the recorder playing or a player followed (cg_followcamera 2), it stays.
+the recorder playing, a player followed (cg_followcamera 2) or one the demo
+doesn't show (cg_unspeccedcamera 2, as worked out: cl_demohud.cpp), it stays.
 ====================
 */
 qboolean CL_DemoHidesHealth( void ) {
 	const playerState_t	*ps = &cl.snap.ps;
 
-	if ( !clc.demoplaying ) {
+	if ( !clc.demoplaying || CL_DemoUnspeccedFromEyes() ) {
 		return qfalse;
 	}
 	return CL_DemoShownFromBehind( ps )
@@ -1945,8 +1955,9 @@ CL_DemoSpectatorHud
 Added in OPM
 What the HUD, drawn from cl.snap (the snapshots kept stay as they came), has
 for a spectator following someone, while a demo shows them from behind: no
-weapons, ammo, crosshair or scope, and no red flash, but the one of their own
-hits from their eyes (CL_DemoUnspeccedFromEyes)
+weapons, ammo, crosshair or scope, and no red flash. From the eyes of a player
+it doesn't show (CL_DemoUnspeccedFromEyes), what's worked out of them goes
+back on: their hits, health, gun and ammo (CL_DemoShowFollowed)
 ====================
 */
 void CL_DemoSpectatorHud( void ) {
@@ -1971,7 +1982,9 @@ void CL_DemoSpectatorHud( void ) {
 	for ( i = 0; i < MAX_AMMOCOUNT; i++ ) {
 		ps->ammo_amount[i] = 0;
 	}
-	if ( !CL_DemoUnspeccedFromEyes() ) {
+	if ( CL_DemoUnspeccedFromEyes() ) {
+		CL_DemoShowFollowed( ps, cl.snap.messageNum );
+	} else {
 		ps->blend[3] = 0;
 	}
 }

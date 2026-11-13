@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "client.h"
 #include "cl_ui.h"
 #include "cl_demohits.h"
+#include "cl_demohud.h"
 #include "../qcommon/bg_compat.h"
 
 const char *svc_strings[256] = {
@@ -284,10 +285,13 @@ fall's.
 typedef struct {
 	int		messageNum;
 	qboolean	followed;
+	qboolean	unspecced;
 	int		health;
 	int		dir;
 	float	alpha;
 	vec3_t	angles;
+	// their ammo, and an unspecced player's health, as worked out
+	demoHudState_t	hud;
 } demoFollowedHits_t;
 
 #define MAX_DEMO_HIT_SOURCES 64
@@ -373,6 +377,12 @@ static void CL_DemoFollowedHitsKeep( demoFollowedHits_t *hits ) {
 	hits->dir = cl_demoHits.dir;
 	hits->alpha = cl_demoHits.feedback.alpha;
 	DemoHits_ViewAngles( &cl_demoHits.feedback, hits->angles );
+	// what the HUD has of them (cl_demohud.cpp): an unspecced player's health
+	// too, a followed player's being in the demo
+	CL_DemoHudState( cl_demoHits.client, &hits->hud );
+	if ( hits->unspecced ) {
+		hits->health = hits->hud.health;
+	}
 }
 
 static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
@@ -389,6 +399,7 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	}
 	hits->messageNum = snap->messageNum;
 	hits->followed = qfalse;
+	hits->unspecced = qfalse;
 	cl_demoNumHitSources = 0;
 	cl_demoNumHitFlesh = 0;
 	cl_demoHits.damage = 0;
@@ -455,8 +466,8 @@ static void CL_DemoFollowedHits( const clSnapshot_t *snap ) {
 	cl_demoHits.serverTime = snap->serverTime;
 
 	hits->followed = qtrue;
-	// not theirs when not shown, which the HUD leaves out
-	hits->health = unspecced ? -1 : health;
+	hits->unspecced = unspecced;
+	hits->health = health;
 	CL_DemoFollowedHitsKeep( hits );
 }
 
@@ -483,6 +494,59 @@ Whether the last snapshot shows a player the demo doesn't show from their eyes
 */
 qboolean CL_DemoUnspeccedFromEyes( void ) {
 	return cl_demoHits.client >= 0 && cl_demoHits.unspecced;
+}
+
+/*
+================
+CL_DemoBloodDamage
+
+Added in OPM
+How much a hit took of a player whose origin is origin, as much as the blood
+on them tells
+================
+*/
+static int CL_DemoBloodDamage( const vec3_t origin ) {
+	int damage = 0, i;
+
+	for ( i = 0; i < cl_demoNumHitFlesh; i++ ) {
+		const demoHitFlesh_t *flesh = &cl_demoHitFlesh[i];
+
+		if ( fabs( flesh->pos[0] - origin[0] ) <= DEMO_HIT_BLOOD_SIDE && fabs( flesh->pos[1] - origin[1] ) <= DEMO_HIT_BLOOD_SIDE
+			&& flesh->pos[2] - origin[2] >= DEMO_HIT_BLOOD_BOTTOM && flesh->pos[2] - origin[2] <= DEMO_HIT_BLOOD_TOP ) {
+			damage += flesh->large ? DEMO_HIT_LARGE : DEMO_HIT_SMALL;
+		}
+	}
+	return damage ? damage : DEMO_HIT_BLOODLESS;
+}
+
+/*
+================
+CL_DemoHudEnd
+
+Added in OPM
+The end of a message: the hits of all players in its snapshot, for what the
+HUD has of them (cl_demohud.cpp), as for the one seen from their eyes
+================
+*/
+static void CL_DemoHudEnd( void ) {
+	int					clients[MAX_CLIENTS];
+	vec3_t				origins[MAX_CLIENTS];
+	demoFollowedHits_t	*hits;
+	int					n, i;
+
+	if ( !clc.demoplaying || !cl.snap.valid ) {
+		return;
+	}
+	n = CL_DemoHudPained( clients, origins );
+	for ( i = 0; i < n; i++ ) {
+		CL_DemoHudHit( clients[i], CL_DemoBloodDamage( origins[i] ) );
+	}
+
+	hits = &cl_demoFollowedHits[cl.snap.messageNum & PACKET_MASK];
+	if ( n && hits->messageNum == cl.snap.messageNum && hits->followed ) {
+		CL_DemoFollowedHitsKeep( hits );
+		CL_DemoShowFollowed( &cl.snap.ps, cl.snap.messageNum );
+	}
 }
 
 /*
@@ -516,19 +580,7 @@ static void CL_DemoFollowedHitsEnd( void ) {
 		VectorCopy( body->netorigin, origin );
 		yaw = body->netangles[YAW];
 
-		// as much as the blood on them tells
-		cl_demoHits.damage = 0;
-		for ( i = 0; i < cl_demoNumHitFlesh; i++ ) {
-			const demoHitFlesh_t *flesh = &cl_demoHitFlesh[i];
-
-			if ( fabs( flesh->pos[0] - origin[0] ) <= DEMO_HIT_BLOOD_SIDE && fabs( flesh->pos[1] - origin[1] ) <= DEMO_HIT_BLOOD_SIDE
-				&& flesh->pos[2] - origin[2] >= DEMO_HIT_BLOOD_BOTTOM && flesh->pos[2] - origin[2] <= DEMO_HIT_BLOOD_TOP ) {
-				cl_demoHits.damage += flesh->large ? DEMO_HIT_LARGE : DEMO_HIT_SMALL;
-			}
-		}
-		if ( !cl_demoHits.damage ) {
-			cl_demoHits.damage = DEMO_HIT_BLOODLESS;
-		}
+		cl_demoHits.damage = CL_DemoBloodDamage( origin );
 	}
 
 	for ( i = 0; i < cl.snap.numEntities; i++ ) {
@@ -574,12 +626,23 @@ void CL_DemoShowFollowed( playerState_t *ps, int messageNum ) {
 	if ( hits->health >= 0 ) {
 		ps->stats[STAT_HEALTH] = hits->health;
 	}
+	if ( hits->unspecced ) {
+		ps->stats[STAT_MAXHEALTH] = 100;
+	}
+	// their gun and ammo, as worked out (cl_demohud.cpp)
+	if ( hits->hud.weaponItem >= 0 ) {
+		ps->activeItems[ITEM_WEAPON] = hits->hud.weaponItem;
+		ps->stats[STAT_CLIPAMMO] = hits->hud.clip;
+		ps->stats[STAT_MAXCLIPAMMO] = hits->hud.clipSize;
+		ps->stats[STAT_AMMO] = hits->hud.ammo;
+		ps->stats[STAT_MAXAMMO] = hits->hud.maxAmmo;
+	}
 	VectorCopy( hits->angles, ps->damage_angles );
 	if ( hits->alpha > 0 ) {
 		ps->blend[0] = 1;
 		ps->blend[1] = ps->blend[2] = 0;
 		ps->blend[3] = hits->alpha;
-	} else if ( hits->health < 0 ) {
+	} else if ( hits->unspecced ) {
 		// not the recorder's
 		ps->blend[3] = 0;
 	}
@@ -715,6 +778,9 @@ void CL_ParseSnapshot( msg_t *msg ) {
 
 	// Added in OPM
 	newSnap.demoBehind = CL_DemoBehindIn( newSnap.serverTime );
+	if ( clc.demoplaying ) {
+		CL_DemoHudSnapshot( &newSnap );
+	}
 	CL_DemoFollowedHits( &newSnap );
 
 	// copy to the current good spot
@@ -926,6 +992,9 @@ void CL_ParseGamestate( msg_t *msg ) {
 	if (cls.cgameStarted) {
 		CL_FlushMemory();
 	}
+
+	// Added in OPM
+	CL_DemoHudModelsChanged();
 
 	// wipe local client state
 	// Changed in OPM
@@ -1564,4 +1633,5 @@ void CL_ParseServerMessage( msg_t *msg ) {
 
 	// Added in OPM
 	CL_DemoFollowedHitsEnd();
+	CL_DemoHudEnd();
 }

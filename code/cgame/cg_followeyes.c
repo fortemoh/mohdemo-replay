@@ -486,10 +486,11 @@ show them (its demoBehind) had recorded it, with cg_unspeccedcamera 2, when
 their body is in it, after their gun is put in it (CG_DemoGuns): from their
 eyes, where their body is and aims, as the camera behind them goes by
 (CG_DemoBehindState), and moving as it does. All the rooms are drawn: the
-recorder's say what they see. A demo holds nothing of their health or zoom:
-alive, they have 100, their hits are made up by the client from the pain and
-blood the server sends (CL_DemoFollowedHits), and the scope of a long sniper
-shot as the view is drawn (CG_DemoScopeEyes)
+recorder's say what they see. A demo holds nothing of their health, ammo or
+zoom: alive, they have 100 here, their hits are made up by the client from the
+pain and blood the server sends (CL_DemoFollowedHits), the HUD's health and
+ammo worked out by it from all it has of them (cl_demohud.cpp), and the scope
+of a long sniper shot as the view is drawn (CG_DemoScopeEyes)
 ===============
 */
 void CG_UnspeccedFromEyes(snapshot_t *snap)

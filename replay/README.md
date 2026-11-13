@@ -232,9 +232,10 @@ servers do; `cg_followcamera 0` shows it as recorded; `cg_followcamera 2`
 shows them from their own eyes, as if they had recorded the demo: where
 they are, look, crouch and zoom are theirs in the demo, and their arms and
 gun are drawn from the gun in their hand, firing, rechambering and
-reloading as it does, with their lean from their body (their ammo isn't in
-the demo), and their frags show "You killed <victim>", which the server told
-only them. The HUD shows their health, which the spectator views don't, and
+reloading as it does, with their lean from their body, and their frags show
+"You killed <victim>", which the server told only them. The HUD shows their
+health, which the spectator views don't, and their ammo, which the demo
+doesn't have: it's worked out as for a player it doesn't show (below), and
 their hits kick their view, flash
 the screen red and mark the compass as they did for them, made again from
 their health dropping (the demo doesn't have them for a player followed) and
@@ -250,7 +251,8 @@ the camera following a player is, as a spectator following them sees them:
 without their scope, crosshair, weapons, ammo, health or hits on the screen.
 Both have the name of who is shown on the left, as a spectator has. Record
 chooses both, for videos too. Health only shows from someone's own eyes: the
-recorder playing, or a player followed with `cg_followcamera 2`.
+recorder playing, a player followed with `cg_followcamera 2`, or one the demo
+doesn't show with `cg_unspeccedcamera 2`.
 
 A demo doesn't tell whether a player it shows from behind while they aren't the
 one shown (`demofilter unshown`) has a scope on. So one is made up for their
@@ -270,13 +272,28 @@ rechambering and reloading as it does, bobbing as they move, and "You killed
 the server's, to the unit, and their aim within a quarter of a degree; in
 between, it's smoothed as for a player followed, so a flick between two
 snapshots is a straight sweep. All the level's rooms are drawn, as the
-recorder's say what the recorder could see. The demo has neither their health
-nor their scope: the HUD has no health, and the scope made up for a long sniper
-shot is theirs, with its sight and no gun or crosshair, from once it's half way
-zoomed in. Their hits kick their view, flash the screen red and mark the
-compass as a player followed's do: the server plays their pain for each hit
-they live through, and how hard it was is told by the blood on them, about 23
-for a small bullet's and 76 for a rifle's (10 without blood, as for a fall).
+recorder's say what the recorder could see. The demo doesn't have their scope:
+the one made up for a long sniper shot is theirs, with its sight and no gun or
+crosshair, from once it's half way zoomed in. Their hits kick their view, flash
+the screen red and mark the compass as a player followed's do: the server plays
+their pain for each hit they live through, and how hard it was is told by the
+blood on them, about 23 for a small bullet's and 76 for a rifle's (10 without
+blood, as for a fall).
+
+Nor does the demo have their health or ammo, so the HUD shows them as the
+client works them out, from all it has of each player from the demo's start
+(a seek reads it all too): each life starts with 100 health and the ammo a
+deathmatch server gives (what the recorder got, for a gun they had too); a hit
+takes what it did from their eyes, and when the recorder follows them or looks
+at a team mate the demo has their health; each shot their gun fires takes a
+round, a reload fills the clip at the frame of their reload a server does it
+at, and a health box or a dropped gun gone from beside them is theirs if they
+could take it. Checked against the recorder's own, the clip is right 94 to 99%
+of the time and within a round nearly always, the rest of the ammo right 93 to
+99%, and the health about four times in five. What the demo doesn't show of a
+player, out of the recorder's sight, is missed, so it's a guess for a player
+seen only now and then; for players the recorder starts following, the health
+worked out was within 10 nine times in ten.
 The recorder's sounds come from where they are, and the recorder's own hit and
 kill sounds aren't played.
 
