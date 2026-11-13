@@ -586,7 +586,7 @@ static void CL_DemoFollowedHitsEnd( void ) {
 	for ( i = 0; i < cl.snap.numEntities; i++ ) {
 		const entityState_t *ent = &cl.parseEntities[( cl.snap.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 )];
 
-		if ( ent->number < MAX_CLIENTS && ent->number != cl_demoHits.client ) {
+		if ( ent->number < MAX_CLIENTS && ent->number != cl_demoHits.client && numOthers < MAX_CLIENTS ) {
 			VectorCopy( ent->netorigin, others[numOthers].origin );
 			others[numOthers].yaw = ent->netangles[YAW];
 			numOthers++;

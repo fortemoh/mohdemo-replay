@@ -469,6 +469,10 @@ static void CL_DemoHudGunSeen(demoHudPlayer_t *p, const entityState_t *gun, int 
     float            time;
     qboolean         again;
 
+    if (weapon < 0 || weapon >= DEMO_HUD_WEAPONS) {
+        return;
+    }
+
     CL_DemoHudGive(p, weapon);
     kind = CL_DemoHudGunAnim(gun, &anim, &time);
 
@@ -787,6 +791,7 @@ void CL_DemoHudSnapshot(const clSnapshot_t *snap)
     const entityState_t *bodies[MAX_CLIENTS];
     const entityState_t *guns[MAX_CLIENTS];
     qboolean             twoGuns[MAX_CLIENTS];
+    qboolean             seen[MAX_CLIENTS];
     int                  numBodies = 0;
     int                  i, j, weapon, health;
     dtiki_t             *tiki;
@@ -828,12 +833,19 @@ void CL_DemoHudSnapshot(const clSnapshot_t *snap)
     for (i = 0; i < MAX_CLIENTS; i++) {
         guns[i]    = NULL;
         twoGuns[i] = qfalse;
+        seen[i]    = qfalse;
     }
     for (i = 0; i < snap->numEntities; i++) {
         const entityState_t *ent = &cl.parseEntities[(snap->parseEntitiesNum + i) & (MAX_PARSE_ENTITIES - 1)];
 
-        if (ent->number < MAX_CLIENTS) {
-            bodies[numBodies++] = ent;
+        if (ent->number >= 0 && ent->number < MAX_CLIENTS) {
+            // once each, and only with a body: right after a demo begins
+            // again, a snapshot read from frames kept from before can have
+            // blank entities, all numbered 0
+            if (ent->modelindex && !seen[ent->number]) {
+                seen[ent->number]   = qtrue;
+                bodies[numBodies++] = ent;
+            }
             continue;
         }
         if (ent->parent < 0 || ent->parent >= MAX_CLIENTS) {
