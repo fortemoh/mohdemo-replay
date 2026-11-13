@@ -545,7 +545,7 @@ extern "C" {
     extern cvar_t *cl_demoScopeVictim;
     extern cvar_t *cl_demoScopeShot;
     extern cvar_t *cl_demoScopeHit;
-    extern cvar_t *cg_unspeccedaim;
+    extern cvar_t *cg_demoaim;
     extern cvar_t *cg_recordersmooth;
     extern cvar_t *cg_demoholsters;
     extern cvar_t *cl_demoShooter;
@@ -660,7 +660,8 @@ extern "C" {
     // cg_demoaim.c
     //
     // Added in OPM
-    qboolean CG_DemoAimEyes(void);
+    void     CG_DemoAimView(void);
+    qboolean CG_DemoAimed(void);
     void     CG_DemoAimEye(void);
     void     CG_CalcEntityLerpPositions(centity_t *cent);
 

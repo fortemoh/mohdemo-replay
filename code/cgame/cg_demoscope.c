@@ -339,7 +339,7 @@ qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov)
 CG_DemoScopeEyes
 
 The made up scope from the eyes of a player not shown (CG_UnspeccedEyes), set
-in the playerstate drawn: their aim as their crosshair was (CG_DemoAimEyes),
+in the playerstate drawn: their aim as their crosshair was (CG_DemoAimView),
 or else closing in as from behind, and once zoomed in half way, their scope
 on, as a player's own is, with no gun nor crosshair
 ===============
@@ -355,7 +355,7 @@ void CG_DemoScopeEyes(void)
     }
 
     // their crosshair as it was, when that can be told, aims the scope
-    aimed = CG_DemoAimEyes();
+    aimed = CG_DemoAimed();
     if (CG_DemoScopeAim(client, &fov)) {
         if (!aimed) {
             cg.predicted_player_state.viewangles[PITCH] += scope.offset[PITCH];

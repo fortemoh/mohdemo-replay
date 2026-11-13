@@ -117,10 +117,12 @@ typedef struct {
     int      hitClient;
     vec3_t   hit;
     vec3_t   point;
-    // the shooter's aim (pitch, yaw) as their entity has it, as cgame's
-    // camera behind them takes it (CG_DemoBehindState), in the snapshot before
-    // the shot's, the shot's and the one after, and their times, as time's, 0
-    // for one they aren't in; and their speed across in the shot's
+    // the shooter's aim (pitch, yaw) in the snapshot before the shot's, the
+    // shot's and the one after: the view of the snapshot when it's theirs (the
+    // recorder's, or the player they follow), else as their entity has it, as
+    // cgame's camera behind them takes it (CG_DemoBehindState); and their
+    // times, as time's, 0 for one they aren't in; and their speed across in
+    // the shot's
     int      aimTimes[3];
     float    aims[3][2];
     float    speed;

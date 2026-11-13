@@ -21,12 +21,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 // cg_demoaim.c -- Added in OPM
-//  Where the crosshair of a player a demo doesn't show was, drawn from their
-//  eyes (cg_unspeccedcamera 2, cg_unspeccedaim 1). Their screen showed their
-//  aim, as their entity has it 20 times a second, plus the kick their own
-//  game added after each shot, which no demo has; each shot of theirs went
-//  along that, give or take its weapon's scatter. So, around their shots, as
-//  the client's index of the demo has them (cgi.DemoShots):
+//  Where a player's crosshair was, drawn from their eyes in a demo
+//  (cg_demoaim 1): the recorder playing, a player followed (cg_followcamera
+//  2) or one the demo doesn't show (cg_unspeccedcamera 2). Their screen
+//  showed their aim, as the demo has it 20 times a second (their view for
+//  the first two, their entity for the last), plus the kick their own game
+//  added after each shot, which no demo has; each shot of theirs went along
+//  that, give or take its weapon's scatter. So, around their shots, as the
+//  client's index of the demo has them (cgi.DemoShots):
 //  - a shot is drawn as the snapshot before its own comes, the one its
 //    message comes with (its tracer a frame before), while it was fired with
 //    the aim of its own: of 450 first shots of sniper rifles, half are 0.23
@@ -42,11 +44,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //    move), is added from shot to shot: all of it for a sniper rifle's or a
 //    Kar98's while still, what goes beyond its scatter for the others, as the
 //    crosshair is where they aimed, not where each bullet flew
-//  At the frame its gun fires, in 26 kills of 24 demos, half of the shots of
-//  each weapon are now that close to where they went (before): sniper rifles
-//  0.00 deg (0.00, with the scope made up), other rifles 0.42 (2.16), the StG
-//  44 and the BAR 0.63 (0.86), submachine guns 1.37 (2.54), pistols 1.81
-//  (4.40)
+//  At the frame its gun fires, half of the shots of each weapon are now that
+//  close to where they went (before), in 26 kills of players not shown, then
+//  35 of the recorder and players followed, half each: sniper rifles 0.00 deg
+//  (0.00 with the scope made up), 0.00 (0.09), 0.03 (0.91); other rifles 0.42
+//  (2.16), 0.16 (1.20), 0.13 (0.74); the StG 44 and the BAR 0.63 (0.86), 0.87
+//  (2.11), 0.68 (1.33); submachine guns 1.37 (2.54), 1.34 (2.90), 1.49
+//  (4.33); pistols 1.81 (4.40), 2.07 (4.46), 1.45 (3.70)
 
 #include "cg_local.h"
 
@@ -124,8 +128,9 @@ static struct {
     int            client;
     int            numShots;
     demoShotInfo_t shots[DEMO_AIM_MAX_SHOTS];
-    // where the camera was the frame before, of client, and when
+    // where the camera was the frame before, of whom, and when
     vec3_t         eye;
+    int            eyeClient;
     int            eyeTime;
 } aim = {-1};
 
@@ -133,16 +138,17 @@ static struct {
 ===============
 CG_DemoAimWeapon
 
-The weapon of the gun in the hand of the player whose body is body
+The weapon of the gun in the hand of client, whose body is body (NULL if it
+isn't in the snapshot: any gun of theirs)
 ===============
 */
-static const demoAimWeapon_t *CG_DemoAimWeapon(const entityState_t *body)
+static const demoAimWeapon_t *CG_DemoAimWeapon(int client, const entityState_t *body)
 {
     const char *model;
     int         i, j;
 
     for (i = 0; i < cg.snap->numEntities; i++) {
-        if (!CG_FollowedGun(&cg.snap->entities[i], body)) {
+        if (body ? !CG_FollowedGun(&cg.snap->entities[i], body) : cg.snap->entities[i].parent != client) {
             continue;
         }
         model = CG_ConfigString(CS_MODELS + cg.snap->entities[i].modelindex);
@@ -154,6 +160,30 @@ static const demoAimWeapon_t *CG_DemoAimWeapon(const entityState_t *body)
         break;
     }
     return &demoAimOther;
+}
+
+/*
+===============
+CG_DemoAimViewOf
+
+The player whose aim snap shows from their eyes in a demo, -1 for none: one
+the demo doesn't show (CG_UnspeccedFromEyes), one followed from their eyes
+(cg_followcamera 2) or the recorder playing, unless seen from behind
+(cg_recordercamera), on a turret or dead
+===============
+*/
+static int CG_DemoAimViewOf(const snapshot_t *snap)
+{
+    const playerState_t *ps = &snap->ps;
+
+    if (!(snap->snapFlags & (SNAPFLAG_UNSPECCED_FROM_EYES | SNAPFLAG_FOLLOWED_FROM_EYES))
+        && ((ps->pm_flags & (PMF_SPECTATING | PMF_CAMERA_VIEW)) || CG_RecorderBehind())) {
+        return -1;
+    }
+    if ((ps->pm_flags & PMF_TURRET) || ps->pm_type == PM_DEAD || ps->stats[STAT_HEALTH] <= 0) {
+        return -1;
+    }
+    return ps->clientNum;
 }
 
 /*
@@ -230,8 +260,9 @@ static void CG_DemoAimAt(int time, vec2_t angles)
     float                frac, fromAim[2], toAim[2];
     int                  i, j;
 
-    if (cg.nextSnap && (cg.nextSnap->snapFlags & SNAPFLAG_UNSPECCED_FROM_EYES)
-        && cg.nextSnap->ps.clientNum == aim.client && cg.nextSnap->serverTime > cg.snap->serverTime) {
+    if (cg.nextSnap && CG_DemoAimViewOf(cg.nextSnap) == aim.client
+        && !((cg.nextSnap->snapFlags ^ cg.snap->snapFlags) & (SNAPFLAG_UNSPECCED_FROM_EYES | SNAPFLAG_FOLLOWED_FROM_EYES))
+        && cg.nextSnap->serverTime > cg.snap->serverTime) {
         to     = &cg.nextSnap->ps;
         toTime = cg.nextSnap->serverTime;
     }
@@ -375,16 +406,15 @@ static void CG_DemoAimLeft(const demoAimWeapon_t *weapon, int index, const vec3_
 
 /*
 ===============
-CG_DemoAimEyes
+CG_DemoAimView
 
-Sets the aim drawn from the eyes of a player the demo doesn't show
-(CG_UnspeccedEyes) as their crosshair was, if it can tell it; returns
-whether it did
+Sets the aim drawn from a player's eyes in a demo (CG_DemoAimViewOf) as their
+crosshair was (cg_demoaim), if it can tell it
 ===============
 */
-qboolean CG_DemoAimEyes(void)
+void CG_DemoAimView(void)
 {
-    int                    client = CG_UnspeccedEyes();
+    int                    client;
     const entityState_t   *body   = NULL;
     const demoAimWeapon_t *weapon;
     const demoShotInfo_t  *a, *z;
@@ -393,23 +423,27 @@ qboolean CG_DemoAimEyes(void)
     float                  frac;
     int                    first = -1, last = -1, runFirst = 0, time, i;
 
-    if (client < 0 || !cg_unspeccedaim->integer || cg.snap->ps.pm_type == PM_DEAD) {
-        aim.client = -1;
-        return qfalse;
+    aim.client = -1;
+    if (!cg_demoaim->integer || !cg.demoPlayback || !cg.snap) {
+        return;
+    }
+    client = CG_DemoAimViewOf(cg.snap);
+    if (client < 0) {
+        return;
     }
     for (i = 0; i < cg.snap->numEntities; i++) {
         if (cg.snap->entities[i].number == client) {
             body = &cg.snap->entities[i];
         }
     }
-    if (!body || CG_DemoHeadTurn(body)) {
-        aim.client = -1;
-        return qfalse;
+    // from their entity alone, it aims as it goes on a ladder or a turret
+    if (cg.snap->snapFlags & SNAPFLAG_UNSPECCED_FROM_EYES && (!body || CG_DemoHeadTurn(body))) {
+        return;
     }
 
     aim.client   = client;
     aim.numShots = cgi.DemoShots(client, cg.time - DEMO_AIM_BEFORE, cg.time + DEMO_AIM_AFTER, aim.shots, DEMO_AIM_MAX_SHOTS);
-    weapon       = CG_DemoAimWeapon(body);
+    weapon       = CG_DemoAimWeapon(client, body);
 
     // the last run of shots about now: from closing in before its first to
     // coming back after its last
@@ -426,7 +460,7 @@ qboolean CG_DemoAimEyes(void)
     }
 
     // where the camera is, as the frame before had it
-    if (aim.eyeTime && cg.time - aim.eyeTime >= 0 && cg.time - aim.eyeTime <= 100) {
+    if (aim.eyeTime && aim.eyeClient == client && cg.time - aim.eyeTime >= 0 && cg.time - aim.eyeTime <= 100) {
         VectorCopy(aim.eye, eye);
     } else {
         VectorCopy(cg.predicted_player_state.origin, eye);
@@ -488,7 +522,18 @@ qboolean CG_DemoAimEyes(void)
     if (aim.numShots) {
         cg.viewkick[0] = cg.viewkick[1] = 0;
     }
-    return qtrue;
+}
+
+/*
+===============
+CG_DemoAimed
+
+Whether the aim drawn this frame is the one CG_DemoAimView worked out
+===============
+*/
+qboolean CG_DemoAimed(void)
+{
+    return aim.client >= 0;
 }
 
 /*
@@ -500,9 +545,10 @@ Where the camera is drawn from, for the next frame's aim
 */
 void CG_DemoAimEye(void)
 {
-    if (aim.client >= 0 && aim.client == CG_UnspeccedEyes()) {
+    if (aim.client >= 0) {
         VectorCopy(cg.refdef.vieworg, aim.eye);
-        aim.eyeTime = cg.time;
+        aim.eyeClient = aim.client;
+        aim.eyeTime   = cg.time;
     } else {
         aim.eyeTime = 0;
     }

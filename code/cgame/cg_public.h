@@ -91,8 +91,9 @@ extern "C" {
         vec3_t point;
         int    kills; // the player it kills, -1 for none
         // the shooter's aim (pitch, yaw) in the snapshot before, its own and
-        // the one after, as their entity has it (CG_DemoBehindState), and when,
-        // 0 for one they aren't in; and their speed across
+        // the one after: its view when it's theirs, else as their entity has
+        // it (CG_DemoBehindState); and when, 0 for one they aren't in; and
+        // their speed across
         int    aimTimes[3];
         float  aims[3][2];
         float  speed;

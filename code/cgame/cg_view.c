@@ -1508,6 +1508,7 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
     // update cg.predicted_player_state
     CG_PredictPlayerState();
     // Added in OPM
+    CG_DemoAimView();
     CG_DemoScopeEyes();
 
     // Added in OPM

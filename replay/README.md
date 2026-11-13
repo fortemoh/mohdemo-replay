@@ -282,19 +282,23 @@ their pain for each hit they live through, and how hard it was is told by the
 blood on them, about 23 for a small bullet's and 76 for a rifle's (10 without
 blood, as for a fall).
 
-Their crosshair is put where it was (`cg_unspeccedaim 1`, the default; 0 is
-their entity's aim with a made-up kick). Their screen showed their aim plus the
-kick their own game adds after each shot, which no demo has, and each shot of
-theirs went along that, give or take its weapon's scatter. So around their
-shots the aim is the one each was fired with (a shot is drawn as the snapshot
-before its own comes), the kick is their weapon's, worked out shot by shot,
-and what's still left at a shot is taken in: all of it for a sniper rifle or a
-Kar98 while still, so the crosshair is on the spot of the victim the shot went
-through as it's fired, and only what goes beyond its scatter for the others,
-whose bullets fly up to a degree or two from where they're aimed. In 26 kills,
-half of the shots were this close to where they went as the gun fired (before):
-sniper rifles 0 degrees (0), other rifles 0.4 (2.2), the StG 44 and the BAR 0.6
-(0.9), submachine guns 1.4 (2.5), pistols 1.8 (4.4).
+From anyone's eyes, the recorder playing, a player followed with
+`cg_followcamera 2` or one the demo doesn't show, the crosshair is put where it
+was (`cg_demoaim 1`, the default; 0 is the demo's aim with a made-up kick).
+Their screen showed their aim plus the kick their own game adds after each
+shot, which no demo has, and each shot of theirs went along that, give or take
+its weapon's scatter. So around their shots the aim is the one each was fired
+with (a shot is drawn as the snapshot before its own comes), the kick is their
+weapon's, worked out shot by shot, and what's still left at a shot is taken in:
+all of it for a sniper rifle or a Kar98 while still, so the crosshair is on the
+spot of the victim the shot went through as it's fired, and only what goes
+beyond its scatter for the others, whose bullets fly up to a degree or two from
+where they're aimed. In 26 kills of players not shown and 35 of the recorder
+and players followed, half of the shots were this close to where they went as
+the gun fired (before), not shown / recorder / followed: sniper rifles 0 / 0 / 0
+degrees (0 / 0.1 / 0.9), other rifles 0.4 / 0.2 / 0.1 (2.2 / 1.2 / 0.7), the
+StG 44 and the BAR 0.6 / 0.9 / 0.7 (0.9 / 2.1 / 1.3), submachine guns
+1.4 / 1.3 / 1.5 (2.5 / 2.9 / 4.3), pistols 1.8 / 2.1 / 1.5 (4.4 / 4.5 / 3.7).
 
 Nor does the demo have their health or ammo, so the HUD shows them as the
 client works them out, from all it has of each player from the demo's start

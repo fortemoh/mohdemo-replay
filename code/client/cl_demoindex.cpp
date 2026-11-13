@@ -1384,8 +1384,9 @@ static const entityState_t *DI_SnapshotEntity(const diParser_t *p, const diSnaps
 DI_ShotAim
 
 Sets which (0 for the snapshot before the shot's, 1 for its own, 2 for the
-one after) of a shot's aims, from the shooter's entity in snap, if they're
-in it
+one after) of a shot's aims: the view snap has, if it's the shooter's (the
+recorder's, or the player they follow), or else from their entity in it, if
+they're in it
 ===============
 */
 static void DI_ShotAim(diParser_t *p, demoShot_t *shot, int which, const diSnapshot_t *snap)
@@ -1393,7 +1394,16 @@ static void DI_ShotAim(diParser_t *p, demoShot_t *shot, int which, const diSnaps
     const entityState_t *ent = DI_SnapshotEntity(p, snap, shot->client);
     int                  i;
 
-    if (!ent || (ent->eFlags & EF_DEAD)) {
+    if (ent && (ent->eFlags & EF_DEAD)) {
+        return;
+    }
+    if (DI_InView(p, &snap->ps) == shot->client) {
+        shot->aimTimes[which] = snap->serverTime - p->startTime;
+        shot->aims[which][0]  = AngleNormalize180(snap->ps.viewangles[PITCH]);
+        shot->aims[which][1]  = snap->ps.viewangles[YAW];
+        return;
+    }
+    if (!ent) {
         return;
     }
     shot->aimTimes[which]   = snap->serverTime - p->startTime;
