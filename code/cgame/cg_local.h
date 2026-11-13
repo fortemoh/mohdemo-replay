@@ -545,6 +545,7 @@ extern "C" {
     extern cvar_t *cl_demoScopeVictim;
     extern cvar_t *cl_demoScopeShot;
     extern cvar_t *cl_demoScopeHit;
+    extern cvar_t *cg_unspeccedaim;
     extern cvar_t *cg_recordersmooth;
     extern cvar_t *cg_demoholsters;
     extern cvar_t *cl_demoShooter;
@@ -644,6 +645,7 @@ extern "C" {
     int      CG_DemoBehind(void);
     void     CG_DemoBehindState(const entityState_t *es, playerState_t *ps);
     qboolean CG_DemoOnLadder(const entityState_t *es);
+    float    CG_DemoHeadTurn(const entityState_t *es);
     void     CG_DemoBehindCamera(int client, const vec3_t offset, vec3_t origin, vec3_t angles);
 
     //
@@ -653,6 +655,13 @@ extern "C" {
     qboolean CG_DemoScopeView(vec3_t origin, vec3_t angles, float *fov);
     void     CG_DemoScopeEyes(void);
     void     CG_DemoScopeShot(const vec3_t start, const vec3_t end);
+
+    //
+    // cg_demoaim.c
+    //
+    // Added in OPM
+    qboolean CG_DemoAimEyes(void);
+    void     CG_DemoAimEye(void);
     void     CG_CalcEntityLerpPositions(centity_t *cent);
 
     //

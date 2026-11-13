@@ -100,6 +100,8 @@ typedef struct {
     int      inputTime[MAX_CLIENTS]; // the last snapshot showing each player's input
     int      seenSince[MAX_CLIENTS]; // the first snapshot of the ones each player is in without a break
 
+    int firstShotAfter; // the first shot whose shooter's aim in the snapshot after isn't set yet
+
     diName_t knownNames[DI_KNOWN_NAMES];
     int      numKnownNames;
 
@@ -1356,6 +1358,72 @@ DI_ParseSnapshot
 Like CL_ParseSnapshot
 ===============
 */
+/*
+===============
+DI_SnapshotEntity
+
+The entity numbered number in snap, NULL if it isn't in it
+===============
+*/
+static const entityState_t *DI_SnapshotEntity(const diParser_t *p, const diSnapshot_t *snap, int number)
+{
+    const entityState_t *ent;
+    int                  i;
+
+    for (i = 0; i < snap->numEntities; i++) {
+        ent = &p->parseEntities[(snap->parseEntitiesNum + i) & (DI_PARSE_ENTITIES - 1)];
+        if (ent->number == number) {
+            return ent;
+        }
+    }
+    return NULL;
+}
+
+/*
+===============
+DI_ShotAim
+
+Sets which (0 for the snapshot before the shot's, 1 for its own, 2 for the
+one after) of a shot's aims, from the shooter's entity in snap, if they're
+in it
+===============
+*/
+static void DI_ShotAim(diParser_t *p, demoShot_t *shot, int which, const diSnapshot_t *snap)
+{
+    const entityState_t *ent = DI_SnapshotEntity(p, snap, shot->client);
+    int                  i;
+
+    if (!ent || (ent->eFlags & EF_DEAD)) {
+        return;
+    }
+    shot->aimTimes[which]   = snap->serverTime - p->startTime;
+    shot->aims[which][0]    = 0;
+    shot->aims[which][1]    = ent->angles[YAW];
+    for (i = 0; i < 4; i++) {
+        shot->aims[which][0] += AngleNormalize180(ent->bone_angles[i][PITCH]);
+    }
+}
+
+/*
+===============
+DI_SetShotsAfter
+
+The shooters' aims in snap, the snapshot after those of the shots that came
+before it
+===============
+*/
+static void DI_SetShotsAfter(diParser_t *p, const diSnapshot_t *snap)
+{
+    demoShot_t *shot;
+
+    for (; p->firstShotAfter < p->index->numShots; p->firstShotAfter++) {
+        shot = &p->index->shots[p->firstShotAfter];
+        if (shot->time < snap->serverTime - p->startTime) {
+            DI_ShotAim(p, shot, 2, snap);
+        }
+    }
+}
+
 static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
 {
     static server_sound_t sounds[MAX_SERVER_SOUNDS];
@@ -1444,6 +1512,9 @@ static qboolean DI_ParseSnapshot(diParser_t *p, msg_t *msg)
     }
     p->snap                                       = newSnap;
     p->snapshots[newSnap.messageNum & PACKET_MASK] = newSnap;
+    if (p->started) {
+        DI_SetShotsAfter(p, &newSnap);
+    }
     DI_CountRulesSpeed(p, &newSnap.ps);
     DI_UpdateTeams(p);
     DI_UpdateIdle(p, lastTime);
@@ -1466,12 +1537,12 @@ DI_ShotHit
 
 The player other than shooter that a shot from start to end passes through,
 -1 for none, and where it passes them (hit), from their origin, in the
-snapshot of the shot: the point of the line above their origin, nearest it
-across, up to its end, or a little past for one that stops in them. Dead
-ones too, as the one it kills is in it
+snapshot of the shot, and that point of the line (onLine): the one above
+their origin, nearest it across, up to its end, or a little past for one
+that stops in them. Dead ones too, as the one it kills is in it
 ===============
 */
-static int DI_ShotHit(diParser_t *p, int shooter, const vec3_t start, const vec3_t end, vec3_t hit)
+static int DI_ShotHit(diParser_t *p, int shooter, const vec3_t start, const vec3_t end, vec3_t hit, vec3_t onLine)
 {
     const entityState_t *ent;
     vec3_t               dir, point;
@@ -1504,6 +1575,7 @@ static int DI_ShotHit(diParser_t *p, int shooter, const vec3_t start, const vec3
         best   = across;
         victim = ent->number;
         VectorSubtract(point, ent->origin, hit);
+        VectorCopy(point, onLine);
     }
     return victim;
 }
@@ -1514,12 +1586,14 @@ DI_AddShot
 
 A shot cgame is told of, kept with the player who stands where it starts
 (from their eyes), in the last snapshot, the one of the message; scoped if
-canScope and they have a rifle with a scope in their hand
+canScope and they have a rifle with a scope in their hand; with their aim in
+it and the snapshot before (and after, DI_SetShotsAfter), and their speed
 ===============
 */
 static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end, qboolean canScope)
 {
-    const entityState_t *ent;
+    const entityState_t *ent, *from;
+    const diSnapshot_t  *before;
     const char          *model;
     demoShot_t          *shot;
     float                best = Square(96), dist;
@@ -1567,7 +1641,23 @@ static void DI_AddShot(diParser_t *p, const vec3_t start, const vec3_t end, qboo
     VectorCopy(start, shot->start);
     VectorCopy(end, shot->end);
     VectorClear(shot->hit);
-    shot->hitClient = DI_ShotHit(p, shooter, start, end, shot->hit);
+    VectorCopy(end, shot->point);
+    shot->hitClient = DI_ShotHit(p, shooter, start, end, shot->hit, shot->point);
+
+    memset(shot->aimTimes, 0, sizeof(shot->aimTimes));
+    memset(shot->aims, 0, sizeof(shot->aims));
+    shot->speed = 0;
+    DI_ShotAim(p, shot, 1, &p->snap);
+    before = &p->snapshots[(p->snap.messageNum - 1) & PACKET_MASK];
+    if (before->valid && before->messageNum == p->snap.messageNum - 1) {
+        DI_ShotAim(p, shot, 0, before);
+        ent  = DI_SnapshotEntity(p, &p->snap, shooter);
+        from = DI_SnapshotEntity(p, before, shooter);
+        if (ent && from && p->snap.serverTime > before->serverTime) {
+            shot->speed = sqrt(Square(ent->origin[0] - from->origin[0]) + Square(ent->origin[1] - from->origin[1]))
+                        * 1000.0f / (p->snap.serverTime - before->serverTime);
+        }
+    }
 }
 
 /*

@@ -930,7 +930,7 @@ Added in OPM
   head turned otherwise, the others' share rounding to nothing
 ===============
 */
-static float CG_DemoHeadTurn(const entityState_t *es)
+float CG_DemoHeadTurn(const entityState_t *es)
 {
     int i, j;
 
@@ -1692,6 +1692,10 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
         // lol disco
         CG_AddLightShow();
     }
+
+    // Added in OPM
+    //  where the camera is, as the next frame's aim goes by
+    CG_DemoAimEye();
 
     // actually issue the rendering calls
     CG_DrawActive(stereoView);

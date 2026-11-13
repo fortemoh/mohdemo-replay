@@ -2016,6 +2016,89 @@ static qboolean CL_DemoKillsAt( int client, int time ) {
 
 /*
 ====================
+CL_DemoShots
+
+Added in OPM
+The shots of client from startTime to endTime (server times), at most
+maxShots, for cgame (cg_demoaim.c): with the player each kills, the last
+through them read with their kill or just before, as CL_UpdateDemoScope
+takes it
+====================
+*/
+int CL_DemoShots( int client, int startTime, int endTime, demoShotInfo_t *shots, int maxShots ) {
+	const demoShot_t	*shot;
+	const demoEvent_t	*ev;
+	demoShotInfo_t		*info;
+	int					first, last, mid, count = 0, i, j;
+
+	if ( !clc.demoplaying ) {
+		return 0;
+	}
+	startTime -= clc.demoStartTime;
+	endTime -= clc.demoStartTime;
+
+	// the first at startTime or after
+	first = 0;
+	last = cl_demoIndex.numShots;
+	while ( first < last ) {
+		mid = ( first + last ) / 2;
+		if ( cl_demoIndex.shots[mid].time < startTime ) {
+			first = mid + 1;
+		} else {
+			last = mid;
+		}
+	}
+
+	for ( i = first; i < cl_demoIndex.numShots && count < maxShots; i++ ) {
+		shot = &cl_demoIndex.shots[i];
+		if ( shot->time > endTime ) {
+			break;
+		}
+		if ( shot->client != client ) {
+			continue;
+		}
+		info = &shots[count++];
+		info->time = shot->time + clc.demoStartTime;
+		VectorCopy( shot->start, info->start );
+		VectorCopy( shot->end, info->end );
+		info->hitClient = shot->hitClient;
+		VectorCopy( shot->hit, info->hit );
+		VectorCopy( shot->hitClient >= 0 ? shot->point : shot->end, info->point );
+		info->kills = -1;
+		for ( j = 0; j < 3; j++ ) {
+			info->aimTimes[j] = shot->aimTimes[j] ? shot->aimTimes[j] + clc.demoStartTime : 0;
+			info->aims[j][0] = shot->aims[j][0];
+			info->aims[j][1] = shot->aims[j][1];
+		}
+		info->speed = shot->speed;
+	}
+
+	// the kills
+	for ( i = 0; i < cl_demoIndex.numEvents; i++ ) {
+		ev = &cl_demoIndex.events[i];
+		if ( ev->time + 100 < startTime ) {
+			continue;
+		}
+		if ( ev->time - 100 > endTime ) {
+			break;
+		}
+		if ( ev->type != DEMOEVENT_KILL || ev->client != client || ev->other < 0 || ev->other == client ) {
+			continue;
+		}
+		for ( j = count - 1; j >= 0; j-- ) {
+			info = &shots[j];
+			if ( info->hitClient == ev->other && info->time - clc.demoStartTime >= ev->time - 100
+				&& info->time - clc.demoStartTime <= ev->time + 50 ) {
+				info->kills = ev->other;
+				break;
+			}
+		}
+	}
+	return count;
+}
+
+/*
+====================
 CL_UpdateDemoScope
 
 Added in OPM

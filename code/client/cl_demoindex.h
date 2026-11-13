@@ -113,9 +113,17 @@ typedef struct {
     vec3_t   start;  // their eyes
     vec3_t   end;    // where it hit
     // the player it passes through, -1 for none, and where it passes them,
-    // from their origin, in the snapshot of the shot
+    // from their origin, in the snapshot of the shot, and on the line
     int      hitClient;
     vec3_t   hit;
+    vec3_t   point;
+    // the shooter's aim (pitch, yaw) as their entity has it, as cgame's
+    // camera behind them takes it (CG_DemoBehindState), in the snapshot before
+    // the shot's, the shot's and the one after, and their times, as time's, 0
+    // for one they aren't in; and their speed across in the shot's
+    int      aimTimes[3];
+    float    aims[3][2];
+    float    speed;
 } demoShot_t;
 
 typedef struct {

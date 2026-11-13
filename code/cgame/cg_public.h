@@ -77,6 +77,27 @@ extern "C" {
         int eType;
     } stopWatch_t;
 
+    // Added in OPM
+    //  A shot of a player of a demo, as the client's index of it has it
+    //  (DemoShots), with times as the snapshots'
+    typedef struct {
+        int    time;  // of the snapshot it came with
+        vec3_t start; // the shooter's eyes
+        vec3_t end;   // where it hit
+        // the player it passes through, -1 for none, and where it passes them,
+        // from their origin then, and on the line
+        int    hitClient;
+        vec3_t hit;
+        vec3_t point;
+        int    kills; // the player it kills, -1 for none
+        // the shooter's aim (pitch, yaw) in the snapshot before, its own and
+        // the one after, as their entity has it (CG_DemoBehindState), and when,
+        // 0 for one they aren't in; and their speed across
+        int    aimTimes[3];
+        float  aims[3][2];
+        float  speed;
+    } demoShotInfo_t;
+
     typedef struct AliasList_s     AliasList_t;
     typedef struct AliasListNode_s AliasListNode_t;
     typedef struct dtiki_s         dtiki_t;
@@ -348,6 +369,9 @@ functions exported to the main executable
         void (*DemoHitSource)(const vec3_t start, const vec3_t end);
         //  and where a bullet drew blood, large for a rifle's
         void (*DemoHitFlesh)(const vec3_t pos, qboolean large);
+        //  the shots of client from startTime to endTime, at most maxShots,
+        //  as the demo's index has them; returns how many
+        int (*DemoShots)(int client, int startTime, int endTime, demoShotInfo_t *shots, int maxShots);
         void (*SetTime)(int time);
         void (*GetCurrentSnapshotNumber)(int *snapshotNumber, int *serverTime);
         void (*GetGlconfig)(glconfig_t *glconfig);
