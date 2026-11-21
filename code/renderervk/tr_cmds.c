@@ -571,6 +571,9 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 }
 
 
+// Added in OPM: the frame's list has a video frame (RE_TakeVideoFrame)
+static qboolean videoFrameIssued;
+
 /*
 =============
 RE_EndFrame
@@ -593,6 +596,11 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 	cmd->frameToken = ri.FrameToken();
 
 	R_IssueRenderCommands( qtrue );
+	// Added in OPM: a video frame's list done (RE_TakeVideoFrame)
+	if ( videoFrameIssued ) {
+		videoFrameIssued = qfalse;
+		R_FrontEndSync();
+	}
 	vk_probe_frame_end();
 	R_2DListsEndFrame();
 
@@ -613,6 +621,12 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 /*
 =============
 RE_TakeVideoFrame
+
+Changed in OPM
+With the render thread (r_smp), the frame's list waits for it to be done
+(RE_EndFrame): the thread writes the video frame (RB_TakePendingVideoFrame,
+CL_WriteAVIVideoFrame) while the game thread writes the sound into the
+same video, so they take turns, in the order they had without the thread
 =============
 */
 void RE_TakeVideoFrame( int width, int height,
@@ -628,6 +642,7 @@ void RE_TakeVideoFrame( int width, int height,
 	if( !cmd ) {
 		return;
 	}
+	videoFrameIssued = qtrue;
 
 	cmd->commandId = RC_VIDEOFRAME;
 
