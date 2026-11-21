@@ -544,6 +544,16 @@ static float EX_Bottom(const rlView_t& v)
     return v.dh - (style->integer == 2 ? 88.0f : 24.0f) - (follow->integer ? COMP_FOLLOW_H + 8.0f : 0.0f);
 }
 
+// Added in OPM
+//  The bottom's middle free up to, in pixels from the top (EX_Bottom): the
+//  clip number of a demo's video stands over it (cl_ui.cpp)
+float UI_Extras_BottomFree(void)
+{
+    const rlView_t v = EX_HudView();
+
+    return EX_Bottom(v) * v.s;
+}
+
 void UI_DrawStatusIcon(int icon, qboolean raised)
 {
     const rlView_t v = EX_HudView();

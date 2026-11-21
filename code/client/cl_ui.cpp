@@ -2486,8 +2486,9 @@ UI_DrawClipNumber
 
 Added in OPM
 The number of the clip of the demo playing (cl_demoClipNumbers), at the
-bottom of the screen, between the health and the ammo and above the
-weapons, over all the rest
+bottom of the screen, between the health and the ammo, over all the rest;
+higher over what the HUD has at the bottom's middle (the plate of the
+player followed, CS2's strip)
 ====================
 */
 void UI_DrawClipNumber(void)
@@ -2495,6 +2496,7 @@ void UI_DrawClipNumber(void)
     static UIFont *font;
     int            number;
     vec2_t         scale;
+    float          bottom;
 
     number = CL_DemoClipNumber();
     if (!number || clc.demoSeeking) {
@@ -2511,9 +2513,8 @@ void UI_DrawClipNumber(void)
     // twice the size of the HUD's
     scale[0] = uid.scaleRes[0] * 2;
     scale[1] = uid.scaleRes[1] * 2;
-    UI_PrintOutlinedCentered(
-        font, UIRect2D(0, 0, uid.vidWidth, uid.vidHeight - 44.0f * uid.scaleRes[1]), va("#%d", number), scale
-    );
+    bottom   = Q_min(uid.vidHeight - 44.0f * uid.scaleRes[1], UI_Extras_BottomFree() - 4.0f * uid.scaleRes[1]);
+    UI_PrintOutlinedCentered(font, UIRect2D(0, 0, uid.vidWidth, bottom), va("#%d", number), scale);
 }
 
 /*
