@@ -45,5 +45,6 @@ void CL_DemoHudClear(void);
 void CL_DemoHudModelsChanged(void);
 void CL_DemoHudSnapshot(const clSnapshot_t *snap);
 int  CL_DemoHudPained(int *clients, vec3_t *origins);
+qboolean CL_DemoHudDeadThisRound(int client);
 void CL_DemoHudHit(int client, int damage);
 void CL_DemoHudState(int client, demoHudState_t *state);

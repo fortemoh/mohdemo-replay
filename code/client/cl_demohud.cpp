@@ -149,6 +149,8 @@ static int           demoHudNumItems;
 // the next event of the index to go by
 static int demoHudEvent;
 static int demoHudLastTime;
+// the players the index has dying since the round began
+static qboolean demoHudRoundDead[MAX_CLIENTS];
 
 // what a model is, by its configstring: a weapon (-1 for none), the health
 // of a health box (0 for none), and its tiki
@@ -194,6 +196,7 @@ void CL_DemoHudClear(void)
     demoHudRecorderAlive = qfalse;
     demoHudEvent         = 0;
     demoHudLastTime      = 0;
+    memset(demoHudRoundDead, 0, sizeof(demoHudRoundDead));
     CL_DemoHudModelsChanged();
 }
 
@@ -809,10 +812,12 @@ void CL_DemoHudSnapshot(const clSnapshot_t *snap)
             demoHudPlayers[ev->other].alive  = qfalse;
             demoHudPlayers[ev->other].fresh  = qtrue;
             demoHudPlayers[ev->other].health = 0;
+            demoHudRoundDead[ev->other]      = qtrue;
         } else if (ev->type == DEMOEVENT_ROUNDSTART || ev->type == DEMOEVENT_MAP) {
             for (i = 0; i < MAX_CLIENTS; i++) {
                 demoHudPlayers[i].fresh = qtrue;
             }
+            memset(demoHudRoundDead, 0, sizeof(demoHudRoundDead));
         }
     }
 
@@ -913,6 +918,20 @@ void CL_DemoHudSnapshot(const clSnapshot_t *snap)
         demoHudPlayers[i].health     = snap->ps.stats[STAT_INFOCLIENT_HEALTH];
         demoHudPlayers[i].healthTime = time;
     }
+}
+
+/*
+====================
+CL_DemoHudDeadThisRound
+
+Whether a player has died since the round began, as the index has it until
+the last snapshot read: in round modes they're out until the next one. A jump
+into the demo (as each clip begins) goes over the messages that told it
+====================
+*/
+qboolean CL_DemoHudDeadThisRound(int client)
+{
+    return client >= 0 && client < MAX_CLIENTS && demoHudRoundDead[client];
 }
 
 /*

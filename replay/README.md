@@ -317,7 +317,13 @@ worked out was within 10 nine times in ten.
 The recorder's sounds come from where they are, and the recorder's own hit and
 kill sounds aren't played.
 
-Demos don't show the score and time left, top right, the weapons bar that
+At the top, demos show the time left and the score as the server sent them,
+and in objective and round games each team's count of players still alive,
+not a card for each player. The count goes by the frags the demo's index
+has since the round began, so it's right from a clip's first frame, though
+the clip jumps over the messages that told them.
+
+Demos don't show the weapons bar that
 pops up as the player shown changes weapons, the icons over players' heads, the stopwatch of planting
 or defusing a bomb, the weapons players carry on their bodies, which only some
 servers' mods put there (`cg_demoholsters 1` shows them), or the server's messages

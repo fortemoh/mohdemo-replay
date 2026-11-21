@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "client.h"
 #include "cl_ui.h"
 #include "cl_uicomp.h"
+#include "cl_demohud.h"
 #include "cl_uiextras.h"
 #include "cl_uimenus.h"
 #include "../uilib/uibake.h"
@@ -775,6 +776,13 @@ static void Comp_Layout(void)
     Comp_Set("ui_hud_chat_low", layout != 3 ? "1" : "0");
 }
 
+// each team's count of the alive rather than a card each (cg_hud_alivecount;
+// always in demos, which videos are made of)
+static qboolean Comp_AliveCount(void)
+{
+    return Comp_Int("cg_hud_alivecount") || clc.demoplaying;
+}
+
 // who is alive and the cards (round modes), and the silent score requests:
 // a new round, a death, a team joined, and every 2 s without flood protection
 static void Comp_Roster(int gametype)
@@ -824,6 +832,15 @@ static void Comp_Roster(int gametype)
     }
     if (!(ps->pm_flags & PMF_SPECTATING)) {
         comp.dead[ps->clientNum] = ps->stats[STAT_HEALTH] <= 0;
+    }
+    // in a demo, also those its index has dying since the round began: the
+    // messages a jump into it goes over (each clip's start) don't show them
+    if (clc.demoplaying) {
+        for (i = 0; i < MAX_CLIENTS; i++) {
+            if (CL_DemoHudDeadThisRound(i)) {
+                comp.dead[i] = qtrue;
+            }
+        }
     }
     if (comp.wasPlaying && !playing) {
         comp.wantScores = qtrue;
@@ -1291,7 +1308,7 @@ void UI_CompHud_Frame(void)
         // the players' cards, or (cg_hud_alivecount, CS2's) how many of each
         // team are alive in their place: no cards then (ui_hud_cards_on
         // says whether either shows; Classic's top bar has neither)
-        const qboolean count = rounds && Comp_Int("cg_hud_alivecount");
+        const qboolean count = rounds && Comp_AliveCount();
 
         Comp_Set("ui_hud_cards_allies", rounds && !count ? comp.cards[0] : "");
         Comp_Set("ui_hud_cards_axis", rounds && !count ? comp.cards[1] : "");
@@ -1332,7 +1349,7 @@ void UI_CompHud_Frame(void)
 
         if (left != shown || !Comp_Cvar("ui_hud_timer")->modificationCount) {
             shown = left;
-            Comp_Set("ui_hud_timer", left >= 0 && !clc.demoplaying ? va("%d:%02d", left / 60, left % 60) : "");
+            Comp_Set("ui_hud_timer", left >= 0 ? va("%d:%02d", left / 60, left % 60) : "");
         }
     }
 
@@ -1449,7 +1466,7 @@ void UI_CompHud_Frame(void)
         flag("ui_hud_compass_on", !radar && Comp_Int("ui_compass") && show);
         flag("ui_hud_msgs_r", msgs && radar);
         flag("ui_hud_msgs_c", msgs && !radar);
-        flag("ui_hud_score_on", Comp_Int("cg_hud_score") && gametype != GT_SINGLE_PLAYER && !clc.demoplaying);
+        flag("ui_hud_score_on", Comp_Int("cg_hud_score") && gametype != GT_SINGLE_PLAYER);
         // Classic's kills (cg_hud_classic_kills): 0 the stock HUD's lines in the chat, 1 the feed beside the
         // top bar, 2 under it; else the feed in its place
         const qboolean classic = Comp_Int("ui_hud_classic") != 0;
@@ -1464,7 +1481,7 @@ void UI_CompHud_Frame(void)
         // cg_hud_scale): the cards' box ends 476 right of the middle, the feed's is the last 445
         flag(
             "ui_hud_feed_under",
-            rounds && Comp_Int("cg_hud_alive") && !Comp_Int("cg_hud_alivecount") && !classic
+            rounds && Comp_Int("cg_hud_alive") && !Comp_AliveCount() && !classic
                 && uid.vidWidth / UI_DesignScale(1920.0f, 1080.0f) < 2 * (476.0f + 445.0f)
         );
         flag("ui_hud_health_on", strip && Comp_Int("cg_hud_health") && !CL_DemoHidesHealth());
