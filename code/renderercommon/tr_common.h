@@ -47,6 +47,11 @@ typedef enum
 	IMGFLAG_NOLIGHTSCALE   = 0x0020,
 	IMGFLAG_CLAMPTOEDGE    = 0x0040,
 	IMGFLAG_GENNORMALMAP   = 0x0080,
+	// Added: also made a color attachment (renderervk), which GPUs keep
+	// compressed (AMD's DCC, lossless): what draws read of it costs less
+	// memory traffic where its texels repeat (the 2D atlas's clear and
+	// uniform areas)
+	IMGFLAG_COLORTARGET    = 0x0100,
 } imgFlags_t;
 
 typedef struct image_s {
@@ -74,6 +79,14 @@ typedef struct image_s {
     int			wrapClampModeY;
 	int			r_sequence;
 	int			UseCount;
+
+	// Added: an image in a 2D atlas page (renderervk, RegisterImage2D): the
+	// page bound for it, its room there (x y w h, texels), its place (s t w h)
+	struct image_s	*atlas;
+	int			atlasRoom[4];
+	float		atlasRect[4];
+	short		(*atlasRects)[4];	// what covers its texels not clear when drawn whole (x0 y0 x1 y1, texels; NULL: all of it)
+	int			numAtlasRects;
 } image_t;
 
 // any change in the LIGHTMAP_* defines here MUST be reflected in
@@ -160,7 +173,7 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height );
 void R_LoadJPG( const char *name, byte **pic, int *width, int *height );
 void R_LoadPCX( const char *name, byte **pic, int *width, int *height );
 void R_LoadPNG( const char *name, byte **pic, int *width, int *height );
-void RE_SavePNGFromRGB( const char *filename, int width, int height, const byte *rgb, int padding );
+byte *RE_EncodePNGFromRGB( int width, int height, const byte *rgb, int padding, int *length );
 void R_LoadPVR( const char *name, byte **pic, int *width, int *height );
 void R_LoadTGA( const char *name, byte **pic, int *width, int *height );
 

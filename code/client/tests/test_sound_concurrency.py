@@ -214,7 +214,6 @@ class SoundConcurrencyTests(unittest.TestCase):
         self.assertTrue(OMAHA.is_file())
         renderer = RENDERER.read_text()
         self.assertIn("sndRenderer_t", renderer)
-        self.assertIn("S_OMAHA_CaptureBegin", renderer)
         omaha = OMAHA.read_text()
         self.assertIn("ma_device", omaha)
         self.assertIn("Om_BuildSinc", omaha)

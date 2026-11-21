@@ -164,6 +164,27 @@ below are done.
   game time (one usercmd): with the deadline in microseconds anywhere in
   the millisecond, up to half of the frames at 250 were 3 and 5 ms (see
   Performance, Frame limiter)
+- frame limiter, no overshoot (2026-11-02, an engine change outside this
+  directory and a small one in the renderer; REF_API_VERSION 16): a frame
+  starts one period after the previous one started, never sooner, and its
+  present is held until one period after the previous present
+  (`Com_PresentGate`, which the renderer calls before each present on
+  whichever thread presents): no two presents are closer than the period,
+  where the old limiter made a late frame up with a short one and, like
+  any pacing of the starts alone, let a frame whose work was shorter than
+  the previous frame's present early (44 % of the presents at 500, by up
+  to 349 µs). Frames start a lead (the 90th percentile of the recent
+  frames' start to present time) before the gate of their present, so the
+  hold costs the lead over the median work in latency, 41 µs at 237 and
+  500, 16 at 8000, and the rate sits a little under the cap (499.4 at
+  500, 7658 at 8000). The `fps` counter counts the presents and can't read
+  above the cap. Deadlines are in nanoseconds (`Sys_Nanoseconds`), the
+  last 50 µs of a wait are spun on the clock alone, the sleep's margin
+  grows after a late wake-up, whole-millisecond periods keep whole
+  milliseconds of game time by moving a start that sits just before a
+  millisecond tick onto it, and on Windows the wait sleeps in a
+  high-resolution waitable timer and spins 1 ms instead of 2 (not run
+  there yet, see `WINDOWS_TESTING.md`; see Performance, Frame limiter)
 - present timing (2026-10-17, measurement only): when frames reach the
   display after their present, under KWin with Xwayland and as a native
   Wayland client, from the X11 completion events, Wayland's presentation
@@ -662,7 +683,8 @@ below are done.
   shown on an HDR display, the 3D view expanded toward its peak, the look
   set by cvars): `r_hdrOutput 1` (archived, latched: `vid_restart`, off
   by default) uses
-  an HDR10 or scRGB swapchain when the window's surface offers one and SDL
+  an HDR10 or scRGB swapchain (scRGB first on Windows since 2026-11-02)
+  when the window's surface offers one and SDL
   says the window is in HDR, on any Wayland compositor (the driver's WSI
   speaks `wp_color_manager_v1`) and on Windows alike, and changes mode
   when the window's HDR state changes; SDR otherwise, the console says
@@ -769,7 +791,24 @@ below are done.
   constants), the blend over frames and the blur in one pass: quality 2
   0.82 to 0.69 ms over the path at 2560x1440, 0.45 to 0.38 at 1920x1080,
   the frames the same but for one level in up to 4 % of the pixels.
-  See Implementation notes, Ambient occlusion
+  Since Plan 49 the occlusion is computed for one pixel of each 2 x 2 and
+  upsampled along the depth, always (the user's choice, seeing no
+  difference; it was the cvar `r_aoHalfRes` for a few hours first): 0.78 to 0.31 ms at quality 2 at 2560x1440, the frames
+  of the room one level off in 3 to 10 % of the pixels.
+  Since Plan 50 (the user's request: the temporal path's cost) the apply
+  pass upsamples the grid's blurred visibility itself instead of reading
+  back a result image a pass wrote: 0.31 to 0.26 ms, the frames one level
+  off where the factor is no longer rounded to 8 bits on the way.
+  Since Plans 51 and 52 (the same request) the occlusion, the blend over
+  frames and the blur run on a compute queue beside the next frame's
+  rendering where the device has one (`r_aoAsync`, on by default; the
+  prefilter bakes what they read, so they touch nothing of the scene),
+  and the apply pass blends the result two frames later: with the
+  anti-aliasing and the motion blur 0.78 to 0.71 ms a frame (1280 to
+  1400 fps) in the user's view. Still frames are the synchronous path's
+  within a level; in motion the occlusion trails the camera by the two
+  frames (at 60 fps a fast turn shifts it by a few dozen pixels, at a few
+  hundred fps by a few). See Implementation notes, Ambient occlusion
 - motion blur (2026-10-27, Plan 46, the renderer; the user's request: a
   velocity motion blur from the motion vectors and the depth): with
   `r_temporal 1`, `r_motionBlur 1` (archived, off by default, switched
@@ -793,9 +832,116 @@ below are done.
   at 2560x1440: 0.07 ms in a still view (its two passes), 0.14 turning
   (0.12 and 0.18 at quality 0 and 2), 0.21 turning with the
   anti-aliasing. See Implementation notes, Motion blur
+- depth of field (2026-10-29, Plan 47, the renderer; the user's request:
+  an implementation of depth of field): with `r_temporal 1`, `r_dof 1`
+  (archived, off by default, switched live) blurs the 3D view by a thin
+  lens' circle of confusion from the depth, focused on what is under the
+  crosshair. The user's choices: autofocus at the crosshair, eased over
+  `r_dofFocusSpeed` (0.25 s; `r_dofFocus` a fixed distance instead), a
+  bokeh gather (Jimenez's 2014 one: the foreground blurs over what is in
+  focus without a sharp outline, the background doesn't spread over what
+  is in front of it), the Vulkan port only. `r_dofAperture` (0.5) is the
+  far distance's blur in percent of the view's height when focused 128
+  units away; a scope's zoom blurs more. The view weapon stays sharp.
+  `r_dofQuality` 0 to 2 (16, 32, 48 samples a gather, default 1);
+  `r_temporalShow 13` shows the blur. It runs after the anti-aliasing
+  (whose history stays sharp) and before the motion blur. With `r_dof 0`
+  the frames are the build before's to the bit, with and without the
+  anti-aliasing, and with it on so is what is in focus. Cost on the RTX
+  4070 Ti, GPU time a frame in `dm/mohdm6` at 2560x1440 with the
+  anti-aliasing: 0.26 ms, 0.22 since Plan 49. See Implementation notes,
+  Depth of field
+- the anti-aliasing's gaps (2026-10-30, Plan 48, the renderer; the user's
+  request: fix the gaps in the TAA). With `r_taa 1`: the effects shader's
+  deforms move the vertexes in the motion vectors too, so the swaying
+  trees and bushes (flap), flags, curtains and seas (wave, move, bulge)
+  carry their own motion instead of the camera's; `r_taaReactive`
+  (cheat, default 1, 0 to 1, for comparisons): blended effects (entities, sprites,
+  flares, shaders that change over time; not decals, not the sky) add
+  their share of each pixel to the scene's alpha and the resolve takes
+  that much less history there, so a muzzle flash, tracer or spark shows
+  as this frame has it and leaves no ghost (around a firing MP40, 12
+  frames: the mean error of the muzzle's region against the frames
+  without the anti-aliasing 8.6 levels of 255 before, 3.3 with it;
+  `r_temporalShow 14` shows the share); `r_taaLodBias` (archived, default
+  -0.5, -2 to 0): the 3D view's textures one half mip level finer, which
+  the history smooths (still `dm/mohdm6` views: the edge strength 76 to
+  87 % of the view without the anti-aliasing before, 86 to 100 % with it;
+  the pixels that change between frames about 0.65 % before, 0.8 %).
+  With `r_temporal 0`, with `r_temporal 1`, and with `r_taa 1`,
+  `r_taaLodBias 0` and `r_taaReactive 0`, the frames are the build
+  before's to the bit but for deforming surfaces (their motion vectors
+  are the draws' now: one level in a few % of the pixels of a still
+  view). Cost on the RTX 4070 Ti at 2560x1440, the `dm/mohdm1` square with
+  its trees and the sun's lens flare, the anti-aliasing on: GPU time
+  0.578 ms before; the deforms' motion 0.004, the reactive share 0.002,
+  the LOD bias 0.008 more. See Implementation notes, Temporal
+  anti-aliasing
 - `renderer_vulkan.so` imports no GL symbol and no Vulkan symbol; it needs
   only SDL 3, libm, libstdc++, libgcc_s and libc. Vulkan is loaded at
   runtime through SDL
+- render thread (2026-10-31, Plan 50, `r_smp 1`, on by default where the
+  machine has more than one core; the user's request: close the gap to
+  Linux on the same machine, 12,500 against 6,000 frames a second, with
+  multithreading if that is what it takes): the back end (the draws'
+  recording into Vulkan command buffers, the submission and the present)
+  runs on a thread while the game and the front end build the next frame,
+  Quake 3's SMP mode with the 2D exports recorded as commands too. At most
+  one frame is in the thread, so a frame's input reaches its present as
+  before and the frame rate is the slower half's: at the `dm/mohdm6` spot
+  of the gap (2560x1440 fullscreen immediate, RTX 4070 Ti, 9800X3D,
+  Windows 11) 5,977 to 10,664 frames a second, 99th percentile 4,444 to
+  5,618; the same frames to the bit; with the temporal effects and HDR
+  output (GPU-bound) 984 either way, with vsync 280 either way (see
+  Performance, Render thread)
+- each stage cheaper (2026-10-31, Plan 51, the user's request; cgame,
+  the UI and the renderer): the precise shadows (`cg_shadows 2`) keep the
+  lights gathered at a player's origin and each foot's trace to each
+  light for the server frame, reused while the foot stays within a unit
+  (cgame's time a frame at the `dm/mohdm6` spot 45.6 to 28.6 µs, the same
+  frames); `MenuManager::FindMenu` caches the menus it found by name (the
+  HUD looks two up every frame); the indexes copied into the frame's
+  vertex buffer are drawn with `firstIndex` from one binding (82 to 14
+  `vkCmdBindIndexBuffer` a frame), a texture unit a draw doesn't use keeps
+  the descriptor set bound before, and the depth bias is set when its
+  values change, not at every shader with polygon offset. Bindless
+  textures (`r_vkBindless 1`, on by default where the device allows it):
+  every texture slot in one descriptor set per frame slot, bound once, the
+  draws naming their slots in `firstInstance` or their records, so the 67
+  descriptor set binds a frame become 2 (10,729 to 10,948 frames a
+  second). The opaque shaders are drawn in the order of their pipelines
+  (`r_sortPipelines 1`): 31 to 26 pipeline binds a frame, 2.5 % more
+  frames a second, at the price of z-fighting surfaces coming out the
+  other way in two of ten views. `vkinfo` counts the vertex and index
+  binds, push constants and dynamic state calls (see Performance, Each
+  stage cheaper)
+- scRGB first on Windows (2026-11-02, the user's request): `r_hdrOutput 1`
+  takes the scRGB swapchain before HDR10 on Windows, HDR10 first elsewhere.
+  On the user's Windows 11 machine (RTX 4070 Ti, Windows HDR on) an HDR10
+  swapchain presented at most about 3,460 times a second, each present
+  about 109 µs of the CPU and a 150 to 250 µs stall of the GPU's queue,
+  whatever the driver's present method, the swapchain's images or the
+  present mode. NVIDIA's Windows driver presents through a DXGI swapchain
+  of its own and may copy each image into it (an NVIDIA engineer on their
+  forum, March 2026); Microsoft documents the HDR10 swapchain for Direct3D
+  11 and 12 only and scRGB for every API; NVIDIA's own Vulkan game, Quake
+  II RTX, presents HDR in scRGB only. scRGB's present cost on Windows is
+  not measured yet (`r_hdrOutput 3` and `4` force either one). See
+  Implementation notes, HDR output
+- one submission for a frame drawn offscreen (2026-11-02, the user's
+  request; NVIDIA's "Vulkan Dos and Don'ts": minimize queue submissions,
+  each has significant CPU cost): with HDR output, or whenever the frame
+  is drawn offscreen and copied to the swapchain image, the frame's
+  commands and the copy go in one `vkQueueSubmit` of two batches (only the
+  copy waits for the image) instead of two submissions, as the submit
+  thread already did. At the `dm/mohdm6` spot of the render thread with
+  HDR10 forced (`r_hdrOutput 3`, `r_smp 1`, 640x480 window, Fedora, RTX
+  4070 Ti; three runs each, the machine busy with other work): 2 to 1
+  submissions a frame, 13,744 to 15,410 frames a second (73 to 65 µs a
+  frame), and the GPU's frame from its start to the copy's end 46 to 18
+  µs (the copy no longer waits for the second submission). Not measured on
+  Windows, where a submission costs more. See Implementation notes,
+  Render target
 - GL1 was the visual reference until 2026-10-19; since then the look may
   change where that buys performance, and comparisons with the build before
   (until 2026-10-23 also with GL1) check for bugs and show what changed
@@ -814,7 +960,9 @@ below are done.
 | `vk_framelog.c` | the frame log (`r_vkFrameLog`, `vkframelog`): the per-frame exports timed, the backend's counters and GPU time of every frame, the dump (see Performance, Frame spikes) |
 | `vk_submit.c` | the submit thread (`r_vkSubmitThread 1`): submits and presents the frames, acquires the swapchain image of the next frame after each present, copies a frame drawn offscreen (see Implementation notes, Submit thread) |
 | `vk_output.c` | HDR output (`r_hdrOutput`): the window's HDR state (Vulkan surface formats, SDL), the swapchain's mode, paper white and peak, the 3D view's expansion parameters, the output pass (see Implementation notes, HDR output) |
+| `vk_radar.c` | the Competitive HUD radar's picture made on the GPU (`RE_RegisterRadar2D`, `RE_Radar2DHeight`): the floors' list copied to the GPU, the two kernels, the picture copied into its place in the 2D atlas as an upload (see Implementation notes, Radar picture) |
 | `vk_temporal.c` | the temporal path (`r_temporal 1`): the scene's images, render passes and pipeline layout, the depth pyramid, the composite into the frame (see Implementation notes, Temporal path) |
+| `tr_smp.c` | the render thread (`r_smp 1`): runs the back end's command lists handed over at `EndFrame`, the front end's waits for it (`R_FrontEndSync`), its start and stop with the renderer (see Implementation notes, Render thread) |
 | `tr_temporal.c` | the temporal path's views and history: the scene begins and ends, the camera's and the entities' last frame, the skinned entities' last bones (see Implementation notes, Temporal path) |
 | `tr_staticgeom.c` | the static geometry: world surfaces and static models uploaded at map load, and the back end batches drawn from it (see Implementation notes) |
 | `tr_skin.c` | skeletal models skinned and lit on the GPU: the skin data of their surfaces (added when a model is registered), the frame data of each entity, the skinned batches (see Implementation notes) |
@@ -823,9 +971,11 @@ below are done.
 | `shaders/skinned.vert` | the vertex shader of skinned draws (skinning, `rgbGen lightingSpherical` and `tcGen environment`/`environmentmodel`), built with and without `gl_ClipDistance`; its outputs are `generic.vert`'s |
 | `shaders/effects.vert` | the vertex shader of the static geometry's draws with effects (deforms, `tcGen` and `tcMod`, `distFade`, static models' dynamic lights; see Implementation notes, Effects shader), built with and without `gl_ClipDistance`; its outputs are `generic.vert`'s |
 | `shaders/hiz_build.comp`, `shaders/taa_resolve.comp`, `shaders/temporal_composite.*`, `shaders/temporal_common.glsl` | the temporal path's passes after the scene (`hiz_build.comp` built three times: `PREPARE`, the default, `TAIL`; `taa_resolve.comp` the anti-aliasing) and what they and the passes to come that read its buffers share (included); `generic.*`, `skinned.vert` and `effects.vert` are also built with `TEMPORAL` defined for its scene |
+| `shaders/radar.comp`, `shaders/radar.glsl` | the radar's picture for a height: the whole picture (a thread a texel) and, built with `CHANGING`, a storey's change (a thread a cell that can change); `radar.glsl` holds the floor's alphas, the UI's own bytes (`RM_Paint`) with the division by 56 rounded as the CPU's |
 | `shaders/output.frag` | HDR output's pass: the frame into the swapchain image, SDR, HDR10 (PQ) or scRGB, and the calibration screens' patterns; its vertex shader is `temporal_composite.vert` |
-| `shaders/compile_shaders.sh` | regenerates `vk_shaders.c`, `vk_shaders_temporal.c` and `vk_shaders_hdr.c` with `glslc` (an argument, `main`, `temporal` or `hdr`, writes only that one) |
-| `vk_shaders.c`, `vk_shaders_temporal.c`, `vk_shaders_hdr.c` | generated SPIR-V as C arrays (committed, so builds don't need `glslc`) |
+| `shaders/compile_shaders.sh` | regenerates `vk_shaders.c`, `vk_shaders_temporal.c`, `vk_shaders_hdr.c` and `vk_shaders_radar.c` with `glslc` (an argument, `main`, `temporal`, `hdr` or `radar`, writes only that one) |
+| `shaders/glslang_as_glslc.sh` | glslang standing in for `glslc` (`GLSLC=shaders/glslang_as_glslc.sh shaders/compile_shaders.sh`): maps the options and writes the words as `-mfmt=c` does; the arrays since 2026-10-31 come from glslang 16.6.0 this way |
+| `vk_shaders.c`, `vk_shaders_temporal.c`, `vk_shaders_hdr.c`, `vk_shaders_radar.c` | generated SPIR-V as C arrays (committed, so builds don't need `glslc`; `vk_shaders_radar.c` from shaderc 2026.1's `glslc`) |
 | `tools/` | build-against-build screenshot comparison and performance scripts, view lists, the OpenGL check (see Testing) |
 | `WINDOWS_TESTING.md` | a tester's checklist for Windows: commands, cvars, what to send back |
 | `tr_immediate.c` | `glBegin`/`glEnd` emulation for debug and 2D drawing, emits indexed triangles or lines |
@@ -853,19 +1003,17 @@ the CI workflows (`.github/workflows`: Linux x64 and Windows x64 only, the
 renderer shipping as the `renderer_vulkan` library next to the executable;
 artifacts kept 3 days; since 2026-10-23 the Windows job uploads only the
 game's files, no symbols or installer; the unit tests build without the
-renderer) and the Windows installer
-(`misc/setup/windows/app/Package.wxs` lists `renderer_vulkan.dll`; CI no
-longer builds it), and the client's `cl_renderer` (`vulkan`, the only
+renderer), and the client's `cl_renderer` (`vulkan`, the only
 renderer: `code/client/cl_main.cpp`), and the removal of OpenGL (see
 Implementation notes, No OpenGL), and `m_filter`'s removal
 (`code/client/cl_input.cpp`, `cl_main.cpp`, `client.h`), and the soundtrack
 off and taunts (`code/client/omaha/snd_omaha.cpp`, `code/cgame/cg_parsemsg.cpp`,
 `cg_main.c`, `cg_local.h`), and the frame limiter
 (`Com_Frame` and `Com_FrameWait` in `code/qcommon/common.c`,
-`Sys_Microseconds` in `code/sys/sys_unix.c` and `code/sys/sys_win32.c`,
+`Sys_Nanoseconds` in `code/sys/sys_unix.c` and `code/sys/sys_win32.c`,
 the timer slack set in `sys_unix.c`'s `Sys_PlatformInit`, `NET_SleepUs`
 in `code/qcommon/net_ip.c`, their declarations in `code/qcommon/qcommon.h`:
-`com_maxfps` caps in microseconds, those that divide 1000 on the
+`com_maxfps` caps in nanoseconds, those that divide 1000 on the
 millisecond tick, see Performance, Frame limiter), and the command rate
 (`code/client/cl_input.cpp`: `cl_movefps`, `CL_CreateNewCommands`,
 `CL_ApplyLook`, `CL_GetViewUserCmd`, `CL_SendCmd`; `code/client/client.h`;
@@ -957,12 +1105,16 @@ Cvars of the backend:
 | `r_staticEffects` (default 1) | 0 leaves the static batches whose shaders deform vertexes or compute texture coordinates or colors per vertex to the CPU (tess) instead of the effects shader (see Implementation notes, Effects shader) |
 | `r_staticTerrain` (default 1) | 0 copies the LOD terrain's vertexes into tess every frame instead of drawing them from the terrain pool (see Implementation notes, Terrain) |
 | `r_terrainCache` (default 7) | bits: 1 the LOD terrain's geomorph leaves out the patches whose vertexes need no new height, 2 its merging leaves out the patches where nothing changed since every merge in them failed, 4 a patch's indexes are kept until its triangles change; 0 walks everything every frame (the same tessellation either way, see Implementation notes, Terrain) |
-| `r_batch2D` (default 3) | bits: 1 draws consecutive 2D pics, strings and triangles of one shader as one surface, 2 leaves out the boxes of `DrawBox` with alpha 0 (they change no pixel); 0 draws every 2D call as it comes (see Implementation notes, 2D batches) |
+| `r_batch2D` (default 3) | bits: 1 draws consecutive 2D pics, strings, triangles, polygons and boxes of one shader, or of the UI's atlas page (`RegisterImage2D`'s images, the boxes' white texel), as one surface across `Set2DWindow`, `RE_Scissor` and 2D color changes (the vertexes placed and clipped on the CPU, the color in each vertex; `tr_draw.c`, 2D batches), 2 leaves out the boxes of `DrawBox` with alpha 0 (they change no pixel); 0 draws every 2D call as it comes (see Implementation notes, 2D batches) |
 | `r_vkFrameLog` (latched, default 0) | the frame log: 1 records the last 131072 frames (larger values: that many), see `vkframelog` below and Performance, Frame spikes; 0 costs nothing |
-| `r_vkSubmitThread` (latched, archived, default 0) | 1: a thread submits and presents the frames and acquires the swapchain images, so the main thread never waits in `vkQueueSubmit`, `vkAcquireNextImageKHR` or `vkQueuePresentKHR` (see Implementation notes, Submit thread, and Performance, Submit thread); the swapchain then has 5 images without vsync, 3 with FIFO. The startup line `Vulkan present mode: ..., N swapchain images, N frames in flight, submit thread` says what is used |
+| `r_vkSubmitThread` (latched, archived, default 0) | 1: a thread submits and presents the frames and acquires the swapchain images, so the main thread never waits in `vkQueueSubmit`, `vkAcquireNextImageKHR` or `vkQueuePresentKHR` (see Implementation notes, Submit thread, and Performance, Submit thread); with the render thread (`r_smp 1`) the render thread submits its frames itself and the thread only presents them and acquires (Plan 53: 9,886 to 11,327 frames a second at the `dm/mohdm6` spot at 2560x1440, 13,098 to 16,450 at 1280x720). The swapchain then has 5 images without vsync, 3 with FIFO. The startup line `Vulkan present mode: ..., N swapchain images, N frames in flight, submit thread` says what is used |
+| `r_vkLatency` (default 0) | 1: `vkinfo` prints, since the last `vkinfo`, percentiles of each frame's input to its present, to the GPU done with it (its last timestamp on the CPU's clock through `VK_KHR_calibrated_timestamps`), with vsync and present ids to it seen shown (looked at without waiting after each present: up to a refresh late), and the main thread's frame times; the input time is the end of the main thread's `EndFrame` before the frame (the game reads its input at the start of the next `Com_Frame`). For measurements (see Performance, Less GPU wait). `r_vkSubmitThread 3` (tests): the render thread's frames handed over whole, as before Plan 53 |
+| `r_sortPipelines` (latched, default 1) | 1: the opaque shaders are drawn in the order of the pipelines their draws bind (`R_ShaderPipelineClass`: the stages' state bits, color generators, texture formats and environments, the cull mode, polygon offset, deforms), those of one pipeline in the order they were loaded, so consecutive draws bind the same pipeline more often (31 to 26 binds a frame at the `dm/mohdm6` spot, 2.5 % more frames a second); 0: the order they were loaded, as before. Only the opaque sort class moves: blended and decal shaders keep their order. Where two opaque surfaces have the same depth at a pixel (z-fighting) the other one can win (see Performance, Each stage cheaper) |
+| `r_vkBindless` (latched, archived, default 1) | 1: bindless textures: every texture slot is in one descriptor set bound once a frame, and a draw names its textures by slot (in `firstInstance`, or its record for the effects and skinned draws) instead of a descriptor set bind per texture change; on where the device has the limits for 4096 combined image samplers in a stage and a set and dynamic indexing of sampler arrays, which the startup line `Vulkan ... bindless textures yes` says; 0 (or without them): a set per texture, as before (see Implementation notes, Bindless textures) |
+| `r_smp` (latched, archived, default 1) | 1: the back end (the draws' recording, the submission and the present) runs on a render thread while the game and the front end build the next frame; the frame rate is the slower half's, a frame's input reaches its present as before, and with vsync the input is read after the display is waited for, as without the thread (since Plan 53 at the frame's hand-over in `EndFrame`, before the next input; `BeginFrame` came after it); no thread on one core; 0: one thread (see Implementation notes, Render thread, and Performance, Render thread). The startup line `r_smp: the back end runs on a render thread` says it runs |
 | `r_temporal` (latched, archived, default 0) | 1: the temporal path: the 3D views are drawn into an RGBA16F scene with motion vectors and normals, for temporal anti-aliasing (`r_taa`), ambient occlusion (`r_ao`), motion blur (`r_motionBlur`) and the HDR look; their own images (the depth pyramid, histories) are made only while they are on; off with multisampling (see Implementation notes, Temporal path) |
 | `r_ao` (archived, default 0) | with `r_temporal 1`: ground truth ambient occlusion (GTAO) of the opaque surfaces, before what is blended over them (see Implementation notes, Ambient occlusion) |
-| `r_aoQuality` (archived, default 2, 0 to 3) | with `r_ao 1`: directions and samples a pixel: 1 x 2, 2 x 2, 3 x 3, 9 x 3 a side (XeGTAO's low, medium, high and ultra; ultra blurs twice). GPU time over the temporal path at 2560x1440 0.43, 0.51, 0.69, 1.62 ms, at 1920x1080 0.23, 0.28, 0.38, 0.80 |
+| `r_aoQuality` (archived, default 2, 0 to 3) | with `r_ao 1`: directions and samples a pixel: 1 x 2, 2 x 2, 3 x 3, 9 x 3 a side (XeGTAO's low, medium, high and ultra; ultra blurs twice). GPU time over the temporal path at full resolution, before Plan 49, at 2560x1440 0.43, 0.51, 0.69, 1.62 ms, at 1920x1080 0.23, 0.28, 0.38, 0.80; at half resolution since, quality 2 0.31 ms at 2560x1440, 0.26 since Plan 50 |
 | `r_aoRadius` (archived, default 48, 4 to 256) | with `r_ao 1`: how far occluders reach, in world units |
 | `r_aoStrength` (archived, default 1.5, 0 to 4) | with `r_ao 1`: the visibility to this power (1: as computed) |
 | `r_aoFalloff` (archived, default 0.6, 0.05 to 1) | with `r_ao 1`: the share of the radius over which occluders fade out |
@@ -970,17 +1122,25 @@ Cvars of the backend:
 | `r_aoTemporal` (archived, default 16, 1 to 64) | with `r_ao 1`: the most frames blended (a quarter of it for what moves); 1: none, the noise stays put and the blur works alone |
 | `r_aoNormals` (archived, default 0) | with `r_ao 1`: 0 the normals of the depth; 1 the draws' where they are within about 25 degrees of those (smoother curved models) |
 | `r_aoMultiBounce` (archived, default 0.4, 0 to 0.9) | with `r_ao 1`: the albedo of Jimenez's multi-bounce fit: the light occluders bounce back lightens the occlusion; 0 none |
+| `r_aoAsync` (default 1) | with `r_ao 1` and a compute queue beside the graphics one: the occlusion is computed while the next frame renders and blended in two frames later (the occlusion trails fast motion a little); 0: in its own frame, which waits for it (see Implementation notes, Ambient occlusion) |
 | `r_taa` (archived, default 0) | with `r_temporal 1`: temporal anti-aliasing; the projection is jittered with it whatever `r_temporalJitter` says (see Implementation notes, Temporal anti-aliasing) |
 | `r_taaFeedback` (archived, default 0.75, 0.5 to 0.98) | with `r_taa 1`: the weight of the history in the blend; more is smoother and blurs more in motion, less is sharper and shimmers more (it is lowered by up to a quarter for pixels that move fast). Of the pixels of a still view, with `r_taaSharpen` 0.8, 1.25 % change between frames at 0.75, 2.3 % at 0.5; 0.39 % at 0.9 with sharpening 0.3 |
 | `r_taaSharpen` (archived, default 0.8, 0 to 1) | with `r_taa 1`: sharpens the anti-aliased image when it is shown (the history stays unsharpened), within the colors of the pixel's 4 neighbours |
+| `r_taaReactive` (cheat, default 1, 0 to 1) | with `r_taa 1`: how much less history the pixels of blended effects take (muzzle flashes, tracers, sparks, fire, smoke, flares, animated textures): the square of their share of the pixel (the largest of the 3 x 3) times this. 0: as before, for comparisons (a fix, not a taste: not saved in configs) |
+| `r_taaLodBias` (archived, default -0.5, -2 to 0) | with `r_taa 1`: the mip level bias of the 3D view's textures; negative is sharper, the anti-aliasing smooths the shimmer it adds. 0: as before |
 | `r_motionBlur` (archived, default 0) | with `r_temporal 1`: motion blur of the camera's motion and of what moves, from the motion vectors and the depth (see Implementation notes, Motion blur) |
 | `r_motionBlurShutter` (archived, default 0.5, 0 to 2) | with `r_motionBlur 1`: the exposure, in frames at `r_motionBlurFps` (0.5 at 60: 1/120 s); the blur is the motion over that time |
 | `r_motionBlurFps` (archived, default 60, 0 to 1000) | with `r_motionBlur 1`: the frame rate whose frames `r_motionBlurShutter` counts, so the blur is as long at any frame rate; 0: the frames as they come (`r_motionBlurShutter` of each frame's motion: shorter the higher the frame rate) |
 | `r_motionBlurCamera` (archived, default 1, 0 to 1) | with `r_motionBlur 1`: the share of the camera's motion (turning, moving) in the blur; 0: only what moves |
 | `r_motionBlurQuality` (archived, default 1, 0 to 2) | with `r_motionBlur 1`: 8, 12 or 16 samples a pixel where something moves |
+| `r_dof` (archived, default 0) | with `r_temporal 1`: depth of field, focused on what is under the crosshair (or at `r_dofFocus`); the view weapon stays sharp (see Implementation notes, Depth of field) |
+| `r_dofAperture` (archived, default 0.5, 0 to 5) | with `r_dof 1`: the lens' aperture, as the blur of the far distance when focused 128 units (about 3 m) away, in percent of the view's height; a scope's zoom blurs more (by its zoom, up to 4) |
+| `r_dofFocus` (archived, default 0) | with `r_dof 1`: 0 focus on what is under the crosshair; more: a fixed focus distance in units (screenshots) |
+| `r_dofFocusSpeed` (archived, default 0.25, 0 to 10) | with `r_dof 1`: the focus' time constant in seconds (game time); 0 at once. A cut (a teleport, a camera change) focuses at once |
+| `r_dofQuality` (archived, default 1, 0 to 2) | with `r_dof 1`: 16, 32 or 48 samples a gather where something is blurred |
 | `r_temporalJitter` (default 0) | with `r_temporal 1`: the 3D views' projection moves by a sub-pixel offset every frame (Halton 2, 3; `r_temporalJitterSamples`, default 8). For the anti-aliasing (`r_taa` turns it on itself): without it the image shakes |
 | `r_temporalCutDist` (default 256) | with `r_temporal 1`: a camera or entity that moves farther in a frame has no motion (a cut, a teleport) |
-| `r_temporalShow` (cheat, default 0) | with `r_temporal 1`, instead of the 3D view: 1 motion vectors (red right, green down, blue left or up, times `r_temporalShowScale`, default 20), 2 normals, 3 classes, 4 the depth pyramid's level `r_temporalShowMip` (min red, max green), 5 the last frame's color, 6 the view distances, 7 the last frame's (6 and 7 the nearest of level 0 of the pyramid: half the resolution; 1 and 2 work out what the draws left to the readers from it too), 8 the scene before the anti-aliasing's blend (with `r_taa 1`: still jittered, so each frame is aliased and moves by up to half a pixel; at a few hundred frames a second the eye averages it), 9 the ambient occlusion's factor (gamma-encoded, as it multiplies the scene), 10 one frame's ambient occlusion before the blending over frames and the blur, 11 the motion blur of each pixel (mode 1's colors, 1 the longest: half a streak of a tile's side), 12 the longest motion blur around each tile |
+| `r_temporalShow` (cheat, default 0) | with `r_temporal 1`, instead of the 3D view: 1 motion vectors (red right, green down, blue left or up, times `r_temporalShowScale`, default 20), 2 normals, 3 classes, 4 the depth pyramid's level `r_temporalShowMip` (min red, max green), 5 the last frame's color, 6 the view distances, 7 the last frame's (6 and 7 the nearest of level 0 of the pyramid: half the resolution; 1 and 2 work out what the draws left to the readers from it too), 8 the scene before the anti-aliasing's blend (with `r_taa 1`: still jittered, so each frame is aliased and moves by up to half a pixel; at a few hundred frames a second the eye averages it), 9 the ambient occlusion's factor (gamma-encoded, as it multiplies the scene), 10 one frame's ambient occlusion before the blending over frames and the blur, 11 the motion blur of each pixel (mode 1's colors, 1 the longest: half a streak of a tile's side), 12 the longest motion blur around each tile, 13 the depth of field's blur (red in front of the focus, blue behind it, 1 at 8 pixels, the scene in gray where in focus; the focus area's square green), 14 the effects' reactive share (`r_taaReactive`, red over the scene's brightness in gray; only drawn with `r_taa 1` and `r_taaReactive` above 0, or in this view) |
 | `r_vkFallbacks` (latched, default 0) | for tests: ignores what the device has and uses the fallback, bits added: 1 no `imageViewFormatSwizzle` (the alpha of RGB textures set in the shader), 2 no binding stride of 0 (those bindings read per instance, as on every portability subset device), 4 no `VK_KHR/EXT_line_rasterization`, 8 no `VK_KHR/EXT_swapchain_maintenance1` (no present fences); see Implementation notes. The startup line `Vulkan present fences ..., view swizzle ..., stride 0 bindings ..., Bresenham lines ..., line stipple ...` says what is used |
 
 The console command `vkinfo` prints the backend's counters since its last
@@ -2507,6 +2667,35 @@ Other things learned:
   HTILE, TC-compatible HTILE), which is how the depth buffer's compression
   mode was found (see Performance).
 
+The render thread (2026-10-31, see Performance, Render thread), on
+Windows 11 (RTX 4070 Ti, 2560x1440 fullscreen immediate, pixel counts
+with a Python script over the TGA screenshots): three runs of one script
+with `fixedtime 16` set at startup (every frame advances the clock 16 ms
+and `wait` counts those, so the screenshot falls on the same frame) and a
+`screenshot` at the `dm/mohdm6` spot, with the build before (origin), this
+build with `r_smp 0` and with `r_smp 1`: 167 and 248 of 3,686,400 pixels
+differ, all of them digits of the `fps` counter. Before the rule that the
+list's own commands end the open 2D batch (see Implementation notes,
+Render thread), `r_smp 1` differed in 8,039 pixels: the HUD's windows
+(`Set2DWindow`) applied to the batch of the widget before, texts over each
+other, the compass turned. Stress, every run with a clean exit and no
+error in the log: `r_smp` switched on and off with `vid_restart` (the
+thread started three times), windowed and fullscreen, a map change in the
+thread's mode, `r_measureOverdraw`, the console and a menu, `give all`
+(models and textures registered in a match), `r_showImages`, `r_speeds`,
+a cinematic (`EAlogo.RoQ`) with screenshots before and after it, TGA and
+JPEG screenshots. The Khronos validation layer is not installed on that
+machine, so these runs were without it.
+
+Bindless textures (2026-10-31, see Performance, Each stage cheaper), the
+same way: the spot's fixed-time screenshot with `r_vkBindless` 0 and 1
+and with the build before (the arrays glslc made) differs in the `fps`
+digits only; in third person and with the temporal path on, 0 against 1
+differs as two runs of 1 do. Stress with a clean exit and no error in
+the log: `give all`, `r_textureMode` changed twice, a cinematic,
+windowed and fullscreen, a map change, `r_vkBindless` off and on with
+`vid_restart`.
+
 ### Performance
 
 `tools/perf.py` measures views with several builds of the renderer (see its
@@ -3232,6 +3421,13 @@ frame, in microseconds:
 | `skin_uploads skin_bytes` | skin data of skeletal models added in the frame (`vk_add_skin_data` calls and bytes; GPU skinning, see Implementation notes, Skeletal models) |
 | `thread_wait thread_start thread_submit thread_acquire thread_present` | `r_vkSubmitThread 1`: the main thread's waits for the submit thread in the frame, and the thread's times for the frame (from its hand-off to the thread starting it, in `vkQueueSubmit`, `vkAcquireNextImageKHR`, the acquire of the next frame's image included, and `vkQueuePresentKHR`; `present_at` is then the thread's present). The columns `submit`, `acquire`, `acquire_ahead` and `present` are the main thread's |
 
+With `r_smp 1` the back end runs on the render thread: `2d` and `end` are
+then the main thread's hand-offs to it and waits for it, and the back
+end's counters and times (`fence`, `flush`, `submit`, `acquire`,
+`acquire_ahead`, `present`, the draws, passes and bytes) are the thread's,
+counted in the frame whose `EndFrame` saw them, usually the frame after;
+`gpu` is matched by the frame's serial as before.
+
 `tools/framelog.py file` prints the distributions and the causes of the
 slow frames (below). The log changes nothing of what the frames do or
 draw (the same submissions, presents and acquires, in the same order) and
@@ -3518,8 +3714,8 @@ made it up to 0.03 ms longer at 144. The polling costs no measurable GPU
 time on this APU, whose CPU and GPU share a power budget: at 3840x2160 and cap 144 the
 GPU's main pass took 2.17 to 2.20 ms per frame with it, 2.16 to 2.18 with
 the old limiter and 2.00 to 2.23 with 30 µs sleeps (input to present
-0.652, 0.676 and 0.686 ms). On Windows (untested: the CI builds it, this
-machine can't run it) a sleep lasts whole timer ticks, 1 ms at best
+0.652, 0.676 and 0.686 ms). On Windows a sleep lasts whole timer ticks,
+1 ms at best
 (`Sys_PlatformInit` asks for 1 ms with `timeBeginPeriod`), so the wait
 sleeps whole milliseconds while more than 2 ms remain and polls the rest;
 `Sys_Microseconds` takes the whole seconds and the rest of
@@ -3760,6 +3956,153 @@ first results, in ms; CPU of the game process):
   `menus.txt` and `mp_mohdm1` with Vulkan and `dm/mohdm1` with GL1 (66
   comparisons). A dedicated server runs 20.00 and 40.00 frames a second at
   `sv_fps` 20 and 40 as with 413c50d1 (its wait doesn't use the tick).
+
+No catch-up, and the presents held apart (2026-11-02; `Com_Frame`,
+`Com_FrameWait`, `Com_PresentGate` and `Com_PresentMark` in
+`code/qcommon/common.c`, `Sys_Nanoseconds` and `Sys_SleepNs` in
+`code/sys/sys_unix.c` and `code/sys/sys_win32.c`, the renderer's part in
+`tr_cmds.c`, `tr_backend.c`, `vk.c` and `vk_submit.c`; REF_API_VERSION
+16): the deadline advanced by exactly one period from the previous
+deadline, so a frame late by less than a period (its work ran longer, a
+late wake-up) was made up by the next one, which started that much less
+than a period after it, a moment above the cap. And the frame starts
+alone, however evenly paced, don't pace the presents: a present comes a
+frame's work after its start, and a frame whose work was shorter than the
+previous frame's presented early by the difference, the frame after a
+long one by most of a period. At a cap of 500 the presents came 1834 to
+2400 µs apart, 44 % of them less than the 2000 of the period; on a VRR
+display at the cap that is a frame before the display can take it, and
+the `fps` counter, 16 frames of the main thread's, read 500.7 at times.
+The owner's order: no overshoot first, then latency, then stability, then
+the rate.
+
+Now a frame starts one period after the previous frame's start, never
+sooner (the time the wait saw its own deadline passed: a late frame moves
+every frame after it by as much, nothing catches up), and its present is
+held: the renderer takes a token for the frame at its end
+(`ri.FrameToken`, the frame's number, carried in the swap command to
+whichever thread presents) and, before presenting it, calls
+`ri.PresentGate`, which spins until one period after the previous
+present, outside the submit thread's queue lock (the main thread's
+submissions take it too), then `ri.PresentMark` right before the call,
+inside the lock: the present's moment, which the next gate counts from.
+No two presents are closer than the period, whatever the frames' work did
+and whatever delayed the call after the gate. The `fps` counter counts the
+marks (16 of them): it can't read above the cap. To keep the hold from
+costing latency, the gate measures each frame's work (its start to its
+arrival at the gate) and keeps the 90th percentile of the last 64 as the
+lead, and `Com_Frame` starts a frame no earlier than the lead before the
+gate of its own present (the previous present plus the period; the thread
+that presents may not have presented the previous frame yet, then the one
+before plus two): a frame after a long one isn't started at once to then
+wait at the gate for most of a period, and the time from input to present
+is the lead, or the work when that is longer. The work beyond the lead,
+one frame in ten, moves the schedule by its excess: the rate stays a
+little under the cap, and that is what the cap's rate loses, besides how
+late the wait sees each deadline (tens of ns: the last 50 µs of a wait,
+`COM_SPIN_NS`, are spun on the clock alone, where the `select` per
+iteration of the old polling, kept until then and once a frame at least,
+saw it 1 to 2 µs late) and the frames whose work runs past the period.
+
+Deadlines are in nanoseconds (`Sys_Nanoseconds`: `clock_gettime`,
+`QueryPerformanceCounter` with the seconds apart), so caps that don't
+divide a million (9000: 111.11 µs) are exact too. Whole-millisecond
+periods (125, 250, 500, 1000) no longer start their frames on the
+millisecond tick (the tick grid and a continuous chain of presents can't
+agree: the latency would ratchet up by whole milliseconds), but they keep
+every frame the same whole milliseconds of game time: a start within
+`COM_TICK_GUARD_NS` (50 µs) before a tick of `Sys_Milliseconds`, where
+`com_frameTime`'s read 7 to 14 µs later would fall in the next
+millisecond (3 and 5 ms frames instead of 4 at 250, see above), moves to
+the tick; the wait's spinning notes when the clock ticks, and the starts
+only ever drift forward, so this happens once per millisecond of drift.
+The sleep's margin (`pollNs`, 1 ms) grows by what a sleep woke up late by
+plus 0.25 ms, to 4 ms at most, and shrinks back by a millisecond a
+minute, so that a machine whose sleeps end later than this one's still
+starts its frames on time. On Windows the wait sleeps the whole
+milliseconds but two in `select` (packets wake it; it ends on a tick of
+the system timer, up to 1 ms late), the rest to the margin in a waitable
+timer (`Sys_SleepNs`: `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`, Windows 10
+1803 and later, which fires when due) and spins 1 ms instead of 2 (not
+run on Windows: `WINDOWS_TESTING.md`).
+
+Results (2026-11-02, a Ryzen 7 9800X3D with an NVIDIA GPU under niri;
+`perf.py obj/obj_team2 1744 2832 68 0 315 0 --caps ... --seconds 6
+--sizes 1280x720 --preload libinlat.so --framelog DIR -- +set r_smp 0 +set
+r_vkSubmitThread 1`: the yard in a 1280x720 window, the submit thread
+presenting; the intervals between `libinlat.so`'s present calls, which
+come right after the mark; "early": presents more than 5 µs less than the
+period after the previous one, over the runs; three builds: "old", the
+limiter of 2026-10-17; "starts", the first change of this day, the frame
+starts paced one period apart with no catch-up and nothing at the
+present; "gate", this one. The old and starts rows are 2 runs of 8 s
+(237 and 0: 1 run of 5 s), the gate rows 2 runs of 6 s in a later batch;
+a batch lands in a faster or slower state of the machine (uncapped 14266
+to 13338 frames a second here), so the rates and latencies of different
+batches aren't comparable, the present intervals are):
+
+| `com_maxfps` | build | presents a second | present interval (µs): min, p0.1, p50, p99.9, max, sd | early |
+| --- | --- | --- | --- | --- |
+| 144 | old | 143.99 | 6742, 6783, 6944, 7159, 7264, 42.0 | 1007 of 2384 |
+| 144 | starts | 144.00 | 6753, 6786, 6944, 7124, 7177, 43.0 | 1061 of 2384 |
+| 144 | gate | 143.92 | 6944, 6944, 6945, 7272, 7447, 20.7 | 0 of 1564 |
+| 237 | old | 236.97 | 4034, 4062, 4219, 4416, 4433, 40.3 | 532 of 1218 |
+| 237 | starts | 237.00 | 4088, 4094, 4218, 4358, 4371, 39.6 | 544 of 1218 |
+| 237 | gate | 236.83 | 4219, 4219, 4220, 4345, 4755, 14.8 | 0 of 2266 |
+| 500 | old | 500.00 | 1870, 1888, 1999, 2115, 2155, 35.5 | 2973 of 6828 |
+| 500 | starts | 500.00 | 1834, 1874, 1999, 2128, 2402, 36.2 | 2965 of 6828 |
+| 500 | gate | 499.45 | 2000, 2000, 2000, 2090, 2104, 8.6 | 0 of 4254 |
+| 1000 | old | 1000.00 | 886, 906, 999, 1103, 1132, 23.2 | 4922 of 13068 |
+| 1000 | starts | 999.99 | 890, 906, 999, 1110, 1150, 22.4 | 4777 of 13068 |
+| 1000 | gate | 996.74 | 998, 1000, 1000, 1113, 2843, 21.4 | 0 of 8034 |
+| 8000 | old | 7940 | 42, 56, 124, 322, 1859, 28.7 | 35051 of 100428 |
+| 8000 | starts | 7852 | 40, 65, 125, 332, 1763, 27.6 | 33248 of 100428 |
+| 8000 | gate | 7653 | 123, 125, 125, 358, 1863, 28.8 | 0 of 60954 |
+| 0 | old | 14252 | 20, 22, 62, 308, 1771, 41.0 | |
+| 0 | starts | 13753 | 23, 26, 62, 336, 398, 35.2 | |
+| 0 | gate | 13338 | 28, 30, 62, 376, 1514, 41.8 | |
+
+The cost, from runs of the starts build (with its renderer of REF_API_VERSION
+15 under another name) and this one alternated, 3 runs of 6 s each
+(`libinlat.so`'s input read to its present call; CPU: the game process):
+
+| `com_maxfps` | build | frames a second | input to present (µs): median, p99 | present interval (µs): min | early | CPU |
+| --- | --- | --- | --- | --- | --- | --- |
+| 237 | starts | 237.00 | 140, 250 | 4074 | 1529 of 3399 | 0.27 |
+| 237 | gate | 236.85 | 182, 260 | 4219 | 0 | 0.27 |
+| 500 | starts | 499.99 | 124, 216 | 1651 | 2871 of 6381 | 0.56 |
+| 500 | gate | 499.37 | 165, 234 | 1999 | 0 | 0.55 |
+| 8000 | starts | 7738 | 67, 176 | 39 | 32074 of 91431 | 0.95 |
+| 8000 | gate | 7658 | 83, 172 | 124 | 0 | 0.95 |
+
+- No present comes early now: the shortest intervals are the period
+  (6944 at 144 for 6944.4, 4219 at 237 for 4219.4, 2000 at 500, 123 to
+  125 at 8000, where 3 of 6381 at 500 and 17 of 91431 at 8000 were 1 to 2
+  µs short: the present call's own timestamp comes after the mark, and a
+  preemption in between shows there). With the starts alone, 44 % of the
+  presents came early, by up to 145 µs at 237 (a 240 Hz VRR display can't
+  take a frame before 4167) and 349 µs at 500; the old limiter the same,
+  plus its catch-up. With the main thread presenting (`r_vkSubmitThread
+  0`, 1 run each) the same: 4219 at 237, 1999 at 500 (2 of 2127 a
+  microsecond short), 119 at 8000 (1 of 30477 six short).
+- The cost is latency: the median time from input to present is the lead,
+  41 to 42 µs over the starts' at 237 and 500 (182 and 165 against 140
+  and 124; the 99th percentiles about the same), 16 at 8000, and the rate
+  sits a little under the cap: 499.4 at 500, 236.85 at 237, 7658 at 8000
+  against 7738 (the work beyond the lead, one frame in ten, moves the
+  schedule by its excess; the lead's percentile, `sorted[n * 9 / 10]` in
+  `Com_PresentGate`, is the knob: a lower one trades rate for latency).
+  CPU the same.
+- The present-to-present jitter that remains is the work's long tail, now
+  only on the long side (p99.9 at 500 2090 for the starts' 2128), and the
+  `fps` counter, counting the marks, reads at or under the cap.
+- Uncapped nothing changed: the gate records and counts, the starts
+  aren't held (the batches' 14252, 13753 and 13338 are the machine's
+  states, interleaved runs of the starts build and the old one gave 14157
+  against 13889).
+- A dedicated server runs 20.00 frames a second at `sv_fps` 20
+  (intervals 50.0 to 50.1 ms); the whole-millisecond game time of the
+  caps that divide 1000 was reasoned (above), not re-measured.
 
 Present timing (2026-10-17): everything measured above ends at the
 present call. What happens after it, until the frame is on the screen,
@@ -6575,6 +6918,239 @@ build; the content ones, which leave most of that out, are 1.734 to
 1.761): the 1.5 to 2 µs a frame of the parts are too small to show in
 frame times on this machine.
 
+Render thread (2026-10-31, Plan 50; see Implementation notes, Render
+thread). The user's Windows 11 and Fedora (Niri) on one machine (9800X3D,
+RTX 4070 Ti, 2560x1440 fullscreen immediate) ran the `dm/mohdm6` spot
+`tele 667.30 -305.26 -27.29; face 4.60 -140.29 0` at 6,000 against 12,500
+frames a second. Measured on Windows with the frame log and a sampling
+profiler, a frame took 155 to 160 µs on the one thread: cgame 47, the
+front end 9, the engine 8, the back end's recording 41 (19 of them in the
+driver's `vkCmd*`), `vkQueueSubmit` 12 and `vkQueuePresentKHR` 31. The
+driver and the kernel take about 60 µs a frame where Linux takes 25, and
+every API (Vulkan, Direct3D 11 and OpenGL test programs alike) saturates
+one core with the flip interrupts at 7,000 to 9,000 presents a second.
+Nothing on the application's side lowers the present's cost; measured and
+dropped: present fences off, fence-paced and `present_wait`-paced
+presents, mailbox and `FIFO_LATEST_READY`, a second present queue, a
+deeper swapchain, exclusive fullscreen, DXGI's flip model through Vulkan
+interop (3,130 frames a second: the cross-API fence), clang-cl, process
+and thread priorities and affinities, and three frames in flight (a frame
+more queued, see the submit thread above). The lever left is the split:
+the front end (65 µs) and the back end (85) on two threads, the frame as
+long as the longer plus the hand-off.
+
+Measured at the spot (`bench.sh`: 10 s of the frame log, one run each
+with the final build; three earlier pairs during the work were within 3 %
+of these), frames a second; frame time 99th and 99.9th percentiles, ms:
+
+| | `r_smp 0` | `r_smp 1` |
+| --- | --- | --- |
+| plain (the user's 2560x1440, no temporal effects) | 5,977; 0.225, 0.310 | 10,664; 0.178, 0.231 |
+| temporal (`r_taa`, `r_ao`, `r_motionBlur`) and HDR10 output (`r_hdrPeak 328`) | 984; 1.111, 1.151 | 984; 1.143, 1.197 |
+| vsync (`r_swapInterval 1`, 280 Hz) | 280; 4.198, 6.536 | 280; 6.107, 6.649 |
+
+The plain frame is 94 µs: the back end's 85 and about 9 of the hand-off
+(the front end waits for the thread to finish the frame before, then
+wakes it; no spinning, the waits are condition variables). The temporal
+frame is the GPU's (1 ms, with the HDR10 present's stall), so the thread
+changes nothing there; with vsync the input is read after the thread's
+present (see Implementation notes), the frames pace the same (median
+3.566 ms both) and one run of two had more frames of two refreshes (the
+99th percentile). What remains of the gap is the GPU's share of the frame
+and cgame's 47 µs (see Plan 50).
+
+Each stage cheaper (2026-10-31, Plan 51; after the render thread). With
+the thread the frame is the longer half's: at the spot the front end
+(cgame 45.6, the front end 9.5, the engine 6.6, the 2D exports 2.4 µs)
+waits 29 µs for the back end (the thread's 85: the driver's recording
+about 18, the present and the submission about 30, the renderer's own
+recording about 12, the hand-off and waits the rest). So:
+
+- cgame: the precise shadows (`cg_shadows 2`, the user's setting) traced
+  from each foot to each light every client frame and gathered the lights
+  every frame (`R_GatherLightSources`, a sun trace in it). Both are kept
+  per player for the server frame (`cg.footShadows`, `cg_modelanim.c`):
+  the lights while the origin is the same, a foot's trace while the foot
+  is within a unit of where it was and the light the same; the right
+  foot's shadow takes the intensity the left one's scaled, as before.
+  cgame's time a frame 45.6 to 28.6 µs; the fixed-time screenshot of the
+  spot the same but the `fps` digits. The frame rate didn't move (10,664
+  to 10,646): the front end now waits 44 µs for the thread instead of
+  29. The UI's `MenuManager::FindMenu` (two lookups a frame from
+  `UI_Update`, a case-insensitive compare against every menu's name) keeps
+  what it found in a 64-entry table dropped when a menu is added or
+  deleted; too small to measure apart.
+- the back end's commands a frame at the spot, from `vkinfo`'s new
+  counters: 89 draws (65 from the static geometry, 5 of them effects
+  draws), 31 pipeline binds, 67 descriptor set binds, 60 vertex buffer
+  binds, 82 index buffer binds, 60 push constant calls, 32 dynamic state
+  calls: about 420 `vkCmd*` calls. The index binds were one per draw
+  whose indexes are copied into the frame's vertex buffer (the world's
+  merged ranges, the 2D draws, the marks): they are bound once at the
+  buffer's start and drawn with `firstIndex` (`VK_FrameIndexes`): 82 to
+  14 a frame (the two buffers, the static index stream and the frame's,
+  still alternate). A texture unit the draw doesn't use keeps the set
+  bound before (any texture's set is valid there, the specialized shader
+  reads nothing from it): 69 to 67. The depth bias values are set when
+  they change, not on and off at every shader with polygon offset: 32 to
+  31 dynamic state calls; the rest are the viewport, scissor and stencil
+  changes of the views. Frame rate 10,648 to 10,910 in four runs, within
+  the runs' spread of the build before; the same frames to the bit.
+- bindless textures (`r_vkBindless`, see Implementation notes, Bindless
+  textures): the 67 descriptor set binds a frame become 2 (the texture
+  set and the dlight set, once per command buffer), and the draws carry
+  their slots in `firstInstance`, which costs no call. With the shaders
+  regenerated by glslang (`glslang_as_glslc.sh`; glslc isn't installed on
+  the Windows machine), bindless off against on: 10,729 against 10,948
+  frames a second, 99th percentile the same (0.178 ms); the fixed-time
+  screenshot of the spot the same but the `fps` digits with either, and
+  the same as the build before's with the old compiler's arrays. In third
+  person (the player's skinned draws) and with the temporal path on, on
+  against off differs as two runs of one setting do: the view model's idle
+  pose at the bottom rows (at most 4 levels), and the temporal history
+  (26 % of the pixels by 1 or 2 levels, the edges more). Stress with a
+  clean exit and no error: `give all`, `r_textureMode` changed, a
+  cinematic, windowed and fullscreen, a map change, bindless switched off
+  and on with `vid_restart`.
+- the static draws' matrices in a buffer, and indirect draws: measured and
+  dropped. A record per static draw in the frame data (the words of the
+  vertex stage push constants and the texture slots, 128 or 256 bytes,
+  named by `firstInstance` with its top bit, shared by the draws with the
+  same constants; `generic.vert` read it in place of the push constants)
+  took the push constant calls from 60 to 27 a frame, 56 records written,
+  and the frame rate from 11,234 to 10,948 and 10,710 in two pairs: the
+  record's computing, comparing and writing costs more than the pushes it
+  replaces (a push is a copy into the command buffer). What a draw call
+  itself costs the recording: four extra one-triangle draws after each
+  static draw (260 a frame) took the frame from 89 and 91 to 97 and 95
+  µs, about 25 ns a call, so the 65 static draws cost 1.6 µs and
+  `vkCmdDrawIndexedIndirect` over them could save at most that, under 2 %
+  of the frame, for a buffer of per-draw data the records just showed
+  costs more than it saves. Neither was kept. Where the render thread's
+  time goes, from the sampled profile (inclusive): `vk_end_frame` 43 %
+  (`vkQueueSubmit` and `vkQueuePresentKHR`: the submission, signal and
+  present calls into `win32u`, the driver's present), `RB_RenderDrawSurfList`
+  40 % (of it the driver's work under `vk_draw` about 11 %, under the
+  render pass begin, clears, barriers and binds 5 %, the renderer's own
+  tessellation, stage iteration and batching the rest), the 2D draws 5 %,
+  the wait for the next list 7 %. So the back end's floor is the present
+  and submission (about 40 µs) plus what the renderer's own recording
+  code can lose: a frame rate near 12,000 at the spot, not the 17,000 the
+  call count had suggested.
+- the opaque shaders in the order of their pipelines (`r_sortPipelines`,
+  `R_ShaderPipelineClass` in `tr_shader.c`, `SortNewShader`): the sort
+  key of a draw surface orders by the shader's sort class, then its index
+  in `tr.sortedShaders`, which was the order the shaders were loaded in;
+  now, within the opaque class only, by a hash of what decides a shader's
+  pipelines (its stages' state bits, color generators, texture formats
+  and environments, the cull mode, polygon offset, deforms), then the
+  load order. Pipeline binds a frame at the spot 30.9 to 25.6 (the rest
+  are the stage changes within shaders, the decals and blends, the 2D
+  draws and the view's clears), frames a second 10,891 to 11,160 and
+  11,168 to 11,475 in two interleaved pairs. The draw order of opaque
+  surfaces changes, so where two have the same depth at a pixel the
+  other one wins: of the 10 views of `mohdm6.txt` and `mohdm1.txt`
+  (fixed-time screenshots, the flickering ones, `d6_roofs` and `m1_sky`,
+  compared against a second run of the same setting), `d6_room` differs
+  in a 33 x 50 pixel patch on a wall (535 pixels, at most 28 levels) and
+  `m1_top` in 37 pixels; the other eight are identical.
+- the renderer's own recording time, from the thread's profile on this
+  build: `RB_RenderDrawSurfList` 2.7 % (about 5 ns a draw surface),
+  `RB_StaticMesh` 2.6 %, `R_Bind` 1.0 %, `vk_draw` 0.8 %,
+  `VK_BuildPipelineKey` and `VK_MultiplyMVP` 0.6 % each, then two dozen
+  functions below 0.6 %: about 15 % of the frame spread over per-surface
+  work that is already a few tens of nanoseconds a call. Nothing of it is
+  a single lever; what would move it is fewer surfaces and draws to walk
+  (the front end merging more of the world per shader), which is a
+  change of the static geometry's batching, not of the recording.
+
+Less GPU wait (2026-11-02, Plan 53; the user's request after a review of
+where the CPU waits for the GPU and the GPU for the CPU). Measured on the
+user's 9800X3D and RTX 4070 Ti, Fedora with niri, at the `dm/mohdm6` spot
+`633.43 -364.36 -58.43`, `5.89 -140.87 0`, 2560x1440 in a window (one group
+also 1280x720), `r_smp 1`, mailbox, `cg_shadows 1`; the game held to 4
+cores (systemd `CPUQuota=400%`); 5 runs of 5 s a variant, interleaved,
+medians (lowest to highest); frame rates and frame times from
+renderer_timed.so (the same for both builds), latencies from `r_vkLatency
+1` (this build only). `before` is the build before this plan (the merge of
+`vulkan` with the working tree); the other variants are this build with a
+cvar.
+
+The render thread submits, the submit thread presents (`r_temporal 0`):
+
+| variant | fps 2560x1440 | p99.9 ms | input to GPU done p50, p99 ms | fps 1280x720 | input to GPU done p50 ms |
+| --- | --- | --- | --- | --- | --- |
+| before, `r_vkSubmitThread 1` | 10,204 (9,970 to 10,299) | 0.418 | - | 14,045 | - |
+| `r_vkSubmitThread 3` (handed over whole) | 10,060 | 0.435 | 0.314, 0.723 | 13,680 | 0.197 |
+| `r_vkSubmitThread 1` | 11,696 (11,682 to 11,848) | 0.352 | 0.254, 0.557 | 17,391 | 0.158 |
+| `r_vkSubmitThread 0` | 11,765 | 0.384 | 0.180, 0.488 | 10,941 | 0.125 |
+
+At 2560x1440 the submit thread now runs as fast as no thread, with 0.07 ms
+more input to GPU done; at 1280x720 it is 59 % faster. The GPU frame went
+from 0.056 to 0.045 ms (the frames drawn offscreen and copied are gone).
+
+The wait for the GPU before the input (both threads; measured with a
+setting since removed, 0 never waiting, 1 the rule that is always on now):
+
+| scene | variant | fps | p99.9 ms | input to GPU done p50, p99 ms | wait before the input ms a frame |
+| --- | --- | --- | --- | --- | --- |
+| TAA, AO, motion blur (GPU 0.70 ms) | before | 1,337 | 1.268 | - | - |
+| | 0 | 1,361 | 1.440 | 2.496, 3.039 | 0 |
+| | 1 | 1,345 | 1.337 | 1.363, 2.246 | 0.703 |
+| temporal path without them (GPU 0.128 ms) | 0 | 5,669 | 0.539 | 0.580, 1.029 | 0 |
+| | 1 | 5,672 | 0.667 | 0.297, 0.696 | 0.149 |
+
+The frame rate stays; input to GPU done drops by 1.1 ms where the GPU
+limits, by half in the second scene (where the frame times' tail grows a
+little: p99 0.376 to 0.409 ms). With `r_temporal 0` (the CPU limits) it
+never waits.
+
+Vsync (FIFO, 280 Hz): without and with the wait for the present (a setting
+since removed), with the submit thread and without; 280 and 279 frames a
+second in all four; input to shown p50
+14.42 and 7.27 ms (p99 14.55 and 7.46) with the thread, 14.42 and 7.26
+without: two refreshes less either way (NVIDIA's Wayland FIFO holds more
+frames than the swapchain's images suggest). Its cost was the pacing's
+retries of one queued during play (niri shows such frames a refresh
+later): 8 frames at half the rate each, the frame time's p99.9 7.0 ms
+against 3.9 before (p99 3.84 against 3.67); it now tries once, 120 frames
+after the swapchain is made: one run at 144 Hz (the window on the other
+display) after that change, p99 7.35 and p99.9 8.63 ms for a 6.95 ms
+refresh, no frame of two refreshes. The shown times are seen up to a
+refresh late in both modes alike.
+
+The 3D view submitted before the HUD (built and removed; off, when the GPU
+was idle and its last frame at least 150 us, every frame): with
+`r_temporal 0` 11,765, 11,792 and 9,940 frames a second, input to GPU done
+p50 0.255, 0.255 and 0.311 ms; the temporal path without TAA, AO and motion
+blur 5,685, 5,698 and 5,219, 0.297, 0.296 and 0.327 ms. The second mode
+never submitted early in either; submitting early costs frame rate and
+latency both (a `vkQueueSubmit` costs the render thread about 15 us here),
+so it was taken out.
+
+The main menu (no 3D view, the GPU 0.098 ms a frame): 7,003 frames a
+second before, 7,008 after; p99 0.337 and 0.360 ms. No gain here: the frame
+waited for at the swap was done by then; a GPU slower than the CPU in the
+menus would gain.
+
+`r_measureOverdraw 1` (`r_stencilbits 8`): 747 to 1,118 frames a second
+(+50 %), the GPU frame 1.266 to 0.280 ms (no wait in the middle of it).
+Screenshots (a TGA every 500 ms, 10 a run): 9,940 to 11,468 frames a second
+(the submission change). With the readbacks written on the main thread the
+frames that wrote them stayed slow: the 10 slowest 5.03 ms on average
+before and 5.22 after, the slowest 5.45 and 8.74 ms; the GPU wait was the
+small part, converting and writing the 11 MB file the large one. With the
+writer thread (one run): the 10 slowest 1.50 ms, the slowest 2.18 (the
+file's open and close left on the main thread).
+
+Synchronization validation clean with the render thread, the submit
+thread, both and neither, vsync, the temporal path, the early submission
+(before it was removed) and the readback writer (TGA, JPEG, PNG, a
+levelshot, a resampled shot, the overdraw). With `r_smp 0` and bindless textures (`r_vkBindless 1`) a map load
+reports 84 messages (a descriptor set updated while a command buffer that
+binds it records): the same before this plan and before the merge
+(783b7414), none with `r_vkBindless 0`; not fixed here.
+
 ### Coordinate conventions
 
 - Projection matrices are OpenGL ones (column-major, clip z in [-w, w], y up).
@@ -6765,14 +7341,41 @@ in the fog-colored background of `m2l3`).
   Mesa); the "Wrote" centerprint of the `screenshot` command is run once
   the file is written, so it isn't in the picture. With `pause` (see
   Deterministic 3D views) both show the same frame.
-- `vk_finish` is called at swap for frames with no 3D view (menus) and around
-  cinematics, as `glFinish` was. It waits for the fence of the last
-  submission; what the current frame recorded is submitted at
-  `vk_end_frame`.
+- `vk_finish` is called around cinematics, as `glFinish` was, and with
+  `r_finish 1` once a frame. GL1 also called it at the swap of every frame
+  without a 3D view (menus, loading screens, the console); since Plan 53 it
+  doesn't: the frame slots' fences bound the frames queued already (2 in
+  flight). It waits for the fence of the last submission; what the current
+  frame recorded is submitted at `vk_end_frame`.
 - `vk_read_pixels` must see everything recorded so far in the frame and the
-  frame must continue afterwards (screenshots, AVI capture,
-  `r_measureOverdraw`). It waits for the GPU, which is acceptable for these
-  occasional reads. Depth and stencil read as 0 until the depth image is
+  frame must continue afterwards. It waits for the GPU. The screenshots,
+  the AVI capture's frames and `r_measureOverdraw`'s stencil don't use it
+  since Plan 53: the back end records the same copy at the end of the frame
+  into a buffer of a pool of 8 (`vk_read_pixels_async`, with the caller's
+  data: the shot's file name and message, the video frame's size), the copy
+  is done once the frame's fence has been waited for (the slot used again,
+  a flush, `vk_finish`), and the main thread takes the readbacks in the
+  order they were recorded at the start of its next frames
+  (`R_ProcessReadbacks`, `RE_BeginFrame`) and hands them to a writer thread
+  (`R_ReadbackWriterMain`, tr_init.c), which converts, gamma corrects,
+  encodes and writes a shot (about 5 ms for a 2560x1440 TGA), sums the
+  stencil and encodes a video frame, with malloc only (libjpeg's and stb's
+  too) and `ri.FS_Write` on the file the main thread opened; the main
+  thread closes the file and runs the shot's message, passes the video
+  frame or adds the sum when it collects the job, in order, and only then
+  frees the readback (`vk_readback_next` marks the ones it took). Nothing
+  waits for the GPU, and the main thread only opens and closes files.
+  `RE_Shutdown` writes what is in flight first and stops the writer
+  (`R_FlushReadbacks`). With
+  the render thread the front end no longer waits for the thread after a
+  list with a screenshot, a video frame or the overdraw readback
+  (`syncAfterIssue`), and a screenshot command holds its file name and
+  message itself (the static buffers it pointed to could change while the
+  thread ran it). A request with 8 in flight is dropped and counted (a
+  warning on the main thread). The video frames recorded before
+  `stopvideo` are lost (the engine closes the file at once); OpenMoHAA's
+  `CL_OpenAVIForWriting` returns false anyway (`Removed in OPM`), so no
+  video is written by either renderer. Depth and stencil read as 0 until the depth image is
   readable: without multisampling it only is from the start of the frame
   after a depth or stencil read, or after `vk_want_depth_reads` (called
   before the frame starts, it makes that frame's reads work;
@@ -7040,7 +7643,11 @@ selects the sample count (see Implementation notes).
   GL back buffer (see Frames and synchronisation). Otherwise (a window
   resized before its `vid_restart`, no usable swapchain) the frame is drawn
   into an offscreen color image of that format, blitted (scaled) to the
-  swapchain image at present; frames that drew nothing present nothing. The
+  swapchain image at present (with HDR output always, through the output
+  pass); frames that drew nothing present nothing. The frame's commands
+  and the copy go in one `vkQueueSubmit` of two batches, only the copy
+  waiting for the acquired image (`VK_Present`, as the submit thread's
+  `VK_ThreadCopyAndPresent`; two submissions until 2026-11-02). The
   depth/stencil image is always offscreen. Its format is the first of
   `D24_UNORM_S8_UINT`, `D32_SFLOAT_S8_UINT` and `D16_UNORM_S8_UINT` the
   device supports, or without a stencil buffer (`r_stencilbits` 0, the
@@ -7149,6 +7756,25 @@ selects the sample count (see Implementation notes).
   (`vkReleaseSwapchainImagesKHR`), so a retired swapchain can free it. The
   acquire stays right after the present, and present fences add no wait
   (see Presentation semaphores and swapchains).
+  With FIFO and `VK_KHR_present_id`/`VK_KHR_present_wait` (Plan 53) every
+  present gets an id (`VK_ChainPresentId`), and
+  right after it the thread that presents waits until the frames queued
+  for the display are down to `vk.pacing.depth` (`VK_WaitForPresentShown`,
+  at most 100 ms: a hidden window's frames may never be shown), before the
+  acquire and the next frame's input: without it the acquire blocks only
+  once the swapchain's images are all queued (2 or 3 frames ahead of the
+  display). One queued (this present shown) is the least lag but needs the
+  compositor to show a frame presented after the one before at the next
+  refresh; niri at 280 Hz doesn't (141 frames a second instead of 280). So
+  the pacing starts each swapchain with two queued, learns the interval
+  between frames shown, tries one queued once, 120 frames after the
+  swapchain was made (at startup: the menu), and goes back to two for the
+  rest of the swapchain when 4 of 8 frames take more than 1.5 intervals.
+  It doesn't try again: retries during play (after 10, 20 and 40 s at
+  first) were 8 frames at half the rate each, a stutter (frame time p99.9
+  7.0 ms against 3.9 at 280 Hz). `vkinfo` prints the state (`vsync
+  pacing`). No setting: whether one or two are queued is learned. libinlat.so uses the
+  game's present ids when it enabled `VK_KHR_present_id` itself.
 - **Submit thread** (`vk_submit.c`, `r_vkSubmitThread 1`, latched; off by
   default, see Performance, Submit thread). The main thread records a frame
   as without it; at `vk_end_frame` it ends the frame's command buffers,
@@ -7213,6 +7839,143 @@ selects the sample count (see Implementation notes).
   - With `r_vkSubmitThread 0` the frames go the way they went before (the
     same code: acquire after the present on the main thread, 2 frames in
     flight, the surface's minimum + 1 images).
+  - With the render thread (Plan 53, `VK_SubmitOnRenderThread`): the frames
+    the render thread ends are submitted there, and the thread only
+    presents them (`VK_QueuePresentJob`), then acquires the next frame's
+    image as after any present. Before, the thread presented frame N - 1
+    (about 50 us in NVIDIA's present) before it submitted frame N, so the
+    GPU started each frame late, and the render thread often reached the
+    next frame's first render pass before the thread had acquired its image
+    (the frame drawn offscreen and copied: 0.009 ms of copy a frame on
+    average at 2560x1440). The queue is shared then: `vkQueueSubmit` on the
+    render thread and the thread's presents and submissions take
+    `queueLock` (`VK_LockSubmitQueue`); the swapchain stays the thread's
+    while it has frames. A frame drawn offscreen drains the thread (its
+    present and the acquire after it), takes the image it acquired and is
+    submitted with its copy in one `vkQueueSubmit` (`VK_SubmitPresentCopy`,
+    counted in `threadCopies`). Frames ended on the main thread (loading,
+    `R_FrontEndSync`) are handed over whole as before; the render thread
+    joins those before its own submission (`VK_JoinSubmittingJobs`). The
+    end-of-frame wait for the next frame slot isn't made on the render
+    thread (the game's input isn't read after it): see Render thread.
+- **Render thread** (`tr_smp.c`, `r_smp 1`, latched, archived; on by
+  default with more than one core, see Performance, Render thread). Quake
+  3's SMP mode: `backEndData` is doubled, the front end fills one (draw
+  surfaces, entities, lights, polys, the command list) while the thread
+  runs the other's list (`RB_ExecuteRenderCommands`: the draws' recording,
+  the submission, the present). `EndFrame` hands the list over once the
+  thread is done with the frame before (`R_IssueRenderCommandsThreaded`),
+  so at most one frame is in the thread: a frame's input reaches its
+  present as before, the frames come as fast as the longer half. Since
+  Plan 53 the frame's list is handed over by `R_IssueFrameThreaded`, which
+  then waits for what the next frame's input should come after, before
+  `EndFrame` returns (the input is read at the start of `Com_Frame`, before
+  `BeginFrame`): with vsync for the thread's frame (`vk_present_waits`: its
+  present waits for the display), so the input is read after the display,
+  as without the thread (`BeginFrame` waited for it before, after the input
+  was read); without vsync, where the GPU limits (the GPU's time a frame,
+  from the timestamps, above 1.15 times the front
+  end's, from the end of that wait to the hand-over, and the render
+  thread's, its waits left out, together plus 20 us, averages), for the
+  GPU to finish the frame before the one handed over (`vk_input_wait`, the
+  fence taken while the thread is idle: the slot the frame after reuses,
+  which the thread would wait for at that frame's first command). The GPU
+  finishes each frame when it would have, so the input is read that much
+  later; where the two are even the wait would cost frame rate (the front
+  end and the thread no longer overlap) and isn't made. `vkinfo` counts the
+  waits (`inputWaits`, `inputWaitUs`). What the front end did to the back
+  end's state directly:
+  - The 2D exports (`Draw_StretchPic`, `DrawString`, `Set2DWindow`,
+    `RE_Scissor`, `DrawBox`, ... in `tr_draw.c` and `tr_font.cpp`) are
+    recorded as commands (`RC_2D_*`, `RB_2DCommand`) the thread replays
+    with the same bodies (`RB_Draw_*`), in order with the old commands, so
+    the 2D batches (`r_batch2D`) are the same. Without the thread the old
+    commands (`RE_SetColor`, `RE_StretchPic`, the scenes, the swap) only
+    ever ran with the open batch drawn first (`R_IssueRenderCommands`
+    ended it before the list), so the list's loop ends it before each of
+    them, and the bodies' `R_IssuePendingRenderCommands` does the same on
+    the thread. The floating strings add polys to the scene
+    (`RE_AddPolyToScene`): the front end's, not recorded. A font's shader
+    is loaded by the front end before its string is recorded (files, the
+    hunk), with the thread idle.
+  - `RE_SetRenderTime` is a command too (`RB_SetRenderTime`: the 2D shader
+    time, and the ghost textures' update and upload, on the thread).
+  - Anything else that touches the back end's or Vulkan's state from the
+    front end first waits for the thread to be idle (`R_FrontEndSync`:
+    `vk_finish`, the readbacks, `vk_want_depth_reads`, the terrain pool,
+    the static geometry, the skin data, texture creation, upload, deletion
+    and the filter, `RE_UploadCinematic` and `RE_StretchRaw`, the font
+    shaders, `RE_RefreshShaderNoMip`, the debug drawing through
+    `R_IssuePendingRenderCommands`), after which the front end owns the
+    back end until the next hand-over; `R_IssuePendingRenderCommands`
+    itself hands the queued list over, waits for it and draws the open
+    batch.
+  - The LOD terrain's pool (`RB_TerrainPool`) is written by the thread
+    from the scene's snapshot of the slots the tessellation changed
+    (`R_TerrainSnapshotChanges`, `terrainSlotChange_t`, 4096 a frame; more
+    changes refresh the thread's shadow of every slot with the thread
+    idle), not from `g_pVert`, which the next frame's tessellation changes
+    meanwhile; the swipes are double-buffered by `tr.smpFrame`.
+  - A list with a screenshot, a video frame or the overdraw readback is
+    waited for right after the hand-over (`syncAfterIssue`): they use the
+    engine's temporary hunk and files, which are the main thread's.
+  - The Vulkan layer's own objects (textures, destroy lists, the pipeline
+    table) are allocated with `calloc` (`VK_Alloc`): the thread makes some
+    of them, and `ri.Malloc` (`Z_TagMalloc`, a global list) is not thread
+    safe. `ri.Printf` from the thread is left as Quake 3 had it.
+  - `backEndData_t.commands` has to stay at pointer alignment
+    (`RB_ExecuteRenderCommands` pads each command to it): three ints
+    before it made the back end read a 0 (end of list) and draw nothing.
+  - The back end reads `backEnd.refdef` where it read `tr.refdef` (sky
+    alpha, `RDF_NOWORLDMODEL`, the view origin and axis, the dynamic
+    lights' count, `RDF_HUD`), `R_InitNextFrame` flips the buffers, and
+    the leftover `glConfig.smpActive` early return of `SurfIsOffscreen`
+    (Quake 3 tessellated there; this one reads the surface's points) is
+    gone, so both modes cull the same.
+  - Per-frame pools (2026-11-01). Everything the thread reads that the
+    front end makes per frame is the frame's own, in `backEndData`:
+    the static models' surfaces with their LOD (`staticSurfaceFrame_t`,
+    was the global `g_staticSurfaces`), the terrain patches with the
+    slots of their triangles (`terrainPatchFrame_t`, was a walk of
+    `g_pTris`), the skeletal models' bones and morph weights
+    (`skelBones`, `skelMorphs`, were `TIKI_Skel_Bones` and
+    `skeletorMorphCache`, which `TIKI_Reset_Caches` reset every scene: the
+    menu's player models flickered). The sky and far-clip flags that
+    decide the colour clear travel with the view (`viewParms_t`), the
+    static models' lighting reads `backEnd.refdef`.
+  - Flickering brushes (2026-11-01): `R_DrawLensFlares`, on the thread,
+    began with `R_RotateForViewer`, which zeroes and rewrites `tr.ori`
+    and `tr.viewParms.world` for the front end; `R_CullWorldFace` culls
+    every brush against `tr.ori.viewOrigin`, so while the thread drew the
+    flares the front end culled the next frame's world against a view
+    origin of 0: faces missing for a frame, the sky through them, worst
+    outside (the sky portal is a second view, with the flares again). The
+    flare code reads `backEnd.viewParms.world` and `backEnd.refdef` now.
+    A back-end function with a front-end name hid it from a search of
+    `RB_*` for the front end's view setup: search by what is written.
+    The flares' line-of-sight traces (`CM_BoxTrace`, whose check counters
+    live in the clipmap the game traces with on the main thread) moved to
+    the front end too: `R_FlareTraces` (called by `R_RenderView`) tests
+    the flares in view with the view's matrices, traces them and keeps a
+    bit per entity and dynamic light, and the sun's, in `viewParms_t`;
+    the thread's `CheckRay` returns the bit. The sun's flare is loaded
+    there as well (shaders are the front end's). Outside at mohdm6 the
+    frame rate is unchanged (5,273 against 5,268 fps).
+  - A shader made during play (an effect's first spawn, a model first
+    seen) moves the shaders above it in `tr.sortedShaders`, which the
+    sort keys name shaders by (`R_DecomposeSort`): the thread decoding
+    its frame's keys drew surfaces under the neighbouring shader for a
+    frame. `GeneratePermanentShader` waits for the thread first and
+    `FixRenderCommandList` (dead code since the command list changed)
+    fixes the frame's draw surfaces and sprites in `backEndData`.
+  - How the last two were found, since screenshots can't catch them (a
+    screenshot's list is waited for): a trace of every world draw on the
+    thread (pipeline key, textures, counts, the state struct's hash, the
+    batch's surfaces) compared with the frame before's when the view
+    stands still; a difference named the field (a batch with one more
+    face, a world batch with a model's modelview). Serialising the
+    hand-over (a test cvar that waited right after it) showed no
+    differences, so the race was in the overlap.
 - **Mid-frame flush.** `vk_read_pixels`, and uploads that don't fit in the
   staging buffer, submit what the frame recorded so far, wait for it and
   continue in the same command buffers (a new main-buffer "segment").
@@ -7284,6 +8047,34 @@ selects the sample count (see Implementation notes).
   (but the indexes of a lower level of detail of the rare surfaces whose
   collapse map the vertex shader can't follow); vertex and index buffers are
   only bound again when they or their offsets change.
+- **Bindless textures** (`vk_image.c`, `r_vkBindless`, latched, archived;
+  on by default where the device has the limits). Every frame slot has a
+  descriptor set of every texture slot (set 0 of the pipelines,
+  `VK_MAX_TEXTURES` combined image samplers, each texture's own sampler),
+  bound once per command buffer; set 1 is an empty layout. A draw names
+  its units' slots: the generic draws in `firstInstance` (unit 0 | unit 1
+  << 12, read as `gl_InstanceIndex` by the vertex shaders, which pass it
+  flat to the fragment shader at location 11), the effects draws in word
+  124 of their record (`FX_TEX_SLOTS`, `vk_bound_texture_slots`: part of
+  the record, so the record cache tells draws with other textures apart),
+  the skinned draws above `renderCount` in their draw record (patched by
+  `vk_draw`; a surface has far fewer than 65536 vertexes). The index is
+  uniform within the draw, so the shaders index the array plainly
+  (`shaderSampledImageArrayDynamicIndexing`); the fragment shader is built
+  twice (`generic_bindless_frag`, `-DBINDLESS`), the vertex shaders write
+  the slots either way. A set is written at its frame's begin, when that
+  frame is done, for the slots that changed since it was last written (a
+  pending frame's set can't be written); the frame being recorded has its
+  set written at once, so a texture made in a frame is drawn in it. A
+  free slot holds the default texture, the last slot (which the table
+  never hands out) is the default's, and a slot freed in the frame being
+  recorded isn't handed out again in it, since the frame's earlier draws
+  read it. Two edges: a texture respecified in a frame (the ghost textures)
+  shows its new contents to the frame's earlier draws too, and the
+  per-texture sets are still made (the fallback's path stays whole).
+  Without the limits, dynamic indexing or stride 0 bindings (the
+  per-instance fallback would read `firstInstance`), or with `r_vkBindless
+  0`, the sets per texture as before.
 - **Static geometry** (`tr_staticgeom.c`, `vk_set_static_geometry`). At the
   end of a map load, `R_BuildStaticGeometry` puts into one device-local
   buffer (through the staging buffer and the upload command buffer, with a
@@ -7366,7 +8157,18 @@ selects the sample count (see Implementation notes).
   record). A batch with effects is one instance (no merging: the record is
   the model's), and is only drawn from the static geometry when the frame
   data has room for the records of all its draws, else on the CPU, so
-  nothing is ever left out. Differences from JayRewd's version:
+  nothing is ever left out. Every draw of such a batch is an effects draw,
+  the stages that need nothing of it too (2026-11-05, `tess.staticFxBatch`):
+  a later stage tests its depth against an earlier one's (`depthFunc`
+  lequal or equal), and two different vertex shaders needn't round the
+  same positions the same way (GLSL's invariance holds for the same code
+  and control flow, and `effects.vert` runs the deforms' loop first). With
+  `frenchfloor_wood1`'s reflection (`tcGen environment`, effects) under its
+  wood (generic), a player's game showed the reflection over the floor in
+  patches, with streaks where they meet; a build that moves the effects
+  shader's clip positions by one rounding step made the same frames here.
+  NVIDIA, RADV and lavapipe give both shaders the same bits, so the frames
+  are unchanged. Differences from JayRewd's version:
   a stage with a constant color and `distFade` (the pulsing objective
   highlights, `rgbGen wave` with `alphaGen distFade`) got the alpha of
   whatever vertex `tess` held from an earlier batch there, it gets the
@@ -7747,6 +8549,54 @@ selects the sample count (see Implementation notes).
   included (37 of the 40 boxes a frame in matches). Its state changes are
   kept, so the draws after it see the same state; with `r_measureOverdraw`
   (its fragments counted in the stencil buffer) the box is drawn.
+- **Radar picture** (`vk_radar.c`, `shaders/radar.comp`, `radar.glsl`;
+  `RE_RegisterRadar2D` in `tr_image.c`, `RE_Radar2DHeight` in `tr_draw.c`;
+  2026-11-18, the Vulkan half of `metal-reloaded`'s 5572f254). The
+  Competitive HUD's radar (`cl_uicomp.cpp`) lists each cell's floors once a
+  map and walk (`radar2D_t`) and gives them to the renderer; the picture for
+  a storey's height is then made on the GPU, a storey's change a number.
+  The list is copied to a storage buffer through the staging buffer (the
+  UI's memory given back at once). The picture is placed as
+  `RegisterImage2D`'s would be (`R_Image2D`: a room in the 2D atlas page,
+  or a texture of its own when too big for it) and drawn from there by the
+  same 2D path, so its pixels are the UI's own picture's: radar.comp writes
+  the room buffer, the room as the page holds it (its edge texels copied
+  around it, as `R_AtlasFill`'s), and `VK_UploadTextureGPU` copies it there
+  as an upload is copied (the upload command buffer, or the main one after
+  the draws that read the old texels, ending the render pass; compute in
+  the main command buffer makes the next draws bind everything again). The
+  whole picture (a new list): a thread a room texel. A storey's change: a
+  thread a cell of those that can change (more than one floor, or a side),
+  writing only its texels that do, then the room copied whole.
+  `RE_Radar2DHeight` is queued for the render thread with `r_smp` (a
+  command of the frame's list, never of a 2D list being made), so the main
+  thread no longer waits for the render thread at a storey's change as
+  `RegisterImage2D` does. **Exact:** every operation of `RM_Paint` rounded
+  on its own as x86-64's SSE does (`precise`: no fused multiply-add, no
+  reordering), the division by 56 corrected (`RM_Div56`: the quotient's
+  last 3 bits cleared, the exact remainder's quotient added; RADV's
+  division is up to 2.5 ulp off and needs it), checked over every float
+  height distance in [60, 125] by every shade (2,315,256,064 cases: 0
+  differ on RADV and llvmpipe; RADV's plain division differs in 161
+  distances), and in the game against a C copy of `RM_Paint` after every
+  paint. The UI hands the floors over at the load's end
+  (`UI_CompHud_LoadEnd`), after the load's other pictures, so the picture
+  takes the room the UI's own one would take: in the middle of the load it
+  took another room, and the page's sampling at another place differs by a
+  grey level in a few pixels (as the cursor's 65467930 found). Measured
+  (test-only timers; a stock 1.11 match, MoH Arena's obj_team2 at timescale
+  4, 43 to 45 storey changes, 1920x1080, 2 texels a cell: a 1124x626
+  picture, 10,481 cells that can change): a storey's change took the main
+  thread 1.27 ms mean (1.13 median, 6.5 max, 55 ms over the match) with
+  `r_smp`, its wait for the render thread included, 0.71 ms without, the
+  UI's worker 1.9 ms more (the floors listed again, the picture painted),
+  the GPU 79 µs (the upload's copy); now the main thread 0.2 µs with
+  `r_smp` (a queued command), 43 µs without (18 of them the recording, the
+  rest the open 2D batch drawn there), no worker, the GPU 104 µs (the
+  dispatch and the room's copy). At 2560x1440 (3 texels a cell): 2.13 ms
+  of the main thread and 171 µs of the GPU before, 0.2 µs and 203 µs now.
+  The load's end: the floors listed on the main thread (1.3 ms) and given
+  (0.2 to 0.6 ms: the list's copy, the whole picture recorded).
 - **Crosshair** (cgame's `CG_UpdateCrosshair` and `CG_DrawCrosshair` in
   `cg_drawtools.cpp`, the renderer's `DrawBoxes` in `tr_draw.c`; 2026-10-24,
   Plan 39, as on the `metal` branch, its bccff6f9). `ui_crosshair 1` (the
@@ -7757,18 +8607,33 @@ selects the sample count (see Implementation notes).
   the trace along the view that chose between them in every frame of a
   team game, the two shader lookups of every frame, and the registration
   of both images at the load (`CG_PrecacheMatch`). `cg_crosshair_length`
-  (4), `cg_crosshair_gap` (3, from the center) and
-  `cg_crosshair_thickness` (1) are HUD pixels as the stock image was drawn
-  (16x16: white arms one pixel thick and four long, a gap of three; its
-  half-transparent black pixel at each arm's inner end is left out),
-  scaled with the height above 1920x1080 (`uiHiResScale`, rounded to whole
-  pixels), and `cg_crosshair_color` is `RRGGBB` (a leading `#` too;
+  (8), `cg_crosshair_gap` (4, from the center) and
+  `cg_crosshair_thickness` (2) are pixels at 1080 lines (CS2's default
+  crosshair without its outline: arms two pixels thick and eight long, a
+  gap of four), scaled with the screen's height as CS2 does it (rounded
+  half away from zero, at least 1 when above 0), and `cg_crosshair_color` is `RRGGBB` (a
+  leading `#` too;
   anything else is white). The layout is worked out when cgame takes the
-  renderer's configuration (a map load, `vid_restart`), so a change of
-  the cvars shows after one of those, and a frame only draws. The arms sit
-  around a center square as wide as they are thick, the same whole number
-  of pixels from it on every side (the gap less half the thickness, at
-  least 1), so the crosshair is symmetric at any size. It shows where the
+  renderer's configuration (a map load, `vid_restart`) and, since
+  2026-11-15, when a crosshair cvar changes (`CG_DrawCrosshair` compares
+  the sum of their modification counts once a frame); a frame otherwise
+  only draws. Since 2026-11-15 laid out as CS2 draws its static cross, to
+  the pixel (checked against a CS2 screenshot: 0 of 3600 pixels differ):
+  around the screen's middle pixel (width / 2, height / 2) a line t thick
+  has (t + 1) / 2 pixels before it; the gap counts from that pixel, the
+  arms ending gap pixels before it and starting gap pixels after it (a
+  pixel sooner when t is odd), so at gap 0 they meet and a negative gap
+  draws as 0. Also CS2's other settings (`cg_crosshair_alpha`, `_outline`
+  0/1/2, `_outline_color`, `_outline_alpha`, `_dot`, `_t`, length 0 for
+  no arms, out-of-range values clamped where read): the outline, always
+  one pixel, round every piece or above and left of it (CS2's half
+  outline), is a second `DrawBoxes` call before the crosshair's, only when
+  on; pieces and strips are joined into boxes that don't overlap, the
+  outline cut away under the pieces (`CG_CrosshairUnion`), so nothing
+  blends twice where they meet, as in CS2. One difference stays: CS2 blends a see-through crosshair in linear
+  light (white at alpha 230 over grey 104 gives 246, here 240); at alpha
+  255 there is none. The client's `crosshair_import`/`_export`
+  (`cl_crosshair.c`) read and write CS2's share codes. It shows where the
   stock one did (`STAT_CROSSHAIR`, not with `PMF_NO_HUD` or at the
   intermission; the stock code's zoom test drew nothing without
   `STAT_CROSSHAIR`) and leaves the 2D color white, as the stock image's
@@ -7918,7 +8783,7 @@ selects the sample count (see Implementation notes).
   constant color when `RB_StaticStageColor` can give one; the static
   geometry with the effects shader, for a stage it can draw: the shader's
   deforms, a bundle's `tcGen` or `tcMod`, `distFade`, a lit static model's
-  `rgbGen`; skinned), the
+  `rgbGen`, and every stage of a shader where one can be; skinned), the
   fog (off, or the stage's `GLS_FOG_ENABLED`, since `R_State` keeps the
   previous fog when that bit doesn't change and `Set2DWindow` turns it
   off: both, the map's fog isn't known before its first frame), dynamic
@@ -8266,7 +9131,8 @@ selects the sample count (see Implementation notes).
     the last scene's color (`color[1]`, `r_temporalShow` 5: with it the
     two color images alternate as before, the framebuffers made again),
     the motion blur's (`r_motionBlur`, `r_temporalShow` 11 and 12: 30 MB at
-    2560x1440).
+    2560x1440), the depth of field's (`r_dof`, `r_temporalShow` 13: 52 MB
+    at 2560x1440).
     At 2560x1440: the color 30 MB, the motion vectors and the normals 15
     each, the history 59, the pyramid 20, the ambient occlusion 102, the
     last color 30. At the start of a frame's scene (`vk_begin_scene`,
@@ -8358,7 +9224,13 @@ selects the sample count (see Implementation notes).
     data again when it was made without them, which the temporal shaders
     would read out of bounds). Not moved: CPU deforms, the effects
     shader's deforms, skeletal models skinned on the CPU, the terrain's
-    geomorphs. Portal views have no motion of their own.
+    geomorphs. Portal views have no motion of their own. The depth hack's
+    draws (the first-person weapon, its flash) have a projection of their
+    own when the game gives one (`refdef_t` `viewmodel_fov_x/y`,
+    `viewParms.vmProjection`, `RB_DepthHackProjection`): their last position
+    is through the last frame's of that one (`vk_set_prev_projection`,
+    `RB_TemporalPrevVmProjection`), so a weapon that moves with the camera
+    has no motion.
   - *After the scene* (`VK_TemporalResolve`): the depth pyramid
     (`R32G32_SFLOAT`, min and max view distance, level 0 half the
     framebuffer's size; the weapon and the sky at the far distance: they
@@ -8451,7 +9323,9 @@ selects the sample count (see Implementation notes).
     ladder's rung) was in it or not as the last frame's jitter had it and
     lost its history every few frames (the weapon and the sky are
     at the far distance in the pyramid, so what the weapon covered takes
-    none either). The history is read with Catmull-Rom (5 bilinear taps,
+    none either). The history is read with Catmull-Rom (5 bilinear taps; at
+    a texel's center within 1/1024, a still camera, the texel alone since
+    Plan 49: Catmull-Rom's weights are 0, 1, 0, 0 there,
     `vkt.linearSampler`), clipped in YCoCg toward the box of mean ± the
     deviation of the 3 x 3 (within their min and max), and blended with
     weights divided by 1 + luma (no flicker from bright pixels that come
@@ -8493,10 +9367,27 @@ selects the sample count (see Implementation notes).
     (nothing: the flags are read again at the nearest pixel), a 1-byte
     buffer of the flags and the class instead of the normals (0.004 ms:
     the scene's writes cost by the render target, not by its bytes; 0.025
-    without that target, which would need the motion flag elsewhere), a
+    without that target, which would need the motion flag elsewhere; Plan
+    49 tried that: without the normals target, every draw that writes depth
+    without blending writing the motion vectors instead (the motion flag
+    a value of them, the weapon from the depth floor), the frame took 0.015
+    ms longer still and 0.014 turning: not made), a
     10-bit scene (`A2B10G10R10`; the alpha isn't read: destination alpha
     blends are ONE and ZERO, `vk_pipeline.c`; no added shimmer, but 0.05 ms
-    instead of 0.08 saved: 0.336 ms).
+    instead of 0.08 saved: 0.336 ms). Plan 49 (2560x1440, interleaved runs
+    against the build before): the history's texel alone at a texel's
+    center, 0.378 to 0.358 ms still and 0.338 to 0.329 turning (6 runs,
+    each faster), one level off in 0.01 to 0.6 % of the pixels (a dozen by
+    4 to 15); the tile's color and the reactive share as 4 half floats in
+    a `uvec2` beside the distance (12 bytes an entry instead of 20) 0.003
+    ms slower, not kept. The motion blur's tiles made by this pass
+    (`MOTION_BLUR`: the pixels' blur from the tile it has, the tiles' as
+    atomic maxima of the workgroups' into two images that alternate, the
+    neighbour pass clearing the next one, and the neighbour pass beside
+    the depth of field's setup) took as long as the tiles pass they
+    replaced (turning with the motion blur 0.547 and 0.546 ms, with the
+    depth of field 0.870 and 0.879, the motion blur alone 0.278 and 0.288):
+    not kept.
   - *Shimmer* (8 frames of a still `dm/mohdm6` view at 640x480, the share
     of pixels whose luma changes by more than 4 of 255 between them; more
     than 16 in brackets): no jitter 0 %, the jitter alone 25.6 (2.95),
@@ -8515,6 +9406,90 @@ selects the sample count (see Implementation notes).
     by up to 63), no shift (under 0.04 of a level on average, 0.1 to 0.27
     on average apart); the rest of the optimization changes 0.003 to 0.1 %
     of the pixels, by one but for a handful (the CPU's `expf`).
+  - *Deforms' motion (Plan 48).* The effects shader's draws (static
+    geometry with deforms, `shaders/effects.vert`) deformed the vertex
+    with this frame's values only, so the motion vector of a swaying tree
+    was the camera's (or its entity's) and the history of its leaves was
+    taken from where they no longer are. `RB_FxDeformMotion`
+    (`tr_shade_calc.c`) writes each deform of the record twice, the second
+    time at the game time of the primary view's last frame
+    (`RB_TemporalDeformTime`, `tr_temporal.c`: 0 in the other views and
+    without a last frame), and keeps that one's values in the words the
+    deform leaves free: wave's time * frequency at word 7, flap's scale
+    and bulge's phase at word 4, move's offset at words 4 to 6.
+    `deformPrev` does `deform`'s operations on them (`precise`, so a
+    deform that didn't change gives the same position) and the last clip
+    position is that through the last frame's transform. A record with a
+    deform that moves sets `drawGeometry_t::staticFxMotion`, which makes
+    the pipeline `VK_PIPE_MOTION` (built at load already: the variant of
+    the entities that move). In the stock data: the tree and bush shaders
+    (`trees.shader`, flap), flags and curtains (flap), the seas, streams
+    and ponds (wave, move, bulge). Not done: the CPU's deforms (autosprites,
+    light glows, `normal`, which moves no vertex) and skeletal models
+    skinned on the CPU (their entity's motion only); they are blended or
+    camera facing.
+  - *Effects (Plan 48, `r_taaReactive`).* Blended draws write no motion
+    vectors: a muzzle flash, a tracer or a spark took the history of the
+    wall behind it, which the clip box (mean +- deviation of the 3 x 3)
+    left dark at a thin or new effect, and the luma weights (1 / (1 +
+    luma)) weigh a bright current pixel less: the effect came up dimmed
+    and its ghost stayed a few frames. The scene's alpha now holds the
+    effects' share of each pixel (nothing read it: destination alpha
+    blends are ONE and ZERO): the draws without blending write 0
+    (`generic.frag`), the render pass clears it to 0, and blended draws
+    with `VK_PIPE_REACTIVE` add theirs as coverage adds up, a + d (1 - a)
+    (`vk_pipeline.c`; MAX instead, against the color's ADD, cost 0.027 ms
+    more on the RTX 4070 Ti at 2560x1440 with the sun's lens flare in
+    view). The share (specialization constant 13): with an additive blend
+    by the source alpha, the brightest channel of color times alpha (the
+    pipeline blends ONE and the shader multiplies, as the sun's corona of
+    an RGB texture has one alpha over its whole quad); where the blend
+    reads the source alpha otherwise, the alpha; adding, the brightest
+    channel; multiplying, one minus the darkest. The back end sets it per
+    draw (`RB_TemporalReactive`, `vk_set_reactive`): sprites, flares, the
+    entities' draws (not static models') and shaders that change over
+    time (`RB_ShaderAnimated`: deforms, animated images, wave and noise
+    colors, scrolling, turning or wobbling texture coordinates); never
+    decals (polygon offset) or the sky's layers (depth range [1, 1]: the
+    camera's motion moves them exactly, and the 3 x 3 would take the
+    history of the edges against the sky); only in a scene with the
+    anti-aliasing and `r_taaReactive` (`vkt.reactiveOn`; or
+    `r_temporalShow 14`), so without them the draws are as before. The
+    resolve takes the largest share of the 3 x 3 (the filtered color
+    spreads an effect over it), squares it (a thin haze of 0.3 takes 9 %
+    off, so what is behind it keeps its anti-aliasing; dense smoke, fire
+    and flashes most of it) and multiplies the history's weight by 1 -
+    share^2 * `r_taaReactive`. At load, a blended stage of a 3D view is
+    built reactive when its shader changes over time, not for the world's
+    shaders, both for the others (models and effects can be an entity's
+    or a static model's): 121 more pipelines in `dm/mohdm1`, 2 ms. Tested
+    with an MP40 firing in `dm/mohdm1` (fixed time steps, 12 frames 40 ms
+    apart, the flash in 4): the muzzle's region against the frames
+    without the anti-aliasing, the mean absolute error of its mean luma
+    8.6 levels before (always brighter: the last flashes and their smoke
+    stayed), 3.3 with it (measured with the MAX blend, which differs only
+    where effects overlap). Not done: opaque surfaces with animated
+    textures (their texture moves where the motion vectors don't say)
+    write no share.
+  - *Texture LOD bias (Plan 48, `r_taaLodBias`).* The history averages
+    the jittered frames, which softens the textures; a negative mip bias
+    gives them back detail whose shimmer the history smooths. The vertex
+    shaders pass `vkTemporalPush_t::jitter[3]` (`vkt.lodBias`, latched per
+    scene: the cvar with `r_taa`, else 0; only for jittered projections)
+    to `generic.frag` as a flat input, which samples both units with it
+    (`texture( tex, st, bias )`, the temporal path's shaders only; a bias
+    of 0 gives the frames of before to the bit). Measured in 3 still views
+    of `dm/mohdm6` at 640x480 (the edge strength: the mean absolute
+    Laplacian of the luma, against the view without the anti-aliasing;
+    the shimmer: the pixels whose color changes by more than 4 of 255
+    between two consecutive frames, the mean of two pairs): bias 0 76 to
+    87 % and 0.13 to 0.65 %, -0.25 84 to 92 % and 0.13 to 0.82 %, -0.5 86
+    to 100 % and 0.18 to 0.82 %, -0.75 91 to 105 % and 0.24 to 0.91 %, -1
+    95 to 109 % and 0.35 to 1.05 %; -0.5, the default, gives back most of
+    the detail for little shimmer. In the `dm/mohdm1` square with its trees
+    the shimmer is 11 to 20 % (the alpha-tested leaves) with or without the
+    bias and before (the trees' own motion took it down by 0.8 to 1 point).
+    GPU time 0.008 ms at 2560x1440 there.
 - **Ambient occlusion (Plan 44).** `r_ao 1` with the temporal path
   (`VK_TemporalAo`, `shaders/ao_common.glsl`, `ao_prefilter.comp`,
   `gtao_main.comp`, `ao_temporal.comp`, `ao_denoise.comp`,
@@ -8534,14 +9509,18 @@ selects the sample count (see Implementation notes).
     Images per reader: 102 MB at 2560x1440): `aoDepth[2]` view distances
     (R32F, 5 levels, the weapon's negative, the sky at `AoFar`; this
     frame's and the last one's), `aoRaw` (R8: one frame's visibility), `aoHistory[2]` (RG16F: the blended
-    visibility, its frames), `aoBlur` (RG16F), `aoResult` (RGBA8: what the
-    apply pass blends). One descriptor set and push constant block
+    visibility, its frames), `aoBlur` (RG16F), `aoResult` (RGBA8: the
+    factor and the fog's part, written only for `r_temporalShow 9`'s view
+    since Plan 50: the apply pass upsamples itself). Since Plan 49 `aoRaw`, `aoHistory` and
+    `aoBlur` are at half the size, with `aoGrid[3]` (R32F, a ring of
+    three since Plan 52), `aoGridMotion[2]` (RGBA16F, Plan 51) and
+    `aoBlur2[2]` (RG16F) beside them (about 90 MB at 2560x1440). One descriptor set and push constant block
     (`vkAoPush_t`, 208 bytes) for the compute passes, written each frame.
   - *Barriers.* One call before: the depth image to
     `DEPTH_STENCIL_READ_ONLY`, the normals and the motion vectors to
     `SHADER_READ_ONLY`, the shader writes before visible; one between the
-    passes; one after: those back to attachments and the result to the
-    apply pass.
+    passes; one after: those back to attachments and what the apply pass
+    reads (the grid's blur, its distances, level 0) to it.
   - *View distances* (`ao_prefilter.comp`): 8 x 8 invocations, 2 x 2
     pixels each from a gather of the depth and one of the normals' class;
     levels 1 to 4 through shared memory with XeGTAO's weights (the nearer
@@ -8576,7 +9555,9 @@ selects the sample count (see Implementation notes).
     workgroups too), then the blur from there: the same values as a pass
     each, 0.1 ms less than the two passes). The blend: the motion of the
     pixel (the draw's motion vector where it moves, a weapon without one
-    none, else the camera's); the last result read bilinear among the 2 x
+    none, else the camera's; baked by the prefilter into `aoGridMotion`
+    with the surface's last view distance since Plan 51, so this pass
+    reads nothing of the scene); the last result read bilinear among the 2 x
     2 texels whose last view distance is the surface's (3 %, 10 % for
     what moves, and 1 unit), the texels picked by the shader and fetched
     one by one (a gather's are picked from the coordinate with 8 bits
@@ -8597,7 +9578,8 @@ selects the sample count (see Implementation notes).
     weighted 1.2 (0.24 for the first of two) times 1 + a quarter of the
     frames blended past the first. Two blurs at quality 3 and without
     history: the first into `aoBlur`, the second `ao_denoise.comp`'s.
-    The last makes the result (`AoResult`): the visibility to
+    The blurred visibility becomes the result (`AoResult`, in the apply
+    pass since Plan 50, Half resolution below): the visibility to
     `r_aoStrength`, the multi-bounce fit, to the scene's encoding (1 /
     2.2: the game draws gamma-encoded values), and the fog's part: the
     scene is C f + fog (1 - f) (the draws' linear fog of the view
@@ -8639,6 +9621,103 @@ selects the sample count (see Implementation notes).
     instead of loaded as storage images (kept), the view distances without
     the normals' class; one pixel an invocation in the view distances'
     pass was 0.03 ms slower, its level 0 written in 8 x 8 blocks the same.
+    Plan 49: levels 1 to 4 of the view distances in R16F (level 0 stays
+    32-bit: its stripes came from the nearest samples; the coarse levels'
+    samples are 14 pixels away or more, where a half float's step tilts
+    the horizon by a few degrees) changed nothing measurable (1.139
+    against 1.140 ms a frame, 5 runs each): the occlusion isn't limited by
+    the bytes of its coarse samples. Not kept. Plan 50: the slice loop
+    kept rolled (`[[dont_unroll]]`, for the register pressure of the full
+    unroll) changed nothing either (0.379 against 0.377 ms GPU frame, 3
+    runs): not kept. Leaving the prefilter out speeds the passes after it
+    by more than its own time (0.127 against about 0.05 ms): its 23 MB of
+    writes drain from L2 while the occlusion reads; the writes are all
+    read later, so nothing to cut.
+  - *Half resolution* (Plan 49, always: first the cvar `r_aoHalfRes`,
+    removed the same day, the user seeing no difference; `AO_HALF`, a
+    specialization constant of every pass, true in every pipeline: the
+    full resolution's code is still in the shaders, unused). The occlusion, the blend over frames and the
+    blurs work on a grid of a texel a 2 x 2 pixels: the top-left one, its
+    position and its view distance (`aoGrid[2]`, R32F, written by the
+    prefilter beside the full resolution's levels). The main pass is
+    the full resolution's at that pixel, its samples from the full
+    resolution's view distances (`u_aoLevels`); the history, its motion
+    and the blurs' edges on the grid (the edges' tolerance doubled: a
+    texel is two pixels across); the last blur into `aoBlur2` (RG16F),
+    which the apply pass upsamples itself (`ao_apply.frag`, Plan 50): each
+    pixel's view distance from level 0 of the prefilter's distances (the
+    depth and the normals are the render pass's attachments, which a draw
+    in it can't read; the prefilter wrote `AoDistance` of every pixel
+    there), the 2 x 2 texels around it weighted bilinear times 1 - their
+    distance's difference over 3 % and 1 unit (0 for the weapon against
+    the world), the texel nearest in distance where none is left, then the
+    result as without it (`AoResult`, in the fragment: the factor is no
+    longer rounded to 8 bits on the way). Before Plan 50 `ao_upsample.comp`
+    did the same into `aoResult`, which the apply pass read back: the pass
+    and the image's round trip cost 0.04 ms (the user's view of `dm/mohdm6`
+    at 2560x1440: the GPU frame 0.42 to 0.38 ms with the ambient occlusion
+    alone, 0.72 to 0.68 with the anti-aliasing and the motion blur too;
+    every differing pixel one level, the known 28 of the frame counter
+    aside). It still runs for `r_temporalShow 9`'s view
+    of the result, which is then the apply's to the bit. `r_temporalShow 10`
+    shows the grid. First tries: the nearest and the farthest of the 2 x 2
+    on alternate texels (a plane became a zigzag that occluded itself: a
+    flat ceiling went blotchy), then the main pass's nearest samples from
+    the grid (snapped up to a pixel off their slice: a wall or a floor at
+    a grazing angle occluded itself in streaks).
+  - *Async compute* (Plans 51 and 52, `r_aoAsync`, on by default; the
+    user's request: the temporal path's cost). Where the device has a
+    compute-only queue family and timeline semaphores (`vk.asyncCompute`,
+    vk_instance.c; NVIDIA, RADV and most desktops), the occlusion, the
+    blend over frames and the blur of a frame run on that queue once the
+    frame's graphics is done, beside the next frame's rendering, and the
+    apply pass blends the result two frames later (one frame in flight:
+    the compute runs during frame N + 1, frame N + 2 reads it). For that
+    the prefilter, which stays in the frame (it reads the depth and the
+    normals), bakes everything the later passes read: beside the view
+    distances the grid's motion (`aoGridMotion`, RGBA16F, half size: the
+    texel's motion, the view distance its surface had in the last frame,
+    and whether there is history, Plan 51), so they touch nothing of the
+    scene. Two timeline semaphores order it (`vkt.gfxTimeline`,
+    `vkt.aoTimeline`): every frame whose compute was submitted signals
+    gfxTimeline with its serial from its graphics submission (once, also
+    from a flush in the middle of the frame, `VK_TemporalTakeAoSubmitInfo`
+    in every submit path, the submit thread's too), the compute submission
+    waits for it (the prefilter's writes, and the apply pass has read what
+    it overwrites) and signals aoTimeline, and a frame's graphics
+    submission waits for the newest compute two or more frames old before
+    its compute and fragment stages (the apply pass's read, and the
+    prefilter writing over what the queue may still read). The grid is a
+    ring of three (a frame writes one while the queue still reads the two
+    before), `aoBlur2` and the rest alternate; the images are
+    `VK_SHARING_MODE_CONCURRENT` between the two families (storage images,
+    nothing to lose; the layout is `GENERAL` always, so no transitions
+    cross the queues). The apply pass sits out the two frames after `r_ao`
+    goes on, a load or a `vid_restart`. `vk_finish` drains the compute
+    queue too; vk_shutdown host-signals a pending wait first, or a frame
+    being recorded but never submitted would hang the device wait. The
+    synchronous path stays for devices without the queue, `r_aoAsync 0`,
+    `r_temporalShow` 9 and 10 (the composite reads what the queue would
+    still be writing) and `r_aoNormals` (the occlusion then reads the
+    scene's normals, the graphics queue's); switching drains first.
+    `vkinfo`'s gpu frame no longer sees the occlusion (it times the
+    graphics command buffers): compare wall time. Still frames match the
+    synchronous path's within a level (the converged occlusion of two
+    frames ago is today's); in motion the occlusion trails by two frames
+    of camera motion, which the blend's reprojection does not undo (a
+    fast turn at `fixedtime 16` moves 42 % of the pixels, most by 1 to 3
+    levels, some edges by up to 15; at the frame rates the effects run at
+    here the shift is a few pixels). Checked under the validation layer
+    (clean, also with the submit thread and through live toggles of
+    `r_ao`, `r_aoAsync`, the show views, `r_aoQuality` and a
+    `vid_restart`). Cost (the user's view, 2560x1440, wall time a frame,
+    `r_aoAsync` 0 against 1 of the same build): the ambient occlusion
+    alone 0.457 to 0.407 ms (2190 to 2455 fps), with the anti-aliasing
+    and the motion blur 0.780 to 0.714 (1280 to 1400); baking the motion
+    costs 0.015 ms of prefilter time, bought back here. Not done:
+    reprojecting the two frames in the apply pass (`aoGridMotion` and the
+    ring hold what it would need) would cut the trailing, for more edge
+    cases where the reprojection misses.
 - **Motion blur (Plan 46).** `r_motionBlur 1` with the temporal path
   (`VK_TemporalMotionBlur`, `shaders/motion_blur.comp`, the gather in
   `shaders/temporal_composite.frag`). McGuire, Hennessy, Bukowski and
@@ -8648,8 +9727,9 @@ selects the sample count (see Implementation notes).
   - *When.* `VK_TemporalUpdateFeatures` latches it for the scene
     (`vkt.mbOn`: the passes, also for `r_temporalShow` 11 and 12;
     `vkt.mbBlur`: the gather) and makes its group of images
-    (`VK_TEMPORAL_GROUP_MOTIONBLUR`, `GENERAL` always): `mbVelocity`
-    (RGBA16F, the framebuffer's size) and `mbTile`, `mbNeighbor` (RG16F, a
+    (`VK_TEMPORAL_GROUP_MOTIONBLUR`, `GENERAL` always): `mbVelocity` and
+    `mbSample` (RG16F, the framebuffer's size; one RGBA16F image before
+    Plan 49) and `mbTile`, `mbNeighbor` (RG16F, a
     texel a tile). `VK_TemporalResolve` runs its two passes after the
     anti-aliasing; the composite then binds `compositeBlurPipeline` (the
     spec constant `MOTION_BLUR`) instead of `compositePipeline`. Alone,
@@ -8678,7 +9758,9 @@ selects the sample count (see Implementation notes).
     reaches as far on each side), no longer than K; with its view
     distance (the weapon's divided by 1024: in front of everything, as the
     depth hack draws it, in its own order; at most 65000, which a half
-    float holds) into `mbVelocity`. The workgroup keeps the longest of the
+    float holds): the vector into `mbVelocity`, its length and the distance
+    into `mbSample`, which the gather's samples read (the vector only at
+    the pixel itself). The workgroup keeps the longest of the
     tile (a reduction in shared memory) in `mbTile`. Then (`NEIGHBOR`, an
     invocation a tile) the longest of the 3 x 3 tiles around each into
     `mbNeighbor`: every pixel a blur of K or less can reach.
@@ -8725,10 +9807,178 @@ selects the sample count (see Implementation notes).
     (the tiles pass reads the depth and the normals and writes 8 bytes a
     pixel); the gather 0.09 turning, 0.16 with the anti-aliasing, whose
     result it reads then: a storage image in `GENERAL`, which its samples
-    seem to read slower than the scene's color attachment (not looked
-    into). Not optimized yet: the samples need only the blur's length and
+    seemed to read slower than the scene's color attachment. Plan 49
+    looked into it (turning, 2560x1440, 5 runs a build): the gather reading
+    the scene's color instead of the anti-aliased one took the same time
+    (0.543 against 0.541 ms), the anti-aliased one in
+    `SHADER_READ_ONLY_OPTIMAL` for the composite too (0.546 and 0.546), the
+    sharpening is 0.013 ms with and without the blur: the blur costs 0.21
+    ms with the anti-aliasing whatever it reads, nothing changed. Not optimized yet: the samples need only the blur's length and
     the distance, so 4 bytes a pixel (the direction packed) would halve
-    what both passes move.
+    what both passes move. Plan 49 split it in two images instead: the
+    samples read 4 bytes (`mbSample`), the vector only the pixel itself:
+    turning with the anti-aliasing 0.224 to 0.208 ms (5 runs a build),
+    the turning frame one level off in 0.2 % of the pixels (the length
+    rounded to a half float once), the still ones the same to the bit.
+- **Depth of field (Plan 47).** `r_dof 1` with the temporal path
+  (`VK_TemporalDof`, `shaders/dof.comp`). The gather is Jimenez's,
+  "Next Generation Post Processing in Call of Duty: Advanced Warfare"
+  (SIGGRAPH 2014), at half the resolution, the background and the
+  foreground apart.
+  - *When.* `VK_TemporalUpdateFeatures` latches it for the scene
+    (`vkt.dofOn`, also for `r_temporalShow 13`; `vkt.dofShow`) and makes
+    its group (`VK_TEMPORAL_GROUP_DOF`, `GENERAL` always): `dofFocus`
+    (R32F, 1 x 1), `dofHalf`, `dofFar`, `dofNear` (RGBA16F, half size),
+    `dofTile`, `dofNeighbor` (RG16F, a texel a tile), `dofResult`
+    (RGBA16F, the framebuffer's size). `VK_TemporalResolve` runs its five
+    passes after the anti-aliasing and before the motion blur; the
+    composite then shows `dofResult` (its binding 11) in the tiles whose
+    3 x 3 have blur (`dofNeighbor`, binding 12; `Shown`, the tile size in
+    `dof` of its push constants), the sharp scene elsewhere, and the
+    motion blur gathers the same: the defocused scene. That choice is a
+    specialization constant of the composite (`DEPTH_OF_FIELD`,
+    `compositeDofPipeline`, `compositeDofBlurPipeline`): as a branch on
+    the push constants it made the motion blur's gather 0.022 ms slower
+    without the depth of field (2560x1440, turning). With the motion blur
+    too (`DOF_EVERYWHERE`) the apply pass writes every tile again (its
+    params.w) and the composite shows `dofResult` as it is: a choice for
+    each of the gather's samples cost what the pass saved (turning with
+    the anti-aliasing, the motion blur and the depth of field 0.865 ms
+    before Plan 49, 0.863 with the choice, 0.805 without it). The apply pass
+    writes those tiles only (before Plan 49 it copied the sharp scene into
+    the others, which the composite then read). The sharpening
+    (`r_taaSharpen`, 0.8 by default) stays in the composite, for the
+    pixels the apply pass left as they were (`dofResult`'s alpha 1, and
+    the tiles it didn't write): in focus the frames are those without
+    the depth of field to the bit, and the blur isn't sharpened (it would
+    show the gather's noise). Sharpening in the apply pass instead, as
+    first done, rounded the sharpened color to half floats in
+    `dofResult`: one level off in 0.6 to 1.2 % of the pixels. Alone, it
+    needs the depth image readable as the motion blur does, without the
+    pyramid.
+  - *Lens.* A pixel's blur, its circle of confusion, is the radius
+    S (1 / F - 1 / d) in pixels for its view distance d and the focus
+    distance F: positive behind the focus (the background), negative in
+    front of it (the foreground), at most a tile's side. It is a thin lens
+    with the focal length small against the distances: the blur goes with
+    the difference of the inverse distances, so a far focus leaves what is
+    a few meters away nearly sharp (a first form, K (1 - F / d), blurred
+    the whole world as foreground when the crosshair was on the sky). S is
+    `r_dofAperture` percent of the primary view's height times 128 (the
+    far distance's blur when F is 128 units) times the zoom: the
+    projection's [5] over 1.589 (fov 80 at 4:3; the game keeps the
+    vertical field at every aspect, Hor+), clamped to 0.5 to 4. A camera
+    lens of the same f-number would blur with the square of its focal
+    length; a scope's 4 times the zoom would then blur 16 times as much,
+    hiding what isn't at the crosshair's distance, so the zoom counts once.
+    The view weapon (its class, or what is nearer than the world's depth
+    floor with `r_depthClamp`) has none and is never blurred over.
+  - *Focus* (`FOCUS`, one workgroup of 64). 8 x 8 points of the depth over
+    a square of 2 % of the height on each side of the primary view's
+    center; the weapon left out, the sky (and what nothing drew) at the far
+    distance. The distance that ranks at a quarter of the others is the
+    target: the nearest of what is under the crosshair, not a stray pixel,
+    nor a sliver of roof at the edge of the sky (left out, the sky gave
+    the few roof points the focus); with only the weapon there the focus
+    stays. `dofFocus`
+    holds 1 / F and eases toward 1 / target by 1 - exp(-dt / tau) a frame
+    (tau `r_dofFocusSpeed`, dt `vkt.frameMsec`, the game time between the
+    frames, smoothed), so near and far changes take as long; at once
+    without a last frame (a cut: `r_temporalCutDist`) or when the group is
+    made (0). `r_dofFocus` sets the target instead. While the game is
+    paused it still eases (the smoothed time keeps its last value).
+  - *Tiles* (`SETUP`, a workgroup of 8 x 8 a tile of T x T pixels, T =
+    max(16, height / 20), even: 54 at 1080, 72 at 1440, 108 at 2160). Each
+    texel of `dofHalf` has the blur of the nearest of its 2 x 2 pixels and
+    their color in linear light (gamma 2.2), each weighted 1 / (1 + the
+    difference of its blur from that one), so the foreground's blur takes
+    no background color at its outline; the tile's largest
+    foreground blur and largest blur into `dofTile`. `NEIGHBOR` the
+    largest of the 3 x 3 tiles around each into `dofNeighbor`.
+  - *Gather* (`GATHER`, half resolution). A golden angle spiral of 16, 32
+    or 48 samples (`r_dofQuality`), turned by an interleaved gradient noise
+    fixed per texel (one `cos` and `sin` a texel; each sample's direction
+    is the last one's turned by the golden angle, its radius r sqrt((i +
+    0.5) / n): no `sin`, `cos` and division a sample since Plan 49). The background over the texel's own blur, a sample
+    counting where it is background and what of min(its blur, the texel's)
+    reaches the offset (with a texel of slack): what is behind doesn't
+    spread over what is less blurred in front of it, and what is in focus
+    doesn't spread at all. The foreground over the largest foreground blur
+    around the tile, each foreground sample adding (R^2 / n) / r^2 of what
+    reaches the texel, R the gather's radius and r its own: the share of
+    its disc that the sample stands for, which sums to its opacity (1
+    inside a blurred object, about half at its edge). A tile without blur
+    reads one texel. `dofFar` holds the background premultiplied by the
+    texel's share of background (its blur less half a pixel, clamped to 0
+    to 1: what the apply pass's tent weighs it with), `dofNear` the
+    foreground by its opacity, so the apply pass can filter both.
+  - *Apply* (`APPLY`, the views' pixels). Where the tile has no blur
+    around it nothing is written (the composite shows the sharp scene
+    there); on the weapon the sharp scene unchanged. Else the 3 x 3
+    half-resolution texels around the nearest, a tent of 1.5 texels (which
+    smooths the gather's noise), as 2 x 2 bilinear taps of each image
+    (`vkt.linearSampler`, bindings 10 and 11; on each axis the texels' weights
+    0.5 - f, 1.5 - |f|, 0.5 + f, the middle one split between the two taps
+    as the outer ones are; 27 loads before Plan 49): the background from the texels that are background
+    only (no edge of what is in focus bleeds into it), put over the pixel
+    by smoothstep(0.5, 2) of its own blur; the foreground over that by its
+    opacity, at least smoothstep(0.5, 2) of the pixel's own foreground blur
+    (its edge pixels would keep half of their sharp outline otherwise).
+    Into `dofResult`, gamma-encoded as the scene, alpha 1 where the pixel is
+    the scene's unchanged (the composite sharpens those), 0 where blurred.
+    `r_temporalShow 13` draws the blur there instead: the foreground's in
+    red, the background's in blue (1 at 8 pixels), the focus area's square
+    in green over the scene in gray.
+  - *Checked* (1600x900, `fixedtime 16`): in the `mohdm6` room the
+    ceiling above the camera blurs and the far wall under the crosshair is
+    sharp; in the crate hall the near crates and the pillar blur over the
+    floor without a sharp outline or a halo; `r_dofFocus 48` blurs all
+    beyond; the rifle in hand stays sharp with the room behind it blurred
+    (`r_dofFocus 4000`, `r_dofAperture 2`). The focus released from 48
+    with the crosshair on the far wall: the crate in front of the camera
+    goes from behind the focus to in front of it in about 0.3 s and the
+    wall is sharp at 1 s. With `r_dof 0` the frames of the room and the
+    hall are the build before's to the bit, with the anti-aliasing; with
+    `r_dof 1` and `r_dofAperture 0` (nothing blurred, the passes running)
+    they are those of `r_dof 0` to the bit, the sharpening included. A
+    teleport focuses at once (with `r_dofFocusSpeed 5`). The crosshair on
+    the sky over the yard focuses at the far distance; with the far
+    building under a quarter of the focus area or more, on it. No
+    validation layer on this machine: not run under validation.
+  - *Limits.* Translucent surfaces (smoke, glass, effects, muzzle
+    flashes) write no depth: they take the blur of what is behind them.
+    Portal and sky portal views take the primary view's lens. While the
+    game is paused the focus still eases (the smoothed game time keeps its
+    last value). The gather's noise is fixed per pixel and hidden by the
+    tent; at quality 0 it shows a little in strong blur.
+  - *Cost* (RTX 4070 Ti, GPU time a frame, the `dm/mohdm6` room at
+    2560x1440 with the anti-aliasing, `perf.py`, 3 runs, a third of the
+    view blurred): 0.392 ms without, 0.650 at quality 1 (0.624 and 0.695
+    at quality 0 and 2 with the sharpening still in the apply pass, which
+    cost about 0.01). Plan 49 (`perf.py`, 3 runs a build, interleaved; the
+    temporal path with the anti-aliasing 0.374 ms there): 0.256 to 0.220
+    ms. A first version saved 0.021 only: its composite looked the tile up
+    for the pixel and its 4 neighbours (0.069 ms with every pass left out);
+    once a pixel (the
+    neighbours only when they are in another tile, the tile from a float
+    product: no division) 0.009. Split by leaving passes out (`r_dofQuality
+    1`): the gather 0.075 ms, the half resolution's setup 0.040, the apply
+    pass 0.038, the neighbours 0.011, the focus 0.004, the barriers nothing
+    measurable. Frames: with `r_dofAperture 0` those before to the bit,
+    the copy left out to the bit; the bilinear taps and the spiral change
+    0.4 to 1 % of the pixels of the `mohdm6` views at `r_dofFocus 48` and
+    `r_dofAperture 1` (1280x720) by one level, none by more. Not done: the
+    setup still reads the whole view's color (a tile without blur may be
+    gathered by its neighbours: knowing which ones needs the tiles first),
+    and the gather takes as many samples for a small blur as for a large one.
+    Then the view weapon told from the depth alone where there is a depth
+    floor (`r_depthClamp`, 2 by default: the weapon's depth range ends at
+    the floor), the normals read only without one: 0.574 to 0.560 ms with
+    the anti-aliasing, the frames (`mohdm6`, `hud` with the weapon) the
+    same to the bit. One view distance image made by the anti-aliasing for
+    the depth of field's passes (the plan) would have saved no more than
+    that read (0.014 ms, measured by leaving the class out) and added a
+    full resolution write: not made.
 - **HDR output (Plan 43).** `r_hdrOutput` (latched; `vk_output.c`,
   `shaders/output.frag`).
   - *Why not HDR rendering.* The plan before it kept the lightmaps in
@@ -8745,7 +9995,9 @@ selects the sample count (see Implementation notes).
     `VK_EXT_hdr_metadata` when it has it. `VK_ChooseSurfaceFormat` asks
     `VK_OutputChooseFormat` first: an `A2B10G10R10` or `A2R10G10B10`
     format with `HDR10_ST2084`, else `RGBA16F` with
-    `EXTENDED_SRGB_LINEAR`, that can be a color attachment, when SDL says
+    `EXTENDED_SRGB_LINEAR` (on Windows the other way round,
+    `VK_HDR_PREFER_SCRGB`: the HDR10 present's cost there, see the
+    changelog), that can be a color attachment, when SDL says
     the window is in HDR (`SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN`; some
     Windows drivers list HDR10 on SDR displays too) or `r_hdrOutput` 3 or
     4 forces the mode. On Wayland the driver's WSI does the protocol
@@ -9995,6 +11247,107 @@ Done:
     the view weapon by its own motion only. With it off, and on in still
     views, the views of `mohdm6` are the build before's to the bit, also
     with the anti-aliasing; in motion as described there.
+47. Depth of field (2026-10-29, the user's request: an implementation of
+    depth of field; see Status and Implementation notes, Depth of
+    field): `r_dof`, the user's choices: autofocus at the crosshair, a
+    bokeh gather, Vulkan only (the metal port can follow). With it off
+    the views of `mohdm6` are the build before's to the bit, also with the
+    anti-aliasing, and with it on so is what is in focus. A review pass
+    (2026-10-30): the scope's blur by its zoom, not its square; the focus
+    from the primary view, the sky counted as far; the sharpening back in
+    the composite; the half resolution's color weighted by blur.
+48. The anti-aliasing's gaps (2026-10-30, the user's request: fix the gaps
+    in the TAA; see Status and Implementation notes, Temporal
+    anti-aliasing): the effects shader's deforms in the motion vectors,
+    `r_taaReactive` and `r_temporalShow 14`, `r_taaLodBias`. With
+    `r_temporal 0` and with `r_temporal 1` the views of `mohdm6`,
+    `mp_mohdm1`, `fx_mohdm1` and `obj_team3_deepbluesea` are the build
+    before's to the bit; with `r_taa 1`, `r_taaLodBias 0` and
+    `r_taaReactive 0` (`r_temporalJitterSamples 1`) so are those of
+    `mohdm6`, and the others differ by one level in 0.6 to 5.8 % of the
+    pixels, on the deforming surfaces only (the trees, the sea, the test
+    shaders of `fx_mohdm1`): their motion vectors are the draws' now (the
+    build before against itself: 0 to 28 pixels). In a running game
+    (`r_temporalShow 1` at a scale of 2000) the trees and bushes of
+    `dm/mohdm1` move, where the build before had no motion. The views in
+    a running game were taken without a paused shot first (after one, the
+    frames of these lists showed no scene, with the build before too) and
+    with a `wait` after each `screenshot`: the screenshot is of the frame
+    the commands up to the next `wait` set up. No validation layer on this
+    machine: not run under validation. Not checked: AMD, the user's
+    matches.
+    The same day (the user's question: would a player ever change them?):
+    `r_taaReactive` is a cheat, not saved (a fix, 0 only to compare);
+    `r_taaLodBias` stays archived, a taste like `r_taaFeedback` and
+    `r_taaSharpen`; neither is in the settings guide of `main`'s README.
+49. What was left of the temporal effects' performance (2026-10-30, the
+    user's request: every item of the review of the temporal effects'
+    performance but the motion blur's passes skipped in a still view).
+    Each step measured with `perf.py` against the build before in the
+    `dm/mohdm6` room at 2560x1440 and kept only if faster. In the end,
+    against the start (cdbd31e7), GPU time a frame, 4 interleaved runs,
+    1920x1080 and 2560x1440, the user's settings (`r_taa`, `r_ao` 2,
+    `r_motionBlur`, `r_hdrOutput 2`): still 0.643 to 0.636 and 1.240 to
+    1.228 ms, turning 0.711 to 0.700 and 1.404 to 1.387; with `r_dof 1`
+    still 0.787 to 0.756 and 1.510 to 1.450, turning 0.874 to 0.842 and
+    1.683 to 1.630; with the occlusion at half resolution (then
+    `r_aoHalfRes 1`, since always) still 0.645 to 0.416 and 1.246
+    to 0.752, turning 0.709 to 0.451 and 1.409 to 0.908. The review had
+    guessed 0.15 to 0.2 ms of the user's settings without a change of the
+    look; what was measured is 0.01 to 0.02: the occlusion's coarse levels
+    in 16 bits, the motion blur's tiles made by the anti-aliasing and the
+    normals target left out gained nothing or cost time.
+    The depth of field (see Implementation notes, Depth of field, Cost):
+    the apply pass writes the tiles a blur reaches only and the composite
+    shows the sharp scene in the others, the apply pass's tent from 2 x 2
+    bilinear taps of premultiplied images instead of 27 loads, the
+    gather's spiral turned instead of a `sin` and `cos` a sample: 0.256 to
+    0.220 ms; with `r_dof 0`, and with `r_dofAperture 0`, the frames the
+    build before's to the bit.
+    The ambient occlusion (see Implementation notes, Ambient occlusion):
+    its coarse view distances in 16 bits measured and dropped (no
+    change); at half resolution (first the cvar `r_aoHalfRes`, off by
+    default; always since the next commit, the user seeing no difference
+    between the two): the frame 1.159 to 0.680 ms
+    at quality 2 with the anti-aliasing (the occlusion 0.78 to 0.31), the
+    final frames of the `mohdm6` views one level off in 3 to 10 % of the
+    pixels (a few hundred by 4 to 15), the occlusion's view
+    (`r_temporalShow 9`) one level in 8 to 17 %, a few by 16 or more at
+    silhouettes; still and strafing captures without streaks or halos,
+    switched on and off in a run, quality 3's two blurs. With
+    the cvar at 0 the frames were the build before's to the bit
+    (`r_aoTemporal 1`, quality 2 and 3).
+    The motion blur (see Implementation notes, Motion blur, Cost): its
+    per-pixel image split into the vector and what the samples read
+    (length, distance): turning with the anti-aliasing 0.224 to 0.208 ms.
+    Its tiles made by the anti-aliasing's pass, and the neighbour pass
+    beside the depth of field's setup: measured, as slow as before, not
+    kept. Why its gather seemed slower reading the anti-aliased scene:
+    not the image nor its layout (the same time reading the scene's
+    color); nothing changed.
+    The depth of field's weapon from the depth where there is a depth
+    floor (no normals read): 0.574 to 0.560 ms, the frames to the bit.
+    The depth of field's choice in the composite a specialization
+    constant: its first version, a branch on the push constants, made the
+    motion blur's gather 0.022 ms slower without the depth of field
+    (turning with the anti-aliasing 0.538 to 0.560 ms, found in the end
+    to end run), which the steps after it had hidden; as a constant
+    0.543 to 0.521 against the start of the plan. With the motion blur
+    and the depth of field both, the apply pass writes every tile again
+    (a choice for each of the gather's samples cost what it saved):
+    turning with the anti-aliasing 0.865 to 0.805 ms against the start.
+    The anti-aliasing (see Implementation notes, Temporal anti-aliasing,
+    Cost): the history's texel alone where a still camera puts it on a
+    texel's center: 0.378 to 0.358 ms still, 0.338 to 0.329 turning; the
+    tile packed in half floats measured slower, not kept.
+    The temporal path's normals target, for `r_aoNormals 0`: first
+    measured without it, the motion vectors written by every surface in
+    its place: 0.015 ms slower (see Implementation notes, Temporal
+    anti-aliasing, Cost); not made. On the way: the sky is never class 3
+    (`r_temporalShow 3`, `dm/mohdm6` looking up: a fifth of the view class
+    0, none 3: the sky shaders write no depth, so they write no class),
+    so HDR output's and the HDR look's sky expansion (`r_hdrSkyBoost`)
+    never applies; at its default 1 that changes nothing. Left as it is.
 
 Remaining:
 
@@ -10114,9 +11467,8 @@ Remaining:
   MB re-saved without its HDF5 chunks' padding (a changed file under
   Apache 2.0, and git keeps the old one); the obstruction traces stay on
   the main thread (the collision model's trace isn't thread-safe:
-  `cm.checkcount`). Untested: Windows (WASAPI; the package and installer
-  changes too), macOS (Core Audio, the `.app` layout), emscripten (no
-  threads: the streams decode on the main thread there). The device's
+  `cm.checkcount`). Untested: macOS (Core Audio, the `.app` layout),
+  emscripten (no threads: the streams decode on the main thread there). The device's
   period on this machine's PulseAudio is 15 ms (5 ms x 3 requested); the
   audio latency against OpenAL's was not measured.
 - The surface list (Plan 32, see Performance, Surface list): not measured
@@ -10155,7 +11507,10 @@ Remaining:
   before the input read): (1) with FIFO, wait before the input read until
   the previous present has completed (`vkWaitForPresentKHR` on the main
   thread), so at most one frame is queued: 38 to 59 ms less uncapped at
-  60 Hz, and no queue left at a cap below the refresh; (2) with vsync
+  60 Hz, and no queue left at a cap below the refresh (done in Plan 53:
+  one or two queued, learned, since niri at 280 Hz
+  can't show a frame presented after the one before at the next refresh;
+  not measured at 60 Hz or under KWin); (2) with vsync
   (mailbox, a window, FIFO), start each frame just in time for the
   compositor's latch: up to the measured slack, 0.9 to 1.4 ms uncapped,
   2.3 to 2.7 ms at 250 and 7.5 to 9.9 ms at 59 and 60, but KWin doesn't
@@ -10193,8 +11548,8 @@ Remaining:
   with the old limiter's 62.5 and 166.7 frames per second, after
   `BeginFrame` (renderer and driver), and the new limiter at those old
   rates has the old tails: likely the frame rate against the 59.96 Hz
-  display, untested with a VRR display. Untested on Windows (whole
-  millisecond sleeps, the last 2 ms polled). The polled millisecond costs
+  display, untested with a VRR display. On Windows the sleeps are whole
+  milliseconds and the last 2 ms are polled. The polled millisecond costs
   0.4 to 0.7 ms of a core per frame; on this CPU sleeping through it cost
   up to 0.03 ms of input to present at 144 (lower clocks). Caps that
   divide 1000 start on the millisecond tick again: GL1's 99th percentile
@@ -10342,3 +11697,77 @@ Windows: the same code applies; the CI build fetches Khronos' Vulkan-Headers
 (see Build and run), so no Vulkan SDK is needed. The Vulkan-specific files
 had never been compiled with MSVC before that CI build (they have no
 variable-length array, checked with clang's `-Wvla`).
+
+50. Render thread (2026-10-31, the user's request: find why Windows runs
+    the `dm/mohdm6` spot at 6,000 frames a second where Linux on the
+    same machine runs 12,500, and close it with multithreading, lock-free
+    patterns or a new architecture if needed, without settings for the
+    user and without "bench maxing": no spinning, no frame more in
+    flight, no present left out). What was measured and dropped is in
+    Performance, Render thread: the submit and present cost of WDDM and
+    the flip interrupts on one core take 60 µs a frame that Linux takes
+    25 for, and no present mode, fence, queue or interop changes it.
+    Done: Quake 3's SMP mode (`r_smp`, `tr_smp.c`, see Implementation
+    notes, Render thread), 5,977 to 10,664 frames a second at the spot,
+    the same frames to the bit, nothing changed for the GPU-bound temporal
+    path or for vsync. Left, in order of measured gain: cgame's shadow
+    traces (16 to 21 µs of its 47 a frame, the same traces every frame of
+    a still view: a cache), and the back end's recording (41 µs:
+    bindless textures and indirect draws would take most of it), after
+    which the Windows frame would be the GPU's.
+
+51. Each stage cheaper (2026-10-31, the user's request, after the render
+    thread: the collision traces of the precise shadows, the draw
+    recording, the UI's menu lookups). Done, each measured and kept (see
+    Performance, Each stage cheaper): the precise shadows' lights and
+    traces kept per player for the server frame (cgame 45.6 to 28.6 µs a
+    frame, the same frames), `FindMenu` cached, the copied indexes drawn
+    with `firstIndex` from one binding (82 to 14 index binds a frame),
+    unused texture units keeping their set, the depth bias set when it
+    changes, and bindless textures (`r_vkBindless`, the shaders built with
+    glslang through `glslang_as_glslc.sh`): 67 descriptor set binds a frame
+    to 2, 10,729 to 10,948 frames a second. Measured and dropped: the
+    static draws' matrices in a buffer (slower: the records cost more
+    than the pushes), and with a draw call measured at about 25 ns of
+    recording, indirect draws over the 65 static draws (at most 1.6 µs,
+    under 2 %). The frame rate is the back end's (about 85 µs: the
+    present and submission 40, the recording 37, of which the driver
+    about 15); the front end is at 47. Then the opaque shaders in the
+    order of their pipelines (`r_sortPipelines`): 31 to 26 binds a frame,
+    2.5 % more frames a second, two of ten views with a z-fighting patch
+    the other way. The renderer's own recording code (about 15 % of the
+    frame) is spread over per-surface work of tens of nanoseconds a call,
+    with no single lever left; fewer surfaces to walk (the static
+    geometry's batching) would be the next change.
+
+53. Less GPU wait (2026-11-02, the user's request after a review of where
+    the CPU and the GPU wait for each other). First the `vulkan` branch was
+    merged (its ambient occlusion's compute queue, `r_aoAsync`, with the
+    render thread for the first time: validation clean together). Done, see
+    Performance, Less GPU wait: the render thread submits its frames and
+    the submit thread only presents them (+15 % frames a second at the
+    spot, +26 % at 1280x720); the main thread waits for the GPU before the
+    input where the GPU limits (1.1 ms less input to GPU done; with vsync
+    the wait for the display moved there too, from after the input); vsync
+    waits until the frames queued are down to one or two (learned per
+    swapchain, tried once: 7.1 ms less input to shown at 280 Hz); frames
+    without a 3D view no longer wait for the GPU at the swap (no gain
+    measured); screenshots, video frames and the overdraw readback record
+    their copies without waiting and a writer thread writes them (+50 %
+    with `r_measureOverdraw`, a screenshot's frame 5 to 1.5 ms). No
+    setting for any of it: the two that were there (the GPU wait, the
+    present wait) are automatic. Built, measured and removed: the 3D view
+    submitted before the HUD (a submission costs more than it overlaps).
+    For the measurements: `r_vkLatency` and `r_vkSubmitThread 3`.
+    Looked at and not built: more passes on the compute queue. The anti-
+    aliasing's dispatch has no barrier before the motion blur's tiles
+    already (they overlap on one queue); everything else after the scene
+    feeds the frame's composite and HUD, so beside the next frame's
+    rendering it would present every frame after the next one's scene (0.1
+    to 0.3 ms more input lag a frame, for perhaps 0.04 ms of GPU time: the
+    occlusion's queue bought a third of its estimate); the prefilter would
+    need the depth image read-only through the blended surfaces or shared
+    between the queues (compression on RADV). Left: `r_smp 0` with bindless
+    textures' validation messages at a map load (above); the plan numbers
+    50 to 52 of the `vulkan` branch (the occlusion's work) and of this one
+    (the render thread, each stage cheaper) overlap since the merge.

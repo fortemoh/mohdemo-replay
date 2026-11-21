@@ -27,8 +27,6 @@ const UColor UClear(0, 0, 0, 0);
 const UColor UWhite(1, 1, 1, 1);
 const UColor UBlack(0, 0, 0, 1);
 const UColor ULightGrey(0.875, 0.875, 0.875, 1.0);
-const UColor UGrey(0.75, 0.75, 0.75, 1.0);
-const UColor UDarkGrey(0.5, 0.5, 0.5, 1.0);
 const UColor ULightRed(1.0, 0.5, 0.5, 1.0);
 const UColor URed(1.0, 0.0, 0.0, 1.0);
 const UColor UGreen(0.0, 1.0, 0.0, 1.0);
@@ -132,11 +130,6 @@ void UColor::ScaleColor(float scale)
     b *= scale;
 }
 
-void UColor::ScaleAlpha(float scale)
-{
-    a *= scale;
-}
-
 void UColor::set(float r, float g, float b, float a)
 {
     this->r = r;
@@ -202,27 +195,7 @@ UColorHSV::UColorHSV(UColor rgb)
     }
 }
 
-UColorHSV::UColorHSV(float h, float s, float v, float a)
-{
-    set(h, s, v, a);
-}
-
-void UColorHSV::set(float h, float s, float v, float a)
-{
-    this->h = h;
-    this->s = s;
-    this->v = v;
-    this->a = a;
-}
-
 UBorderColor::UBorderColor() {}
-
-UBorderColor::UBorderColor(const UColor& dark, const UColor& reallydark, const UColor& light)
-{
-    this->dark       = dark;
-    this->reallydark = reallydark;
-    this->light      = light;
-}
 
 UBorderColor::UBorderColor(const UColor& color)
 {

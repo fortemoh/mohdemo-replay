@@ -50,6 +50,153 @@ const char *CG_GetPlayerLocalModelTiki(const char *modelName)
 
 /*
 ===============
+CG_TeamHeadIcon
+
+Added: a team's icon above a team mate's head: the Competitive HUD's team
+icons' (scripts/reloaded_hud.shader, the client's outlines baked)
+===============
+*/
+static const char *CG_TeamHeadIcon(qboolean allies)
+{
+    return allies ? "textures/hud/reloaded_allies_headicon.spr" : "textures/hud/reloaded_axis_headicon.spr";
+}
+
+/*
+===============
+The team tag
+
+Added in Reloaded: the player aimed at (the server's STAT_INFOCLIENT: a team
+mate, or anyone while spectating free; kept 1.5 s after looking away) shown
+CS2's way in place of their head icon: their name, their health under it and
+an arrow down to their head, drawn by the client in the HUD's look
+(cgi.UI_DrawTeamTag). Not while following a player (the HUD names them),
+under the Reloaded menus, with the HUD hidden or cg_hud_targetinfo 0; not
+behind the world
+===============
+*/
+static int      cg_tagClient = -1; // the player tagged this frame, -1 none
+static qboolean cg_tagEyesSet;     // their eyes found this frame (their model added)
+static vec3_t   cg_tagEyes;
+
+/*
+===============
+CG_TeamTagFrame
+
+Who is tagged this frame, before the entities are added
+===============
+*/
+void CG_TeamTagFrame(void)
+{
+    static cvar_t       *targetinfo, *menucover;
+    const playerState_t *ps   = &cg.snap->ps;
+    const int            info = ps->stats[STAT_INFOCLIENT];
+
+    if (!targetinfo) {
+        targetinfo = cgi.Cvar_Get("cg_hud_targetinfo", "1", CVAR_ARCHIVE);
+        menucover  = cgi.Cvar_Get("ui_menucover", "0", 0);
+    }
+    cg_tagClient  = -1;
+    cg_tagEyesSet = qfalse;
+    if (!cg_hud->integer || !targetinfo->integer || menucover->integer
+        || (ps->pm_flags & (PMF_NO_HUD | PMF_INTERMISSION))) {
+        return;
+    }
+    // following a player: from behind, or through their eyes (the snapshot is theirs)
+    if ((ps->pm_flags & PMF_SPECTATING) && ((ps->pm_flags & PMF_CAMERA_VIEW) || ps->clientNum != cg.clientNum)) {
+        return;
+    }
+    // Added in OPM
+    //  nor while a demo shows the recorder from behind, or a player it doesn't
+    //  show (from behind or from their eyes): who the recorder aims at isn't
+    //  theirs
+    if (CG_DemoBehind() >= 0 || CG_RecorderBehind() || CG_UnspeccedEyes() >= 0) {
+        return;
+    }
+    if (info < 0 || info >= MAX_CLIENTS || info == ps->clientNum || ps->stats[STAT_INFOCLIENT_HEALTH] <= 0) {
+        return;
+    }
+    cg_tagClient = info;
+}
+
+/*
+===============
+CG_TeamTagEyes
+
+The tagged player's eyes, as their model is added (their head icon's point)
+===============
+*/
+static void CG_TeamTagEyes(refEntity_t *pModel, entityState_t *pPlayerState)
+{
+    int i, iTag;
+
+    if (pPlayerState->number != cg_tagClient) {
+        return;
+    }
+    VectorCopy(pModel->origin, cg_tagEyes);
+    iTag = cgi.Tag_NumForName(pModel->tiki, "eyes bone");
+    if (iTag == -1) {
+        cg_tagEyes[2] += 76.0f;
+    } else {
+        orientation_t oEyes = cgi.TIKI_Orientation(pModel, iTag);
+
+        for (i = 0; i < 3; ++i) {
+            VectorMA(cg_tagEyes, oEyes.origin[i], pModel->axis[i], cg_tagEyes);
+        }
+    }
+    cg_tagEyesSet = qtrue;
+}
+
+/*
+===============
+CG_DrawTeamTag
+
+The tag at the point over the tagged player's head on the screen, if they are
+seen (nothing of the world between)
+===============
+*/
+void CG_DrawTeamTag(void)
+{
+    vec3_t  top, d;
+    trace_t tr;
+    float   z, tx, ty;
+    int     health;
+
+    if (cg_tagClient < 0 || !cg_tagEyesSet) {
+        return;
+    }
+    CG_Trace(
+        &tr, cg.refdef.vieworg, vec3_origin, vec3_origin, cg_tagEyes, ENTITYNUM_NONE, CONTENTS_SOLID, qfalse, qfalse,
+        "CG_DrawTeamTag"
+    );
+    if (tr.fraction < 1.0f) {
+        return;
+    }
+    VectorCopy(cg_tagEyes, top);
+    top[2] += 16.0f;
+    VectorSubtract(top, cg.refdef.vieworg, d);
+    z = DotProduct(d, cg.refdef.viewaxis[0]);
+    if (z < 1.0f) {
+        return;
+    }
+    // (the view's left and up over its forward, the half fov's tangent the screen's edge)
+    tx     = DotProduct(d, cg.refdef.viewaxis[1]) / (z * tan(DEG2RAD(cg.refdef.fov_x * 0.5f)));
+    ty     = DotProduct(d, cg.refdef.viewaxis[2]) / (z * tan(DEG2RAD(cg.refdef.fov_y * 0.5f)));
+    health = cg.snap->ps.stats[STAT_INFOCLIENT_HEALTH];
+    // Added in OPM
+    //  a demo has no health here (-1: the tag without it)
+    if (cg.demoPlayback) {
+        health = -1;
+    }
+    cgi.UI_DrawTeamTag(
+        cg_tagClient,
+        cg.refdef.x + cg.refdef.width * 0.5f * (1.0f - tx),
+        cg.refdef.y + cg.refdef.height * 0.5f * (1.0f - ty),
+        health > 100 ? 100 : health
+    );
+}
+
+/*
+===============
 CG_PlayerTeamIcon
 ===============
 */
@@ -68,6 +215,10 @@ void CG_PlayerTeamIcon(refEntity_t *pModel, entityState_t *pPlayerState)
     }
 
     if (pPlayerState->number == cg.snap->ps.clientNum) {
+        return;
+    }
+    // Added in Reloaded: the tagged player's tag is drawn in its place
+    if (pPlayerState->number == cg_tagClient && cg_tagEyesSet) {
         return;
     }
 
@@ -119,10 +270,8 @@ void CG_PlayerTeamIcon(refEntity_t *pModel, entityState_t *pPlayerState)
             if (bInArtillery) {
                 iconEnt.hModel = cgi.R_RegisterModel("textures/hud/inmenu_artilleryicon.spr");
                 bSpecialIcon   = qtrue;
-            } else if ((pPlayerState->eFlags & 0x80) != 0) {
-                iconEnt.hModel = cgi.R_RegisterModel("textures/hud/allies_headicon.spr");
             } else {
-                iconEnt.hModel = cgi.R_RegisterModel("textures/hud/axis_headicon.spr");
+                iconEnt.hModel = cgi.R_RegisterModel(CG_TeamHeadIcon((pPlayerState->eFlags & 0x80) != 0));
             }
         }
 
@@ -199,11 +348,7 @@ void CG_PlayerTeamIcon(refEntity_t *pModel, entityState_t *pPlayerState)
             cgi.R_AddRefSpriteToScene(&iconEnt);
 
             if (bSpecialIcon && bInTeam && fAlpha > 0.0f) {
-                if (pPlayerState->eFlags & EF_ALLIES) {
-                    iconEnt.hModel = cgi.R_RegisterModel("textures/hud/allies_headicon.spr");
-                } else {
-                    iconEnt.hModel = cgi.R_RegisterModel("textures/hud/axis_headicon.spr");
-                }
+                iconEnt.hModel = cgi.R_RegisterModel(CG_TeamHeadIcon((pPlayerState->eFlags & EF_ALLIES) != 0));
                 VectorMA(iconEnt.origin, 4.0f, cg.refdef.viewaxis[0], iconEnt.origin);
                 iconEnt.scale         = iconEnt.scale - 0.1;
                 iconEnt.shaderRGBA[3] = (int)(fAlpha * 255.0f);
@@ -320,7 +465,9 @@ CG_CastFootShadow
 Cast complex foot shadow using lights
 ===============
 */
-void CG_CastFootShadow(const vec_t *vLightPos, vec_t *vLightIntensity, int iTag, refEntity_t *model)
+void CG_CastFootShadow(
+    const vec_t *vLightPos, vec_t *vLightIntensity, int iTag, refEntity_t *model, footShadowTrace_t *cache
+)
 {
     int           i;
     float         fAlpha;
@@ -396,7 +543,21 @@ void CG_CastFootShadow(const vec_t *vLightPos, vec_t *vLightIntensity, int iTag,
     fLength = fPitchCos * fPitchCos * 32.0 + fPitchCos * 8.0 + 10.0;
     fOfs    = 0.5 - (-4.1 / tan(DEG2RAD(vLightAngles[0])) + 4.0 - fLength) / fLength * 0.5;
     VectorMA(vPos, -96.0, vDelta, vEnd);
-    CG_Trace(&trace, vPos, vec3_origin, vec3_origin, vEnd, 0, MASK_FOOTSHADOW, qfalse, qtrue, "CG_CastFootShadow");
+    if (cache && cache->valid && VectorCompare(cache->lightPos, vLightPos) && DistanceSquared(cache->pos, vPos) < 1.0f) {
+        // the trace from within a unit of here to this light, made earlier in
+        // this server frame (CG_EntityShadow): the same shadow
+        trace = cache->trace;
+    } else {
+        CG_Trace(
+            &trace, vPos, vec3_origin, vec3_origin, vEnd, 0, MASK_FOOTSHADOW, qfalse, qtrue, "CG_CastFootShadow"
+        );
+        if (cache) {
+            cache->valid = qtrue;
+            VectorCopy(vPos, cache->pos);
+            VectorCopy(vLightPos, cache->lightPos);
+            cache->trace = trace;
+        }
+    }
 
     if (cg_shadowdebug->integer) {
         cgi.R_DebugLine(vPos, vLightPos, 0.75, 0.75, 0.5, 1.0);
@@ -579,15 +740,61 @@ qboolean CG_EntityShadow(centity_t *cent, refEntity_t *model)
         }
 
         if (iTagR != -1) {
-            int    iNumLights, iCurrLight;
-            vec3_t avLightPos[16], avLightIntensity[16];
+            int           iNumLights, iCurrLight;
+            int           snapTime;
+            vec3_t        avLightPos[16], avLightIntensity[16];
+            footShadow_t *fs;
 
+            // the lights gathered at this origin and the feet's traces to
+            // them are kept for the server frame: the same every client
+            // frame of a player who stands (the traces, within a unit)
+            fs = NULL;
+            if (cent->currentState.number >= 0 && cent->currentState.number < MAX_CLIENTS) {
+                fs = &cg.footShadows[cent->currentState.number];
+            }
+            snapTime   = cg.snap ? cg.snap->serverTime : 0;
             iNumLights = Q_clamp(cg_shadowscount->integer, 1, 8);
-            iNumLights = cgi.R_GatherLightSources(model->origin, avLightPos, avLightIntensity, iNumLights);
+            if (fs && (fs->serverTime != snapTime || fs->maxLights != iNumLights)) {
+                memset(fs, 0, sizeof(*fs));
+                fs->serverTime = snapTime;
+                fs->maxLights  = iNumLights;
+                fs->numLights  = -1;
+            }
+            if (fs && fs->numLights >= 0 && VectorCompare(fs->origin, model->origin)) {
+                iNumLights = fs->numLights;
+                for (iCurrLight = 0; iCurrLight < iNumLights; iCurrLight++) {
+                    VectorCopy(fs->lightPos[iCurrLight], avLightPos[iCurrLight]);
+                    VectorCopy(fs->lightIntensity[iCurrLight], avLightIntensity[iCurrLight]);
+                }
+            } else {
+                iNumLights = cgi.R_GatherLightSources(model->origin, avLightPos, avLightIntensity, iNumLights);
+                if (fs) {
+                    fs->numLights = iNumLights;
+                    VectorCopy(model->origin, fs->origin);
+                    for (iCurrLight = 0; iCurrLight < iNumLights; iCurrLight++) {
+                        VectorCopy(avLightPos[iCurrLight], fs->lightPos[iCurrLight]);
+                        VectorCopy(avLightIntensity[iCurrLight], fs->lightIntensity[iCurrLight]);
+                    }
+                }
+            }
             if (iNumLights) {
                 for (iCurrLight = 0; iCurrLight < iNumLights; iCurrLight++) {
-                    CG_CastFootShadow(avLightPos[iCurrLight], avLightIntensity[iCurrLight], iTagL, model);
-                    CG_CastFootShadow(avLightPos[iCurrLight], avLightIntensity[iCurrLight], iTagR, model);
+                    // the right foot's shadow takes the intensity the left
+                    // one's scaled, as before
+                    CG_CastFootShadow(
+                        avLightPos[iCurrLight],
+                        avLightIntensity[iCurrLight],
+                        iTagL,
+                        model,
+                        fs ? &fs->feet[iCurrLight][0] : NULL
+                    );
+                    CG_CastFootShadow(
+                        avLightPos[iCurrLight],
+                        avLightIntensity[iCurrLight],
+                        iTagR,
+                        model,
+                        fs ? &fs->feet[iCurrLight][1] : NULL
+                    );
                 }
 
                 // shadow was casted properly
@@ -1459,6 +1666,8 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     }
 
     if (cent->currentState.eType == ET_PLAYER && !(cent->currentState.eFlags & EF_DEAD)) {
+        // Added in Reloaded
+        CG_TeamTagEyes(&model, &cent->currentState);
         CG_PlayerTeamIcon(&model, &cent->currentState);
     }
 
@@ -1599,6 +1808,11 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
                 }
 
                 AnglesToAxis(cg.refdefViewAngles, cg.refdef.viewaxis);
+
+                if (!cg_righthand->integer && cg.snap->ps.stats[STAT_HEALTH] > 0 && !cg_animationviewmodel->integer) {
+                    // left-handed
+                    CG_MirrorViewModel(&model);
+                }
             }
 
             model.renderfx &= ~(RF_FIRST_PERSON | RF_THIRD_PERSON);

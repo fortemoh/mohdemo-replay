@@ -39,21 +39,6 @@ void UIE_ResolutionChanged(void)
     uWinMan.RefreshShadersFromList();
 }
 
-void UI_GetMouseState(int *mouseX, int *mouseY, int *flags)
-{
-    if (mouseX) {
-        *mouseX = uid.mouseX;
-    }
-
-    if (mouseY) {
-        *mouseY = uid.mouseY;
-    }
-
-    if (flags) {
-        *flags = uid.mouseFlags;
-    }
-}
-
 int UI_GetCvarInt(const char *name, int def)
 {
     cvar_t *cvar = uii.Cvar_Find(name);
@@ -69,21 +54,6 @@ int UI_GetCvarInt(const char *name, int def)
     return cvar->integer;
 }
 
-float UI_GetCvarFloat(const char *name, float def)
-{
-    cvar_t *cvar = uii.Cvar_Find(name);
-
-    if (!cvar) {
-        return def;
-    }
-
-    if (cvar->latchedString) {
-        return atof(cvar->latchedString);
-    }
-
-    return cvar->value;
-}
-
 const char *UI_GetCvarString(const char *cvar, char *def)
 {
     return uii.Cvar_GetString(cvar, def);
@@ -92,33 +62,6 @@ const char *UI_GetCvarString(const char *cvar, char *def)
 cvar_t *UI_FindCvar(const char *cvar)
 {
     return uii.Cvar_Find(cvar);
-}
-
-void UI_SetCvarInt(const char *cvar, int value)
-{
-    char s[16];
-
-    Com_sprintf(s, sizeof(s), "%d", value);
-    uii.Cvar_Set(cvar, s);
-}
-
-void UI_SetCvarFloat(const char *cvar, float value)
-{
-    char s[16];
-
-    Com_sprintf(s, sizeof(s), "%f", value);
-    uii.Cvar_Set(cvar, s);
-}
-
-void UI_ListFiles(const char *filespec)
-{
-    ui.fileList.RemoveAllItems();
-    uii.File_ListFiles(filespec);
-}
-
-const char *UI_ConfigString(int index)
-{
-    return uii.GetConfigstring(index);
 }
 
 void UI_Init(void)

@@ -201,7 +201,6 @@ static tempMarkSlot_t *CG_KeepTempMark(
     memcpy(s->points, points, sizeof(vec3_t) * numPoints);
     memcpy(s->fragments, fragments, sizeof(markFragment_t) * numFragments);
     s->hasVerts = qfalse;
-    s->numVerts = 0;
     return s;
 }
 

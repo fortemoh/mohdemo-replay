@@ -1,0 +1,65 @@
+// The Competitive HUD as CS:GO's (cg_hudstyle 1), its corners:
+// bottom right, under the weapons: clip / reserve and a bullet leaning
+// forward (/, the other way from the strip's), each before the one after
+// it, the bullet on the weapons' right edge
+menu "hud_comp_csgo_ammo" 420 104 NONE 0
+virtualres 1 1920 1080
+drawcache 1
+align right bottom
+bgcolor 0 0 0 0
+borderstyle NONE
+
+resource
+Label
+{
+name "bullet"
+rect 368 42 20 20
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_ammo_on
+shape roundbox 2 $ui_hud_acc 1 6 20 45
+}
+
+resource
+Label
+{
+name "reserve"
+rect 252 24 120 56
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-21
+textalign right
+linkcvar ui_hud_ammo
+colorcvar ui_hud_acc
+enabledcvar ui_hud_ammo_on
+flowbefore bullet 12
+}
+
+resource
+Label
+{
+name "slash"
+rect 0 42 10 21
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_ammo_on
+shape poly $ui_hud_acc_line 0.6 0.75 0 1 0 0.25 1 0 1
+flowbefore reserve 7
+}
+
+resource
+Label
+{
+name "clip"
+rect 0 24 120 56
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-36
+textalign right
+linkcvar ui_hud_clip
+colorcvar ui_hud_acc
+enabledcvar ui_hud_ammo_on
+flowbefore slash 7
+}
+
+end.

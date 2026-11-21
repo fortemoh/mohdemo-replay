@@ -194,22 +194,6 @@ void CG_ParseServerinfo(void)
     } else {
         Com_sprintf(cgs.mapname, sizeof(cgs.mapname), "maps/%s_sml.bsp", map);
     }
-
-    // hide/show huds
-    if (cgs.gametype) {
-        cgi.Cmd_Execute(EXEC_NOW, "ui_addhud hud_timelimit\n");
-        if (cgs.fraglimit) {
-            cgi.Cmd_Execute(EXEC_NOW, "ui_addhud hud_fraglimit\n");
-            cgi.Cmd_Execute(EXEC_NOW, "ui_removehud hud_score\n");
-        } else {
-            cgi.Cmd_Execute(EXEC_NOW, "ui_addhud hud_score\n");
-            cgi.Cmd_Execute(EXEC_NOW, "ui_removehud hud_fraglimit\n");
-        }
-    } else {
-        cgi.Cmd_Execute(EXEC_NOW, "ui_removehud hud_timelimit\n");
-        cgi.Cmd_Execute(EXEC_NOW, "ui_removehud hud_fraglimit\n");
-        cgi.Cmd_Execute(EXEC_NOW, "ui_removehud hud_score\n");
-    }
 }
 
 /*

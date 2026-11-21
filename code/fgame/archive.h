@@ -202,6 +202,12 @@ inline void Container<str>::Archive(Archiver& arc)
         ClearObjectList();
         arc.ArchiveInteger(&num);
         Resize(num);
+        // Fixed: Resize only allocates. A string read into memory that was never made one frees whatever
+        // pointer lay there: a crash on loading a saved game whose scripts had a menu up (Spearhead's and
+        // Breakthrough's title cards)
+        for (i = 0; i < num; i++) {
+            new (objlist + i) str();
+        }
     } else {
         num = numobjects;
         arc.ArchiveInteger(&num);

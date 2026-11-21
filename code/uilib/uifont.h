@@ -48,6 +48,12 @@ protected:
     //
     str name;
     int refHandle;
+    // drawn width / 640x480 layout width of text on the owner's virtual screen
+    float widthRatio;
+    // Added: the virtual screen it was made for (setVirtualScale), to make it
+    // again for a face found anew (CheckRefreshFont)
+    float m_virtualScale[2];
+    bool  m_hasVirtualScale;
 
 public:
     UIFont();
@@ -61,27 +67,20 @@ public:
         const char       *text,
         const float      *vVirtualScale
     );
-    void PrintOutlinedJustified(
-        const UIRect2D&   rect,
-        fonthorzjustify_t horz,
-        fontvertjustify_t vert,
-        const char       *text,
-        const UColor&     outlineColor,
-        const float      *vVirtualScale
-    );
     void setColor(UColor col);
+    // Added: drawn and measured this much smaller (a long text in a width, UILabel's fitwidth)
+    void setFit(float fit) { m_fit = fit; }
+    // ... how much smaller a text is drawn to fit a width (to half its size; 0: any width), the fit left at 1
+    float FitScale(const char *text, float width);
+    float m_fit;
     void setAlpha(float alpha);
     void setFont(const char *fontname);
-    int  getMaxWidthIndex(const char *text, int maxlen);
-    int  getWidth(const char *text, int maxlen);
-    int  getCharWidth(unsigned short ch);
+    void setVirtualScale(const float *virtualScale);
+    float getWidth(const char *text, int maxlen);
+    // Fixed: a byte (was unsigned short: a plain char above 127, é ü ß, became 0xFFxx, read past the 256 widths)
+    float getCharWidth(unsigned char ch);
     int  getHeight(const char *text, int maxlen, const float *virtualScale = NULL);
     int  getHeight(const float *virtualScale = NULL);
-    int  CodeSearch(unsigned short uch);
-    bool DBCSIsLeadByte(unsigned short uch);
-    bool DBCSIsMaekin(unsigned short uch);
-    bool DBCSIsAtokin(unsigned short uch);
-    int  DBCSGetWordBlockCount(const char *text, int maxlen);
 
 private:
     void CheckRefreshFont();

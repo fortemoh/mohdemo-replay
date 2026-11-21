@@ -1677,7 +1677,8 @@ void CG_ParseCGMessage_ver_15()
             // Changed in OPM
             //  The recorder's own: not heard from behind a player not shown,
             //  nor from their eyes
-            if (cg.snap && CG_DemoBehind() < 0 && CG_UnspeccedEyes() < 0) {
+            // Changed: the hitmarker's X and sound in place of the dings when it's on (Project: Omaha's)
+            if (cg.snap && CG_DemoBehind() < 0 && CG_UnspeccedEyes() < 0 && !CG_Hitmarker_Hit()) {
                 const char *soundName;
                 int         iOldEnt;
 
@@ -1723,7 +1724,6 @@ void CG_ParseCGMessage_ver_15()
                     commandManager.PlaySound(szTmp, vStart, CHAN_LOCAL, -1, -1, -1, 1);
                 }
 
-                CG_RadarClientSpeaks(iInfo);
                 current_entity_number = iOldEnt;
             }
             break;
@@ -2094,7 +2094,8 @@ void CG_ParseCGMessage_ver_6()
             // Changed in OPM
             //  The recorder's own: not heard from behind a player not shown,
             //  nor from their eyes
-            if (cg.snap && CG_DemoBehind() < 0 && CG_UnspeccedEyes() < 0) {
+            // Changed: the hitmarker's X and sound in place of the dings when it's on (Project: Omaha's)
+            if (cg.snap && CG_DemoBehind() < 0 && CG_UnspeccedEyes() < 0 && !CG_Hitmarker_Hit()) {
                 int iOldEnt;
 
                 iOldEnt = current_entity_number;

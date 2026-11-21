@@ -135,8 +135,9 @@ static VkPipeline VK_CreatePipeline( const vkPipelineKey_t *key ) {
 		VkBool32	dlightBacks;
 		VkBool32	temporalNormals;	// the temporal path's shaders only
 		VkBool32	temporalMotion;
+		int32_t		temporalReactive;
 	} specData;
-	VkSpecializationMapEntry specEntries[13];
+	VkSpecializationMapEntry specEntries[14];
 	VkSpecializationInfo specInfo;
 	VkPipelineShaderStageCreateInfo stages[2];
 	VkVertexInputBindingDescription bindings[5];
@@ -182,14 +183,36 @@ static VkPipeline VK_CreatePipeline( const vkPipelineKey_t *key ) {
 	// vectors' (all their shaders read these)
 	specData.temporalNormals = VK_TemporalWritesBuffers( bits ) ? VK_TRUE : VK_FALSE;
 	specData.temporalMotion = specData.temporalNormals && ( bits & VK_PIPE_MOTION ) ? VK_TRUE : VK_FALSE;
+	// the reactive share of a blended effect in the scene's alpha
+	// (VK_PIPE_REACTIVE): how much it changes what is behind it. Its
+	// brightest channel times its alpha where it adds with its alpha (4:
+	// drawn premultiplied, ONE instead of SRC_ALPHA below, as an RGB
+	// texture's corona has the same alpha all over its quad), the surface's
+	// alpha where the blend reads it otherwise (1), its brightest channel
+	// where it adds (2), one minus its darkest where it multiplies (3)
+	specData.temporalReactive = 0;
+	if ( bits & VK_PIPE_REACTIVE ) {
+		VkBlendFactor sf = VK_SrcBlendFactor( srcBlend ), df = VK_DstBlendFactor( dstBlend );
+
+		if ( sf == VK_BLEND_FACTOR_SRC_ALPHA && df == VK_BLEND_FACTOR_ONE ) {
+			specData.temporalReactive = 4;
+		} else if ( sf == VK_BLEND_FACTOR_SRC_ALPHA || sf == VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+			|| df == VK_BLEND_FACTOR_SRC_ALPHA || df == VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA ) {
+			specData.temporalReactive = 1;
+		} else if ( ( sf == VK_BLEND_FACTOR_DST_COLOR || sf == VK_BLEND_FACTOR_ZERO ) && ( df == VK_BLEND_FACTOR_ZERO || df == VK_BLEND_FACTOR_SRC_COLOR ) ) {
+			specData.temporalReactive = 3;
+		} else {
+			specData.temporalReactive = 2;
+		}
+	}
 
 	for ( i = 0; i < (int)ARRAY_LEN( specEntries ); i++ ) {
 		specEntries[i].constantID = i;
 		specEntries[i].offset = i * 4;
 		specEntries[i].size = 4;
 	}
-	// the shaders without the temporal path have no constants 11 and 12
-	specInfo.mapEntryCount = temporal ? 13 : 11;
+	// the shaders without the temporal path have no constants 11 to 13
+	specInfo.mapEntryCount = temporal ? 14 : 11;
 	specInfo.pMapEntries = specEntries;
 	specInfo.dataSize = sizeof( specData );
 	specInfo.pData = &specData;
@@ -399,6 +422,22 @@ static VkPipeline VK_CreatePipeline( const vkPipelineKey_t *key ) {
 			blendAttachments[2].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT
 				| VK_COLOR_COMPONENT_A_BIT;
 		}
+		// the scene's alpha is the reactive share, 0 where nothing reactive
+		// was drawn (the draws without blending write 0, generic.frag): the
+		// effects' shares add up as coverage does, a + d ( 1 - a ), at most
+		// 1. (MAX, against the color's ADD, cost 0.027 ms more GPU time a
+		// frame on an RTX 4070 Ti at 2560x1440 with the sun's lens flare in
+		// view; this, nothing measurable)
+		if ( specData.temporalReactive ) {
+			if ( specData.temporalReactive == 4 ) {
+				// the shader multiplies by its alpha
+				blendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+			}
+			blendAttachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+			blendAttachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			blendAttachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
+			blendAttachments[0].colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
+		}
 		blend.attachmentCount = 3;
 	}
 
@@ -488,7 +527,7 @@ static void VK_RebuildTable( int size, qboolean ( *keep )( const vkPipelineEntry
 	vkPipelineEntry_t *table;
 	int i, n = 0;
 
-	table = ri.Malloc( sizeof( *table ) * size );
+	table = VK_Alloc( sizeof( *table ) * size );
 	Com_Memset( table, 0, sizeof( *table ) * size );
 	for ( i = 0; i < vk_pipelineTableSize; i++ ) {
 		if ( vk_pipelines[i].pipeline ) {
@@ -500,7 +539,7 @@ static void VK_RebuildTable( int size, qboolean ( *keep )( const vkPipelineEntry
 			}
 		}
 	}
-	ri.Free( vk_pipelines );
+	VK_Free( vk_pipelines );
 	vk_pipelines = table;
 	vk_pipelineTableSize = size;
 	vk_numPipelines = n;
@@ -628,10 +667,15 @@ static int				vk_numRecordedKeys;		// read at startup
 
 // what VK_BuildPipelineKey can make on this device
 static qboolean VK_KeyValid( uint64_t bits ) {
-	if ( ( bits >> 46 ) & ~( ( VK_PIPE_DEPTHCLAMP | VK_PIPE_TEMPORAL | VK_PIPE_NORMALS | VK_PIPE_MOTION ) >> 46 ) ) {
+	if ( ( bits >> 46 ) & ~( ( VK_PIPE_DEPTHCLAMP | VK_PIPE_TEMPORAL | VK_PIPE_NORMALS | VK_PIPE_MOTION | VK_PIPE_REACTIVE ) >> 46 ) ) {
 		return qfalse;
 	}
-	if ( ( bits & ( VK_PIPE_TEMPORAL | VK_PIPE_NORMALS | VK_PIPE_MOTION ) ) && !vkt.enabled ) {
+	if ( ( bits & ( VK_PIPE_TEMPORAL | VK_PIPE_NORMALS | VK_PIPE_MOTION | VK_PIPE_REACTIVE ) ) && !vkt.enabled ) {
+		return qfalse;
+	}
+	// the reactive share only for the temporal path's blended draws that
+	// write no normals
+	if ( ( bits & VK_PIPE_REACTIVE ) && ( !( bits & VK_PIPE_TEMPORAL ) || !( bits & VK_PIPE_BLEND_BITS ) || VK_TemporalWritesBuffers( bits ) ) ) {
 		return qfalse;
 	}
 	// normals and motion only for the temporal path's pipelines that write them
@@ -726,19 +770,19 @@ static void VK_WriteRecordedKeys( void ) {
 	uint32_t *data;
 	int n, added;
 
-	keys = ri.Malloc( sizeof( *keys ) * VK_MAX_RECORDED_KEYS );
+	keys = VK_Alloc( sizeof( *keys ) * VK_MAX_RECORDED_KEYS );
 	n = VK_CollectRecordedKeys( keys, &added );
 	if ( added ) {
-		data = ri.Malloc( 16 + n * sizeof( *keys ) );
+		data = VK_Alloc( 16 + n * sizeof( *keys ) );
 		data[0] = VK_PIPELINE_KEYS_MAGIC;
 		data[1] = VK_PIPELINE_KEYS_VERSION;
 		data[2] = n;
 		data[3] = 0;
 		Com_Memcpy( data + 4, keys, n * sizeof( *keys ) );
 		ri.FS_WriteFile( VK_PIPELINE_KEYS_FILE, data, 16 + n * sizeof( *keys ) );
-		ri.Free( data );
+		VK_Free( data );
 	}
-	ri.Free( keys );
+	VK_Free( keys );
 }
 
 static qboolean VK_KeepUsed( const vkPipelineEntry_t *entry ) {
@@ -864,11 +908,11 @@ static void VK_WritePipelineCache( void ) {
 	if ( qvkGetPipelineCacheData( vk.device, vk.pipelineCache, &size, NULL ) != VK_SUCCESS || !size || size == vk_pipelineCacheLoaded ) {
 		return;
 	}
-	data = ri.Malloc( size );
+	data = VK_Alloc( size );
 	if ( qvkGetPipelineCacheData( vk.device, vk.pipelineCache, &size, data ) == VK_SUCCESS ) {
 		ri.FS_WriteFile( VK_PIPELINE_CACHE_FILE, data, size );
 	}
-	ri.Free( data );
+	VK_Free( data );
 }
 
 void VK_InitPipelines( void ) {
@@ -896,6 +940,27 @@ void VK_InitPipelines( void ) {
 	setLayoutInfo.bindingCount = 1;
 	setLayoutInfo.pBindings = &binding;
 	VK_CHECK( qvkCreateDescriptorSetLayout( vk.device, &setLayoutInfo, NULL, &vk.textureSetLayout ) );
+
+	// bindless textures: one set of every texture slot, bound once a frame,
+	// the draws naming their slots (vk_image.c, vk_draw). Needs the slots'
+	// count of combined image samplers in a stage and a set, dynamic
+	// indexing of sampler arrays, and stride 0 bindings: firstInstance
+	// carries the slots, which the per-instance bindings of the fallback
+	// would read
+	vk.bindless = r_vkBindless->integer && vk.strideZero && vk.enabledFeatures.shaderSampledImageArrayDynamicIndexing
+		&& vk.deviceProperties.limits.maxPerStageDescriptorSampledImages >= VK_MAX_TEXTURES
+		&& vk.deviceProperties.limits.maxPerStageDescriptorSamplers >= VK_MAX_TEXTURES
+		&& vk.deviceProperties.limits.maxDescriptorSetSampledImages >= VK_MAX_TEXTURES
+		&& vk.deviceProperties.limits.maxDescriptorSetSamplers >= VK_MAX_TEXTURES
+		&& vk.deviceProperties.limits.maxPerStageResources >= VK_MAX_TEXTURES + 8;
+	if ( vk.bindless ) {
+		binding.descriptorCount = VK_MAX_TEXTURES;
+		VK_CHECK( qvkCreateDescriptorSetLayout( vk.device, &setLayoutInfo, NULL, &vk.textureArrayLayout ) );
+		binding.descriptorCount = 1;
+		setLayoutInfo.bindingCount = 0;
+		setLayoutInfo.pBindings = NULL;
+		VK_CHECK( qvkCreateDescriptorSetLayout( vk.device, &setLayoutInfo, NULL, &vk.emptySetLayout ) );
+	}
 
 	// set 2, one per frame slot: the dynamic lights of the frame
 	// (vk_add_dlights), the skin data and the frame's skin data
@@ -927,7 +992,8 @@ void VK_InitPipelines( void ) {
 	pushRanges[1].offset = VK_PUSH_VERTEX_SIZE;
 	pushRanges[1].size = VK_PUSH_FRAGMENT_SIZE;
 
-	setLayouts[0] = setLayouts[1] = vk.textureSetLayout;
+	setLayouts[0] = vk.bindless ? vk.textureArrayLayout : vk.textureSetLayout;
+	setLayouts[1] = vk.bindless ? vk.emptySetLayout : vk.textureSetLayout;
 	setLayouts[2] = vk.dlightSetLayout;
 	Com_Memset( &layoutInfo, 0, sizeof( layoutInfo ) );
 	layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -941,7 +1007,8 @@ void VK_InitPipelines( void ) {
 	if ( vk.enabledFeatures.shaderClipDistance ) {
 		vk.vertexShaderClip = VK_CreateShaderModule( vk_spirv_generic_clip_vert, vk_spirv_generic_clip_vert_size );
 	}
-	vk.fragmentShader = VK_CreateShaderModule( vk_spirv_generic_frag, vk_spirv_generic_frag_size );
+	vk.fragmentShader = vk.bindless ? VK_CreateShaderModule( vk_spirv_generic_bindless_frag, vk_spirv_generic_bindless_frag_size )
+		: VK_CreateShaderModule( vk_spirv_generic_frag, vk_spirv_generic_frag_size );
 	vk.skinVertexShader = VK_CreateShaderModule( vk_spirv_skinned_vert, vk_spirv_skinned_vert_size );
 	if ( vk.enabledFeatures.shaderClipDistance ) {
 		vk.skinVertexShaderClip = VK_CreateShaderModule( vk_spirv_skinned_clip_vert, vk_spirv_skinned_clip_vert_size );
@@ -968,7 +1035,7 @@ void VK_InitPipelines( void ) {
 	}
 
 	vk_pipelineTableSize = 256;
-	vk_pipelines = ri.Malloc( sizeof( *vk_pipelines ) * vk_pipelineTableSize );
+	vk_pipelines = VK_Alloc( sizeof( *vk_pipelines ) * vk_pipelineTableSize );
 	Com_Memset( vk_pipelines, 0, sizeof( *vk_pipelines ) * vk_pipelineTableSize );
 	vk_numPipelines = 0;
 	vk_prebuildLate = qfalse;
@@ -986,7 +1053,7 @@ void VK_ShutdownPipelines( void ) {
 				qvkDestroyPipeline( vk.device, vk_pipelines[i].pipeline, NULL );
 			}
 		}
-		ri.Free( vk_pipelines );
+		VK_Free( vk_pipelines );
 		vk_pipelines = NULL;
 	}
 	vk_pipelineTableSize = 0;
@@ -1023,6 +1090,15 @@ void VK_ShutdownPipelines( void ) {
 	if ( vk.textureSetLayout ) {
 		qvkDestroyDescriptorSetLayout( vk.device, vk.textureSetLayout, NULL );
 	}
+	VK_TextureArrayShutdown();
+	if ( vk.textureArrayLayout ) {
+		qvkDestroyDescriptorSetLayout( vk.device, vk.textureArrayLayout, NULL );
+	}
+	if ( vk.emptySetLayout ) {
+		qvkDestroyDescriptorSetLayout( vk.device, vk.emptySetLayout, NULL );
+	}
+	vk.textureArrayLayout = vk.emptySetLayout = VK_NULL_HANDLE;
+	vk.bindless = qfalse;
 	if ( vk.dlightSetLayout ) {
 		qvkDestroyDescriptorSetLayout( vk.device, vk.dlightSetLayout, NULL );
 	}

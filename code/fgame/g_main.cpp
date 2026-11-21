@@ -675,6 +675,13 @@ void G_RunFrame(int levelTime, int frameTime)
         G_CheckStartRules();
 
         gi.setConfigstring(CS_WARMUP, va("%.0f", dmManager.GetMatchStartTime()));
+        // Added: both teams' scores for every client (sent only when changed)
+        gi.setConfigstring(
+            CS_TEAMSCORES,
+            g_gametype->integer >= GT_TEAM
+                ? va("%d %d", dmManager.GetTeamAllies()->m_teamwins, dmManager.GetTeamAxis()->m_teamwins)
+                : ""
+        );
 
         if (g_gametype->integer != GT_SINGLE_PLAYER) {
             level.CheckVote();

@@ -177,7 +177,6 @@ public:
     // Mission state
     qboolean mission_failed;
     qboolean died_already;
-    qboolean near_exit;
 
     // Water variables
     Vector water_color;

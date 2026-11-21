@@ -45,6 +45,18 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "vk_local.h"
 
+#include <SDL3/SDL.h>
+
+// pixel readbacks and the latency probe (below)
+static void VK_ReadbacksDone( uint64_t serial );
+static void VK_InitReadbacks( void );
+static void VK_ShutdownReadbacks( void );
+static void VK_ProbeGpuDone( vkFrame_t *frame, uint64_t ticks );
+static void VK_ProbeReport( void );
+#ifndef _WIN32
+#include <time.h>
+#endif
+
 #if defined( _MSC_VER )
 #include <intrin.h>	// _BitScanForward64 (VK_LowestBit)
 #endif
@@ -66,8 +78,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 vkInstance_t	vk;
 cvar_t			*r_vkValidation;
+cvar_t			*r_vkBindless;
 cvar_t			*r_vkFallbacks;
 cvar_t			*r_fastSync;
+cvar_t			*r_vkLatency;
 
 // render state recorded by the vk_set_* functions
 typedef struct {
@@ -102,6 +116,7 @@ typedef struct {
 	uint32_t		dlightBase;			// vkPushConstants_t's
 	uint32_t		dlightMask;
 	qboolean		dlightBacks;
+	qboolean		reactive;			// vk_set_reactive
 } vkState_t;
 
 static vkState_t	vks;
@@ -138,6 +153,7 @@ static struct {
 	uint64_t		*pending[VK_MAX_FRAMES];	// a bit per slot
 	qboolean		anyPending[VK_MAX_FRAMES];
 	uint64_t		drawnSerial;				// the last frame that drew from its copy
+	float			*shadow;					// r_smp: xyz and the two st of every slot, as the render thread knows them (7 floats a slot)
 	// vkinfo's counters (here, not in vkStats_t: vk keeps its size, and the
 	// renderer's large globals their places in memory, see README,
 	// Performance): draws from the pool, slots written into the copies
@@ -353,12 +369,12 @@ static void VK_DeferDestroyEntry( vkDestroyType_t type, uint64_t handle, uint64_
 		vkDeferredDestroy_t *list;
 
 		frame->maxDestroy = frame->maxDestroy ? frame->maxDestroy * 2 : 1024;
-		list = ri.Malloc( sizeof( *list ) * frame->maxDestroy );
+		list = VK_Alloc( sizeof( *list ) * frame->maxDestroy );
 		if ( frame->numDestroy ) {
 			Com_Memcpy( list, frame->destroyList, sizeof( *list ) * frame->numDestroy );
 		}
 		if ( frame->destroyList ) {
-			ri.Free( frame->destroyList );
+			VK_Free( frame->destroyList );
 		}
 		frame->destroyList = list;
 	}
@@ -504,6 +520,8 @@ static void VK_CollectTimestamps( vkFrame_t *frame ) {
 	vk.stats.gpuPresentUs += ( ( ts[VK_TS_PRESENT_END] - ts[VK_TS_PRESENT_START] ) & mask ) * scale;
 	vk.stats.gpuFrameUs += ( ( ts[VK_TS_PRESENT_END] - ts[VK_TS_MAIN_START] ) & mask ) * scale;
 	vk.stats.gpuFrames++;
+	vk.lastGpuFrameUs = (uint32_t)( ( ( ts[VK_TS_PRESENT_END] - ts[VK_TS_MAIN_START] ) & mask ) * scale );
+	VK_ProbeGpuDone( frame, ts[VK_TS_PRESENT_END] );
 	if ( vk_frameLog ) {
 		VK_FrameLogGpu( frame->serial, ts[VK_TS_MAIN_START], ts[VK_TS_MAIN_END], ts[VK_TS_PRESENT_END], mask, scale );
 	}
@@ -529,6 +547,14 @@ static void VK_BeginMainCommandBuffer( void ) {
 	vk_dirty = VK_DIRTY_ALL;
 }
 
+// what is bound in the main command buffer is no longer known (compute
+// recorded in it outside of this file: vk_image.c's VK_UploadTextureGPU):
+// the draws that follow bind everything again
+void VK_ForgetBindings( void ) {
+	Com_Memset( &vkb, 0, sizeof( vkb ) );
+	vk_dirty = VK_DIRTY_ALL;
+}
+
 static void VK_UpdateDepthTarget( void );
 
 void VK_BeginFrameIfNeeded( void ) {
@@ -550,8 +576,17 @@ void VK_BeginFrameIfNeeded( void ) {
 	VK_CHECK( qvkWaitForFences( vk.device, 1, &frame->fence, VK_TRUE, UINT64_MAX ) );
 	vk.stats.waitUs += VK_Microseconds() - start;
 	VK_ProcessDestroyList( frame );
+	// bindless textures: this frame's set gets the slots that changed since
+	// it was last written (the frame is done, so the set is free)
+	if ( vk.bindless ) {
+		VK_TextureArrayUpdate( frame );
+	}
 	VK_CollectDepthReads( frame );
 	VK_CollectTimestamps( frame );
+	// the pixel readbacks of the frame that used the slot before
+	VK_ReadbacksDone( frame->serial );
+	frame->probeInputUs = 0;
+	frame->token = 0;
 
 	frame->vertexOffset = 0;
 	frame->stagingOffset = 0;
@@ -807,12 +842,12 @@ static void VK_BeginRenderPass( void ) {
 	info.framebuffer = vk.targetFramebuffer;
 	if ( vkt.active ) {
 		// the temporal path's scene (vk_temporal.c): its first render pass
-		// clears the color, the motion vectors and the normals (alpha 1, 0, 0)
+		// clears the color, the motion vectors and the normals (0, 0, 0;
+		// the color's alpha is the reactive share, VK_PIPE_REACTIVE)
 		info.renderPass = vkt.clearPending ? vkt.renderPassClear : vkt.renderPass;
 		info.framebuffer = vkt.framebuffers[vkt.current];
 		if ( vkt.clearPending ) {
 			Com_Memset( clearValues, 0, sizeof( clearValues ) );
-			clearValues[0].color.float32[3] = 1.0f;
 			info.clearValueCount = 3;
 			info.pClearValues = clearValues;
 			vkt.clearPending = qfalse;
@@ -874,6 +909,30 @@ static uint32_t VK_EndFrameCommands( VkCommandBuffer *cmds, qboolean endOfFrame 
 	return numCmds;
 }
 
+// one vkQueueSubmit of count batches, timed and counted; the fence, if any,
+// reset first. With the submit thread the queue is locked: the thread may be
+// presenting (the render thread submits its frames itself, vk_submit.c)
+static void VK_QueueSubmit( uint32_t count, const VkSubmitInfo *submits, VkFence fence ) {
+	VkResult result;
+	uint64_t start;
+
+	if ( fence ) {
+		VK_CHECK( qvkResetFences( vk.device, 1, &fence ) );
+		vk.lastSubmitFence = fence;
+	}
+	start = VK_Microseconds();
+	if ( vk.submitThread ) {
+		VK_LockSubmitQueue();
+	}
+	result = qvkQueueSubmit( vk.queue, count, submits, fence );
+	if ( vk.submitThread ) {
+		VK_UnlockSubmitQueue();
+	}
+	VK_CHECK( result );
+	vk.stats.submitUs += VK_Microseconds() - start;
+	vk.stats.submits++;
+}
+
 /*
 ===============
 VK_SubmitFrameCommands
@@ -888,8 +947,9 @@ static void VK_SubmitFrameCommands( VkFence fence, VkSemaphore signal, qboolean 
 	VkCommandBuffer cmds[2];
 	VkPipelineStageFlags waitStage;
 	VkSubmitInfo submit;
+	vkAoSubmitChain_t aoChain;
+	uint64_t aoSignal, aoWait;
 	uint32_t numCmds;
-	uint64_t start;
 
 	numCmds = VK_EndFrameCommands( cmds, endOfFrame );
 
@@ -906,15 +966,10 @@ static void VK_SubmitFrameCommands( VkFence fence, VkSemaphore signal, qboolean 
 		submit.signalSemaphoreCount = 1;
 		submit.pSignalSemaphores = &signal;
 	}
-
-	if ( fence ) {
-		VK_CHECK( qvkResetFences( vk.device, 1, &fence ) );
-		vk.lastSubmitFence = fence;
-	}
-	start = VK_Microseconds();
-	VK_CHECK( qvkQueueSubmit( vk.queue, 1, &submit, fence ) );
-	vk.stats.submitUs += VK_Microseconds() - start;
-	vk.stats.submits++;
+	// the compute queue's ambient occlusion (r_aoAsync, vk_temporal.c)
+	VK_TemporalTakeAoSubmitInfo( &aoSignal, &aoWait );
+	VK_TemporalAoChainSubmit( &aoChain, &submit, aoSignal, aoWait );
+	VK_QueueSubmit( 1, &submit, fence );
 
 	// draws recorded from now on are in a new segment (see vk_image.c)
 	vk.segment++;
@@ -945,6 +1000,8 @@ void VK_FlushAndWait( void ) {
 	vk.stats.waitUs += start;
 	vk.stats.flushUs += start;
 	vk.stats.flushes++;
+	// the readbacks recorded so far are done
+	VK_ReadbacksDone( vk.frame->serial );
 
 	// the GPU is idle: everything waiting for destruction can go, and the
 	// buffers of the frame can be reused
@@ -960,6 +1017,108 @@ void VK_FlushAndWait( void ) {
 
 /*
 ===============
+VK_ChainPresentId
+
+Gives a present the next present id (VK_KHR_present_id), for
+VK_WaitForPresentShown, in *id (the caller's, until the present); on the
+thread that presents (the main, render or submit thread, one at a time)
+===============
+*/
+void VK_ChainPresentId( VkPresentInfoKHR *presentInfo, VkPresentIdKHR *presentId, uint64_t *id ) {
+	*id = ++vk.lastPresentId;
+	Com_Memset( presentId, 0, sizeof( *presentId ) );
+	presentId->sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
+	presentId->pNext = presentInfo->pNext;
+	presentId->swapchainCount = 1;
+	presentId->pPresentIds = id;
+	presentInfo->pNext = presentId;
+}
+
+/*
+===============
+VK_WaitForPresentShown
+
+With vsync (FIFO), right after the present with this id: waits until the
+frames queued for the display are down to vk.pacing.depth (this present
+shown, or the one before), so the next frame reads its input then, instead
+of queuing up to the swapchain's images (about a refresh of input lag less
+each frame not queued: 14.4 to 7.3 ms at 280 Hz). One queued is the least
+lag, but a frame presented once the one before is shown must make the
+compositor's next composition: niri at 280 Hz takes it a refresh later,
+which halves the frame rate. So the pacing starts each swapchain with two
+queued, learns the interval between frames shown, tries one queued once,
+120 frames after the swapchain was made (at startup that is the menu), and
+goes back to two for good when frames take two refreshes (4 of 8): no try
+during play, whose 8 frames at half the rate would be a stutter. At most
+100 ms a wait: a hidden window's frames may never be shown. Called by the thread that presents: nothing else uses the
+swapchain then. Returns VK_SUCCESS, VK_ERROR_OUT_OF_DATE_KHR (also for
+suboptimal and a lost surface: the swapchain is made again) or an error
+===============
+*/
+VkResult VK_WaitForPresentShown( uint64_t id, uint64_t *us ) {
+	VkResult result;
+	uint64_t start, now, target;
+
+	if ( !id || !qvkWaitForPresentKHR
+		|| ( vk.presentMode != VK_PRESENT_MODE_FIFO_KHR && vk.presentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR ) ) {
+		return VK_SUCCESS;
+	}
+	target = id - ( vk.pacing.depth > 1 ? 1 : 0 );
+	if ( target < vk.pacing.firstPresentId ) {
+		// the first present of the swapchain
+		return VK_SUCCESS;
+	}
+	start = VK_Microseconds();
+	result = qvkWaitForPresentKHR( vk.device, vk.swapchain, target, 100000000ull );
+	now = VK_Microseconds();
+	*us += now - start;
+
+	if ( result == VK_SUCCESS ) {
+		if ( vk.pacing.lastShownUs ) {
+			float interval = (float)( now - vk.pacing.lastShownUs );
+
+			if ( vk.pacing.depth > 1 ) {
+				if ( !vk.pacing.periodUs ) {
+					vk.pacing.periodUs = interval;
+				} else if ( interval < vk.pacing.periodUs * 3.0f ) {
+					vk.pacing.periodUs += ( interval - vk.pacing.periodUs ) * 0.05f;
+				}
+				if ( ++vk.pacing.frames >= 120 && !vk.pacing.tries ) {
+					// one queued: the next wait is for the frame just
+					// presented, a refresh longer, not counted
+					vk.pacing.depth = 1;
+					vk.pacing.window = vk.pacing.misses = 0;
+					vk.pacing.tries++;
+					now = 0;
+				}
+			} else {
+				if ( interval > vk.pacing.periodUs * 1.5f ) {
+					vk.pacing.misses++;
+				}
+				if ( ++vk.pacing.window == 8 ) {
+					if ( vk.pacing.misses >= 4 ) {
+						// two queued for the rest of the swapchain
+						vk.pacing.depth = 2;
+						vk.pacing.frames = 0;
+					}
+					vk.pacing.window = vk.pacing.misses = 0;
+				}
+			}
+		}
+		vk.pacing.lastShownUs = now;
+	}
+	if ( result == VK_TIMEOUT ) {
+		vk.pacing.lastShownUs = 0;
+		return VK_SUCCESS;
+	}
+	if ( result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_SURFACE_LOST_KHR ) {
+		return VK_ERROR_OUT_OF_DATE_KHR;
+	}
+	return result;
+}
+
+/*
+===============
 VK_QueuePresent
 
 Presents the held swapchain image once its present semaphore is signaled,
@@ -970,6 +1129,8 @@ after the previous present (see vk_instance.c)
 static void VK_QueuePresent( uint32_t imageIndex ) {
 	VkPresentInfoKHR presentInfo;
 	VkSwapchainPresentFenceInfoEXT fenceInfo;
+	VkPresentIdKHR presentId;
+	uint64_t id = 0;
 	VkResult result;
 	uint64_t start;
 
@@ -989,10 +1150,16 @@ static void VK_QueuePresent( uint32_t imageIndex ) {
 		fenceInfo.pFences = &vk.presentFenceSlots[vk.nextPresentFence].fence;
 		presentInfo.pNext = &fenceInfo;
 	}
+	if ( vk.presentWait ) {
+		VK_ChainPresentId( &presentInfo, &presentId, &id );
+	}
 
+	// the frame limiter's hold: no two presents closer than the cap's period
+	ri.PresentGate( vk.frame ? vk.frame->token : 0 );
 	start = VK_Microseconds();
 	vk.stats.frameToPresentUs += start - vk.frameStartUs;
 	vk.lastPresentUs = start;
+	ri.PresentMark( vk.frame ? vk.frame->token : 0 );
 	result = qvkQueuePresentKHR( vk.queue, &presentInfo );
 	vk.stats.presentUs += VK_Microseconds() - start;
 	vk.heldImage = qfalse;
@@ -1004,6 +1171,19 @@ static void VK_QueuePresent( uint32_t imageIndex ) {
 	// queued, also when out of date: the semaphore wait happens and the
 	// fence signals
 	VK_PresentFenceUsed();
+	if ( vk.frame ) {
+		VK_ProbePresent( vk.frame->probeInputUs, start, id );
+	}
+
+	// vsync: until it is shown, before the next frame's input
+	if ( !vk.swapchainOutOfDate ) {
+		result = VK_WaitForPresentShown( id, &vk.stats.presentWaitUs );
+		if ( result == VK_ERROR_OUT_OF_DATE_KHR ) {
+			vk.swapchainOutOfDate = qtrue;
+		} else {
+			VK_CHECK( result );
+		}
+	}
 }
 
 /*
@@ -1100,20 +1280,26 @@ VkPipelineStageFlags VK_PresentCopyStage( void ) {
 
 /*
 ===============
-VK_Present
+VK_SubmitPresentCopy
 
-Frames drawn offscreen: copies the frame to a swapchain image and presents
-it; returns qfalse when there is nothing to present to (minimized window),
-the frame fence is then not submitted
+Frames drawn offscreen: submits the frame with its copy to a swapchain
+image, which the caller presents. The frame's commands (cmds, ended) and
+the copy go in one vkQueueSubmit of two batches, only the copy waiting for
+the image, as on the submit thread (vk_submit.c): one submission's driver
+and kernel cost a frame less. Returns the image, or -1 with nothing
+submitted when there is nothing to present to (minimized window, out of
+date). With the submit thread it is drained (the swapchain is this
+thread's) and the image it acquired ahead is the held one.
 ===============
 */
-static qboolean VK_Present( vkFrame_t *frame ) {
+static int VK_SubmitPresentCopy( vkFrame_t *frame, const VkCommandBuffer *cmds, uint32_t numCmds ) {
 	VkPipelineStageFlags waitStage;
-	VkSubmitInfo submit;
+	VkSubmitInfo submits[2];
+	vkAoSubmitChain_t aoChain;
+	uint64_t aoSignal, aoWait;
 	VkCommandBuffer cmd;
 	uint32_t imageIndex;
 	VkResult result;
-	uint64_t start;
 	int width, height;
 
 	// recreate the swapchain when the window changed; there is none while
@@ -1123,20 +1309,20 @@ static qboolean VK_Present( vkFrame_t *frame ) {
 		VK_CreateSwapchain();
 	}
 	if ( !vk.swapchain ) {
-		return qfalse;
+		return -1;
 	}
 
 	result = VK_AcquireNextImage( &vk.stats.acquireUs );
 	if ( result == VK_ERROR_OUT_OF_DATE_KHR ) {
 		VK_CreateSwapchain();
 		if ( !vk.swapchain ) {
-			return qfalse;
+			return -1;
 		}
 		result = VK_AcquireNextImage( &vk.stats.acquireUs );
 	}
 	if ( result == VK_ERROR_OUT_OF_DATE_KHR ) {
 		vk.swapchainOutOfDate = qtrue;
-		return qfalse;
+		return -1;
 	}
 	VK_CHECK( result );
 	imageIndex = vk.heldIndex;
@@ -1148,23 +1334,22 @@ static qboolean VK_Present( vkFrame_t *frame ) {
 	}
 	VK_CHECK( VK_RecordPresentCopy( frame, cmd, vk.swapchainImages[imageIndex] ) );
 
-	Com_Memset( &submit, 0, sizeof( submit ) );
-	submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-	VK_WaitForHeldImage( &submit, &waitStage, VK_PresentCopyStage() );
-	submit.commandBufferCount = 1;
-	submit.pCommandBuffers = &cmd;
-	submit.signalSemaphoreCount = 1;
-	submit.pSignalSemaphores = &vk.presentSemaphores[imageIndex];
-
-	VK_CHECK( qvkResetFences( vk.device, 1, &frame->fence ) );
-	start = VK_Microseconds();
-	VK_CHECK( qvkQueueSubmit( vk.queue, 1, &submit, frame->fence ) );
-	vk.stats.submitUs += VK_Microseconds() - start;
-	vk.stats.submits++;
-	vk.lastSubmitFence = frame->fence;
-
-	VK_QueuePresent( imageIndex );
-	return qtrue;
+	Com_Memset( submits, 0, sizeof( submits ) );
+	submits[0].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submits[0].commandBufferCount = numCmds;
+	submits[0].pCommandBuffers = cmds;
+	submits[1].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	VK_WaitForHeldImage( &submits[1], &waitStage, VK_PresentCopyStage() );
+	submits[1].commandBufferCount = 1;
+	submits[1].pCommandBuffers = &cmd;
+	submits[1].signalSemaphoreCount = 1;
+	submits[1].pSignalSemaphores = &vk.presentSemaphores[imageIndex];
+	// the compute queue's ambient occlusion (r_aoAsync, vk_temporal.c): on
+	// the frame's batch, as in VK_SubmitFrameCommands
+	VK_TemporalTakeAoSubmitInfo( &aoSignal, &aoWait );
+	VK_TemporalAoChainSubmit( &aoChain, &submits[0], aoSignal, aoWait );
+	VK_QueueSubmit( 2, submits, frame->fence );
+	return (int)imageIndex;
 }
 
 static void VK_CreateFrames( void ) {
@@ -1223,7 +1408,7 @@ static void VK_CreateFrames( void ) {
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_HOST_CACHED_BIT );
 		VK_CreateBuffer( &frame->dlightBuffer, VK_MAX_FRAME_DLIGHTS * sizeof( vkDlightGPU_t ), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT );
-		frame->dlightCopy = ri.Malloc( VK_MAX_FRAME_DLIGHTS * sizeof( vkDlightGPU_t ) );
+		frame->dlightCopy = VK_Alloc( VK_MAX_FRAME_DLIGHTS * sizeof( vkDlightGPU_t ) );
 		VK_CreateBuffer( &frame->skinBuffer, VK_SKIN_FRAME_WORDS * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT );
 	}
@@ -1298,14 +1483,14 @@ static void VK_DestroyFrames( void ) {
 
 		VK_ProcessDestroyList( frame );
 		if ( frame->destroyList ) {
-			ri.Free( frame->destroyList );
+			VK_Free( frame->destroyList );
 		}
 		VK_DestroyBuffer( &frame->vertexBuffer );
 		VK_DestroyBuffer( &frame->stagingBuffer );
 		VK_DestroyBuffer( &frame->depthReadBuffer );
 		VK_DestroyBuffer( &frame->dlightBuffer );
 		if ( frame->dlightCopy ) {
-			ri.Free( frame->dlightCopy );
+			VK_Free( frame->dlightCopy );
 			frame->dlightCopy = NULL;
 		}
 		VK_DestroyBuffer( &frame->skinBuffer );
@@ -1356,9 +1541,13 @@ VK_CreateImage
 A 2D image with memory of its own and a view of all its levels (aspect)
 ===============
 */
-void VK_CreateImage( VkFormat format, VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageAspectFlags aspect,
-	int width, int height, int mipLevels, VkImage *image, VkDeviceMemory *memory, VkImageView *view )
+// computeShared with vk.asyncCompute: the graphics and the compute queue
+// both touch the image (VK_SHARING_MODE_CONCURRENT: no ownership transfers;
+// the timeline semaphores order the accesses, vk_temporal.c)
+void VK_CreateImageShared( VkFormat format, VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageAspectFlags aspect,
+	int width, int height, int mipLevels, qboolean computeShared, VkImage *image, VkDeviceMemory *memory, VkImageView *view )
 {
+	uint32_t families[2];
 	VkImageCreateInfo imageInfo;
 	VkImageViewCreateInfo viewInfo;
 	VkMemoryRequirements memReqs;
@@ -1376,6 +1565,13 @@ void VK_CreateImage( VkFormat format, VkSampleCountFlagBits samples, VkImageUsag
 	imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 	imageInfo.usage = usage;
 	imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	if ( computeShared && vk.asyncCompute ) {
+		families[0] = vk.queueFamily;
+		families[1] = vk.computeFamily;
+		imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+		imageInfo.queueFamilyIndexCount = 2;
+		imageInfo.pQueueFamilyIndices = families;
+	}
 	imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	VK_CHECK( qvkCreateImage( vk.device, &imageInfo, NULL, image ) );
 
@@ -1392,6 +1588,12 @@ void VK_CreateImage( VkFormat format, VkSampleCountFlagBits samples, VkImageUsag
 	viewInfo.subresourceRange.levelCount = mipLevels;
 	viewInfo.subresourceRange.layerCount = 1;
 	VK_CHECK( qvkCreateImageView( vk.device, &viewInfo, NULL, view ) );
+}
+
+void VK_CreateImage( VkFormat format, VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageAspectFlags aspect,
+	int width, int height, int mipLevels, VkImage *image, VkDeviceMemory *memory, VkImageView *view )
+{
+	VK_CreateImageShared( format, samples, usage, aspect, width, height, mipLevels, qfalse, image, memory, view );
 }
 
 static void VK_CreateTargetImage( VkFormat format, VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageAspectFlags aspect,
@@ -2010,6 +2212,7 @@ static void VK_DestroyRenderTargets( void ) {
 	VK_DestroyTargetImage( &vk.depthImage, &vk.depthMemory, &vk.depthView );
 	VK_DestroyTargetImage( &vk.msColorImage, &vk.msColorMemory, &vk.msColorView );
 	VK_DestroyTargetImage( &vk.msDepthImage, &vk.msDepthMemory, &vk.msDepthView );
+	VK_DestroyTargetImage( &vk.blurImage, &vk.blurMemory, &vk.blurView );
 }
 
 /*
@@ -2082,13 +2285,14 @@ static void VK_ReportCapabilities( void ) {
 	glConfig.stencilBits = ( vk.depthAspect & VK_IMAGE_ASPECT_STENCIL_BIT ) ? 8 : 0;
 
 	ri.Printf( PRINT_ALL, "Vulkan device: %s (%s)\n", glConfig.renderer_string, glConfig.version_string );
-	ri.Printf( PRINT_ALL, "Vulkan present mode: %s, render target %dx%d, %u swapchain images, %d frames in flight%s\n",
+	ri.Printf( PRINT_ALL, "Vulkan present mode: %s, render target %dx%d, %u swapchain images, %d frames in flight%s%s\n",
 		VK_SwapchainPresentModeName(), vk.width, vk.height, vk.swapchainImageCount, VK_MAX_FRAMES,
-		vk.submitThread ? ", submit thread (r_vkSubmitThread)" : "" );
+		vk.submitThread ? ", submit thread (r_vkSubmitThread)" : "",
+		vk.asyncCompute ? ", compute queue (r_aoAsync)" : "" );
 	// what the fallbacks replace (see README, Known risks); r_vkFallbacks forces them
-	ri.Printf( PRINT_ALL, "Vulkan present fences %s, view swizzle %s, stride 0 bindings %s, Bresenham lines %s, line stipple %s%s\n",
+	ri.Printf( PRINT_ALL, "Vulkan present fences %s, view swizzle %s, stride 0 bindings %s, Bresenham lines %s, line stipple %s, bindless textures %s%s\n",
 		vk.presentFences ? "yes" : "no", vk.viewSwizzle ? "yes" : "no", vk.strideZero ? "yes" : "no",
-		vk.bresenhamLines ? "yes" : "no", vk.lineStipple ? "yes" : "no",
+		vk.bresenhamLines ? "yes" : "no", vk.lineStipple ? "yes" : "no", vk.bindless ? "yes" : "no",
 		vk.fallbacks ? va( " (r_vkFallbacks %d)", vk.fallbacks ) : "" );
 }
 
@@ -2106,7 +2310,9 @@ static void VK_Info_f( void ) {
 	int numBlocks, numPipelines, prebuilt, prebuiltUsed;
 
 	// the submit thread's counters and its present fences and retired
-	// swapchains, as of every frame queued
+	// swapchains, as of every frame queued (the render thread queues the
+	// frames and joins them too: it is waited for first, as in vk_finish)
+	R_FrontEndSync();
 	VK_DrainSubmitThread();
 
 #define VK_DELTA( field ) ( (unsigned long long)( s->field - r->field ) )
@@ -2116,7 +2322,8 @@ static void VK_Info_f( void ) {
 		" waitUs=%llu flushUs=%llu submitUs=%llu acquireUs=%llu acquireAheadUs=%llu frameToPresentUs=%llu presentUs=%llu pipelineUs=%llu prebuiltUs=%llu allocationUs=%llu textureUs=%llu"
 		" gpuFrames=%llu gpuMainUs=%llu gpuPresentUs=%llu gpuFrameUs=%llu"
 		" threadWaitUs=%llu threadFrames=%llu threadStartUs=%llu threadSubmits=%llu threadSubmitUs=%llu threadAcquireUs=%llu"
-		" threadPresents=%llu threadPresentUs=%llu threadCopies=%llu\n",
+		" threadPresents=%llu threadPresentUs=%llu threadCopies=%llu presentWaitUs=%llu threadPresentWaitUs=%llu inputWaits=%llu inputWaitUs=%llu"
+		" vertexBinds=%llu indexBinds=%llu pushConstants=%llu dynamicStates=%llu\n",
 		VK_DELTA( frames ), VK_DELTA( renderPasses ), VK_DELTA( submits ), VK_DELTA( flushes ), VK_DELTA( draws ),
 		VK_DELTA( staticDraws ), VK_DELTA( effectsDraws ), (unsigned long long)( vk_terrain.draws - vk_terrain.reportedDraws ),
 		(unsigned long long)( vk_terrain.slots - vk_terrain.reportedSlots ), VK_DELTA( skinDraws ), VK_DELTA( pipelineBinds ), VK_DELTA( descriptorBinds ), VK_DELTA( vertexBytes ), VK_DELTA( stagingBytes ), VK_DELTA( mainUploads ),
@@ -2126,7 +2333,8 @@ static void VK_Info_f( void ) {
 		VK_DELTA( acquireUs ), VK_DELTA( acquireAheadUs ), VK_DELTA( frameToPresentUs ), VK_DELTA( presentUs ), VK_DELTA( pipelineUs ), VK_DELTA( prebuiltUs ), VK_DELTA( allocationUs ), VK_DELTA( textureUs ),
 		VK_DELTA( gpuFrames ), VK_DELTA( gpuMainUs ), VK_DELTA( gpuPresentUs ), VK_DELTA( gpuFrameUs ),
 		VK_DELTA( threadWaitUs ), VK_DELTA( threadFrames ), VK_DELTA( threadStartUs ), VK_DELTA( threadSubmits ),
-		VK_DELTA( threadSubmitUs ), VK_DELTA( threadAcquireUs ), VK_DELTA( threadPresents ), VK_DELTA( threadPresentUs ), VK_DELTA( threadCopies ) );
+		VK_DELTA( threadSubmitUs ), VK_DELTA( threadAcquireUs ), VK_DELTA( threadPresents ), VK_DELTA( threadPresentUs ), VK_DELTA( threadCopies ), VK_DELTA( presentWaitUs ), VK_DELTA( threadPresentWaitUs ), VK_DELTA( inputWaits ), VK_DELTA( inputWaitUs ),
+		VK_DELTA( vertexBinds ), VK_DELTA( indexBinds ), VK_DELTA( pushConstants ), VK_DELTA( dynamicStates ) );
 #undef VK_DELTA
 	VK_MemoryBlockInfo( &numBlocks, &blockSize, &blockUsed );
 	VK_PipelineCounts( &numPipelines, &prebuilt, &prebuiltUsed );
@@ -2136,6 +2344,11 @@ static void VK_Info_f( void ) {
 		vk.liveAllocations, numBlocks, blockSize / ( 1024.0 * 1024.0 ), blockUsed / ( 1024.0 * 1024.0 ), numPipelines, prebuilt, prebuiltUsed,
 		vk.depthReadable ? "" : "not ", vk_skin.words / ( 256.0 * 1024.0 ), VK_SKIN_DATA_WORDS / ( 256 * 1024 ),
 		vk.numPresentFences, vk.numRetiredSwapchains, VK_MAX_FRAMES, vk.submitThread ? " (submit thread)" : "", vk.swapchainImageCount );
+	VK_ProbeReport();
+	if ( vk.presentWait && ( vk.presentMode == VK_PRESENT_MODE_FIFO_KHR || vk.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ) ) {
+		ri.Printf( PRINT_ALL, "vkinfo: vsync pacing: %d frame%s queued, %.0f us between frames shown, %d tr%s of one queued\n",
+			vk.pacing.depth, vk.pacing.depth > 1 ? "s" : "", vk.pacing.periodUs, vk.pacing.tries, vk.pacing.tries == 1 ? "y" : "ies" );
+	}
 
 	vk.statsReported = vk.stats;
 	vk_terrain.reportedDraws = vk_terrain.draws;
@@ -2170,9 +2383,13 @@ static void VK_ResetState( void ) {
 
 void vk_initialize( void ) {
 	r_vkValidation = ri.Cvar_Get( "r_vkValidation", "0", CVAR_LATCH );
+	r_vkBindless = ri.Cvar_Get( "r_vkBindless", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	ri.Cvar_SetDescription( r_vkBindless, "1: every texture is in one descriptor set bound once a frame and a draw names its textures by index, instead of a descriptor set bind per texture change (where the device allows it: see the startup line Vulkan ... bindless textures); 0: a set per texture" );
 	r_vkFallbacks = ri.Cvar_Get( "r_vkFallbacks", "0", CVAR_LATCH );
 	r_vkSubmitThread = ri.Cvar_Get( "r_vkSubmitThread", "0", CVAR_ARCHIVE | CVAR_LATCH );
-	ri.Cvar_SetDescription( r_vkSubmitThread, "1: a thread submits and presents the frames and acquires the swapchain images (2: and copies every frame, for tests; see the renderer's README)" );
+	ri.Cvar_SetDescription( r_vkSubmitThread, "1: a thread submits and presents the frames and acquires the swapchain images; with r_smp the render thread submits and the thread presents (2: every frame copied, 3: the render thread's frames handed over whole as before, for tests; see the renderer's README)" );
+	r_vkLatency = ri.Cvar_Get( "r_vkLatency", "0", 0 );
+	ri.Cvar_SetDescription( r_vkLatency, "1: vkinfo reports the time from each frame's input to its present, to the GPU done with it (calibrated timestamps) and with vsync to it shown, and the main thread's frame times, as percentiles since the last vkinfo (tests)" );
 	r_fastSync = ri.Cvar_Get( "r_fastSync", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_fastSync, "1: without vsync (r_swapInterval 0) the mailbox present mode instead of immediate: no tearing, every refresh shows the newest finished frame, for a few ms more input to display (immediate where there is no mailbox)" );
 	VK_TemporalRegisterCvars();
@@ -2180,6 +2397,7 @@ void vk_initialize( void ) {
 
 	Com_Memset( &vk, 0, sizeof( vk ) );
 	Com_Memset( &vko, 0, sizeof( vko ) );
+	VK_InitReadbacks();
 	VK_ResetState();
 	// 0 is the segment of new textures, which no draw has used
 	vk.segment = 1;
@@ -2191,6 +2409,7 @@ void vk_initialize( void ) {
 	// before the swapchain, whose images it decides
 	if ( r_vkSubmitThread->integer ) {
 		vk.submitThread = VK_StartSubmitThread();
+		vk.submitWhole = r_vkSubmitThread->integer == 3;
 	}
 	VK_CreateFrames();
 	VK_PreparePresentFence();
@@ -2198,12 +2417,16 @@ void vk_initialize( void ) {
 	VK_CreateRenderTargets();
 	VK_InitPipelines();
 	VK_CreateDlightSets();
+	if ( vk.bindless ) {
+		VK_TextureArrayInit();
+	}
 	VK_TemporalInitPipelines();
 	// the frame VK_CreateRenderTargets started
 	if ( vk.frame ) {
 		VK_TemporalBeginFrame( vk.frame, vk_skin.buffer.buffer );
 	}
 	VK_InitTextures();
+	VK_RadarInit();
 	VK_ReportCapabilities();
 
 	ri.Cmd_AddCommand( "vkinfo", VK_Info_f );
@@ -2219,6 +2442,9 @@ void vk_shutdown( void ) {
 		// this thread's
 		VK_StopSubmitThread();
 		vk.submitThread = qfalse;
+		// a frame being recorded won't be: its compute submission would
+		// wait forever (r_aoAsync)
+		VK_TemporalAbortAoCompute();
 		qvkDeviceWaitIdle( vk.device );
 		// first: the held image's acquire semaphore is waited for, and the
 		// swapchains and their present semaphores go once their presents
@@ -2228,9 +2454,11 @@ void vk_shutdown( void ) {
 		VK_DestroyPresentFences();
 
 		VK_ShutdownTextures();
+		VK_RadarShutdown();
 		for ( i = 0; i < VK_MAX_FRAMES; i++ ) {
 			VK_ProcessDestroyList( &vk.frames[i] );
 		}
+		VK_RadarShutdownObjects();
 		VK_ShutdownTextureObjects();
 		VK_DestroyBuffer( &vk_static.buffer );
 		Com_Memset( &vk_static, 0, sizeof( vk_static ) );
@@ -2244,6 +2472,7 @@ void vk_shutdown( void ) {
 		VK_DestroyRenderTargets();
 		VK_DestroyBuffer( &vk.readbackBuffer );
 	}
+	VK_ShutdownReadbacks();
 
 	VK_DestroyDevice();
 
@@ -2286,6 +2515,76 @@ static void VK_QueueThreadFrame( vkFrame_t *frame ) {
 	vk.segment++;
 }
 
+/*
+===============
+VK_SubmitUnpresented
+
+The end of a frame that presents nothing (it drew nothing, the window is
+minimized, or the swapchain is out of date): its commands with only the
+fence, which still has to signal for the next use of the frame slot
+===============
+*/
+static void VK_SubmitUnpresented( vkFrame_t *frame, const VkCommandBuffer *cmds, uint32_t numCmds ) {
+	VkSubmitInfo submit;
+	vkAoSubmitChain_t aoChain;
+	uint64_t aoSignal, aoWait;
+
+	Com_Memset( &submit, 0, sizeof( submit ) );
+	submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit.commandBufferCount = numCmds;
+	submit.pCommandBuffers = cmds;
+	VK_TemporalTakeAoSubmitInfo( &aoSignal, &aoWait );
+	VK_TemporalAoChainSubmit( &aoChain, &submit, aoSignal, aoWait );
+	VK_QueueSubmit( 1, &submit, frame->fence );
+}
+
+/*
+===============
+VK_SubmitOnRenderThread
+
+With the render thread and the submit thread (vk_submit.c): the render
+thread submits the frame itself and the submit thread only presents it,
+then acquires the next frame's image. A frame drawn into the swapchain
+image is submitted at once; a frame drawn offscreen is copied into the
+image the thread acquired after its last present, once the thread is done
+with it (drained: the swapchain is this thread's then)
+===============
+*/
+static void VK_SubmitOnRenderThread( vkFrame_t *frame ) {
+	VkCommandBuffer cmds[2];
+	uint32_t numCmds;
+	int image;
+
+	// frames handed over whole before are submitted first
+	VK_JoinSubmittingJobs();
+
+	if ( vk.target == VK_TARGET_SWAPCHAIN ) {
+		image = (int)vk.targetIndex;
+		VK_SubmitFrameCommands( frame->fence, vk.presentSemaphores[image], qtrue );
+		vk.heldImage = qfalse;
+		VK_QueuePresentJob( frame, image );
+		return;
+	}
+
+	numCmds = VK_EndFrameCommands( cmds, qtrue );
+	image = -1;
+	if ( vk.target == VK_TARGET_OFFSCREEN ) {
+		VK_DrainSubmitThread();
+		VK_ReclaimSubmitThreadImage();
+		image = VK_SubmitPresentCopy( frame, cmds, numCmds );
+	}
+	if ( image >= 0 ) {
+		vk.heldImage = qfalse;
+		vk.stats.threadCopies++;
+		VK_QueuePresentJob( frame, image );
+	} else {
+		VK_SubmitUnpresented( frame, cmds, numCmds );
+	}
+
+	// draws recorded from now on are in a new segment (see vk_image.c)
+	vk.segment++;
+}
+
 void vk_begin_frame( void ) {
 	if ( !vk.device ) {
 		return;
@@ -2313,7 +2612,9 @@ void vk_end_frame( void ) {
 		vko.sdrFrame = qfalse;
 	}
 
-	if ( vk.submitThread ) {
+	if ( vk.submitThread && !vk.submitWhole && R_OnRenderThread() ) {
+		VK_SubmitOnRenderThread( frame );
+	} else if ( vk.submitThread ) {
 		VK_QueueThreadFrame( frame );
 	} else if ( vk.target == VK_TARGET_SWAPCHAIN ) {
 		VK_SubmitFrameCommands( frame->fence, vk.presentSemaphores[vk.targetIndex], qtrue );
@@ -2334,16 +2635,20 @@ void vk_end_frame( void ) {
 			}
 		}
 	} else {
-		VK_SubmitFrameCommands( VK_NULL_HANDLE, VK_NULL_HANDLE, qtrue );
+		VkCommandBuffer cmds[2];
+		uint32_t numCmds = VK_EndFrameCommands( cmds, qtrue );
+		int image = vk.target == VK_TARGET_OFFSCREEN ? VK_SubmitPresentCopy( frame, cmds, numCmds ) : -1;
 
 		// a frame that drew nothing presents nothing: the window keeps the
 		// last frame
-		if ( vk.target != VK_TARGET_OFFSCREEN || !VK_Present( frame ) ) {
-			// the fence still has to signal for the next use of this frame slot
-			VK_CHECK( qvkResetFences( vk.device, 1, &frame->fence ) );
-			VK_CHECK( qvkQueueSubmit( vk.queue, 0, NULL, frame->fence ) );
-			vk.lastSubmitFence = frame->fence;
+		if ( image >= 0 ) {
+			VK_QueuePresent( (uint32_t)image );
+		} else {
+			VK_SubmitUnpresented( frame, cmds, numCmds );
 		}
+
+		// draws recorded from now on are in a new segment (see vk_image.c)
+		vk.segment++;
 	}
 
 	// after the present: the fence of the next one, and the retired
@@ -2369,25 +2674,97 @@ void vk_end_frame( void ) {
 	// display; the next frame then reads its input once its image is
 	// acquired and is drawn into it, as without the thread. Without vsync
 	// that acquire doesn't wait and the thread works beside the next frame.
+	// On the render thread (r_smp) the game's input isn't read after this
+	// frame: the main thread waits for the frame slot before its input when
+	// that keeps the frame rate (tr_smp.c, R_IssueFrameThreaded), and the render
+	// thread at the next frame's first command; with vsync the main thread
+	// waits for this frame, and so for its present (R_IssueFrameThreaded)
 	if ( vk.submitThread ) {
 		uint64_t start;
 
 		if ( vk.presentMode == VK_PRESENT_MODE_FIFO_KHR || vk.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ) {
 			VK_JoinSubmitJob( ( vk.frameIndex + VK_MAX_FRAMES - 1 ) % VK_MAX_FRAMES );
 		}
-		VK_JoinSubmitJob( vk.frameIndex );
-		start = VK_Microseconds();
-		VK_CHECK( qvkWaitForFences( vk.device, 1, &vk.frames[vk.frameIndex].fence, VK_TRUE, UINT64_MAX ) );
-		vk.stats.waitUs += VK_Microseconds() - start;
+		if ( !R_OnRenderThread() ) {
+			VK_JoinSubmitJob( vk.frameIndex );
+			start = VK_Microseconds();
+			VK_CHECK( qvkWaitForFences( vk.device, 1, &vk.frames[vk.frameIndex].fence, VK_TRUE, UINT64_MAX ) );
+			vk.stats.waitUs += VK_Microseconds() - start;
+		}
 	}
 }
 
+/*
+===============
+vk_prepare_input_wait, vk_input_wait
+
+The render thread (r_smp, tr_smp.c): the main thread hands a frame over,
+then before the next frame's input it can wait until the GPU has done the
+frame slot that the frame after uses (the frame before the one handed
+over), as the back end would at that frame's first command: the input is
+read that much later and shown as soon. vk_prepare_input_wait takes the
+fence while the render thread is idle, before the hand-over; the render
+thread resets that fence only at the frame after next's submission, which
+comes after the next hand-over. vk_input_wait returns the microseconds
+waited
+===============
+*/
+void vk_prepare_input_wait( void ) {
+	vk.inputWaitFence = vk.device ? vk.frames[( vk.frameIndex + 1 ) % VK_MAX_FRAMES].fence : VK_NULL_HANDLE;
+}
+
+int vk_input_wait( void ) {
+	uint64_t start;
+
+	if ( !vk.device || !vk.inputWaitFence ) {
+		return 0;
+	}
+	start = VK_Microseconds();
+	VK_CHECK( qvkWaitForFences( vk.device, 1, &vk.inputWaitFence, VK_TRUE, UINT64_MAX ) );
+	start = VK_Microseconds() - start;
+	// the main thread's own counters
+	vk.stats.inputWaits++;
+	vk.stats.inputWaitUs += start;
+	return (int)start;
+}
+
+// the GPU time of the last frame whose timestamps were read (0 none); read
+// while the render thread is idle
+int vk_last_gpu_frame_us( void ) {
+	return vk.device ? (int)vk.lastGpuFrameUs : 0;
+}
+
+// the back end's waits so far (the GPU, the submit thread, the display), on
+// the thread that runs it
+uint64_t vk_back_end_wait_us( void ) {
+	return vk.stats.waitUs + vk.stats.threadWaitUs + vk.stats.presentWaitUs;
+}
+
+/*
+===============
+vk_present_waits
+
+Whether the present waits for the display (vsync): the render thread's
+hand-over then waits for it too (RE_BeginFrame)
+===============
+*/
+qboolean vk_present_waits( void ) {
+	return vk.presentMode == VK_PRESENT_MODE_FIFO_KHR || vk.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+}
+
 void vk_finish( void ) {
+	R_FrontEndSync();
 	// like glFinish for what has been submitted; the commands of the frame
 	// being recorded are submitted at vk_end_frame
 	VK_DrainSubmitThread();
 	if ( vk.device && vk.lastSubmitFence ) {
 		VK_CHECK( qvkWaitForFences( vk.device, 1, &vk.lastSubmitFence, VK_TRUE, UINT64_MAX ) );
+		// the readbacks of every frame submitted are done
+		VK_ReadbacksDone( vk.frame ? vk.frame->serial - 1 : vk.frameSerial );
+	}
+	// and for the compute queue's ambient occlusion (r_aoAsync)
+	if ( vk.device ) {
+		VK_TemporalFinishAoCompute();
 	}
 }
 
@@ -2406,6 +2783,25 @@ RENDER STATE
 
 void vk_set_state( unsigned long stateBits ) {
 	vks.stateBits = stateBits;
+}
+
+/*
+===============
+vk_bound_texture_slots
+
+Bindless textures: the slots of the textures bound to the units, unit 0 |
+unit 1 << 16 (the default texture's for an unbound unit), for the effects
+records (RB_StaticFxRecord); 0 without bindless textures
+===============
+*/
+uint32_t vk_bound_texture_slots( void ) {
+	uint32_t slots;
+
+	if ( !vk.bindless ) {
+		return 0;
+	}
+	slots = VK_TextureArraySlots( VK_GetTexture( vks.texture[0] ), VK_GetTexture( vks.texture[1] ) );
+	return ( slots & 0xFFFu ) | ( ( slots >> 12 ) << 16 );
 }
 
 void vk_bind_texture( int tmu, image_t *image ) {
@@ -2473,9 +2869,15 @@ void vk_set_depth_clamp( qboolean enable ) {
 
 void vk_set_polygon_offset( qboolean enable, float factor, float units ) {
 	vks.polygonOffset = enable;
-	vks.offsetFactor = factor;
-	vks.offsetUnits = units;
-	vk_dirty |= VK_DIRTY_DEPTHBIAS;
+	// the values matter to the pipelines with the bias enabled only
+	// (VK_PIPE_DEPTHBIAS), so they are kept when it is disabled and set
+	// again when they change: one vkCmdSetDepthBias a frame, not one per
+	// shader with polygon offset (two, on and off, before)
+	if ( enable && ( vks.offsetFactor != factor || vks.offsetUnits != units ) ) {
+		vks.offsetFactor = factor;
+		vks.offsetUnits = units;
+		vk_dirty |= VK_DIRTY_DEPTHBIAS;
+	}
 }
 
 void vk_set_color_mask( qboolean red, qboolean green, qboolean blue, qboolean alpha ) {
@@ -2839,9 +3241,11 @@ static void VK_TemporalPushConstants( vkTemporalPush_t *tp ) {
 			// a surface that doesn't move: the camera's motion only
 			VK_MultiplyMatrix( vkt.cameraDelta, mv, prevModelview );
 		}
-		// the view's last projection, but for the orthographic ones drawn
-		// in it (flares)
-		VK_MultiplyMVP( vks.projection[11] == -1.0f ? vkt.prevProjection : vks.projection, prevModelview, NULL, tp->prevMvp );
+		// the view's last projection (or the draws' own, the first-person
+		// weapon's: vk_set_prev_projection), but for the orthographic ones
+		// drawn in it (flares)
+		VK_MultiplyMVP( vks.projection[11] != -1.0f ? vks.projection
+			: vkt.prevProjectionSet ? vkt.drawPrevProjection : vkt.prevProjection, prevModelview, NULL, tp->prevMvp );
 	}
 
 	for ( i = 0; i < 4; i++ ) {
@@ -2852,8 +3256,11 @@ static void VK_TemporalPushConstants( vkTemporalPush_t *tp ) {
 	if ( VK_JitteredProjection( vks.projection ) ) {
 		tp->jitter[0] = vkt.jitterNdc[0];
 		tp->jitter[1] = vkt.jitterNdc[1];
+		// the anti-aliasing's texture LOD bias (r_taaLodBias)
+		tp->jitter[3] = vkt.lodBias;
 	} else {
 		tp->jitter[0] = tp->jitter[1] = 0.0f;
+		tp->jitter[3] = 0.0f;
 	}
 	if ( vks.depthMin == 1.0f && vks.depthMax == 1.0f ) {
 		tp->jitter[2] = VK_TEMPORAL_CLASS_SKY;
@@ -2862,7 +3269,6 @@ static void VK_TemporalPushConstants( vkTemporalPush_t *tp ) {
 	} else {
 		tp->jitter[2] = VK_TEMPORAL_CLASS_SURFACE;
 	}
-	tp->jitter[3] = 0.0f;
 }
 
 static void VK_ApplyDynamicState( VkCommandBuffer cmd, qboolean stippled ) {
@@ -2881,6 +3287,7 @@ static void VK_ApplyDynamicState( VkCommandBuffer cmd, qboolean stippled ) {
 			viewport.minDepth = vk_depth_floor();
 		}
 		qvkCmdSetViewport( cmd, 0, 1, &viewport );
+		vk.stats.dynamicStates++;
 	}
 
 	if ( vk_dirty & VK_DIRTY_SCISSOR ) {
@@ -2888,11 +3295,13 @@ static void VK_ApplyDynamicState( VkCommandBuffer cmd, qboolean stippled ) {
 
 		VK_ScissorRect( &scissor );
 		qvkCmdSetScissor( cmd, 0, 1, &scissor );
+		vk.stats.dynamicStates++;
 	}
 
 	if ( vk_dirty & VK_DIRTY_DEPTHBIAS ) {
 		// only used by pipelines with VK_PIPE_DEPTHBIAS
 		qvkCmdSetDepthBias( cmd, vks.offsetUnits, 0.0f, vks.offsetFactor );
+		vk.stats.dynamicStates++;
 	}
 
 	if ( vk_dirty & VK_DIRTY_LINEWIDTH ) {
@@ -2902,12 +3311,14 @@ static void VK_ApplyDynamicState( VkCommandBuffer cmd, qboolean stippled ) {
 			width = Com_Clamp( vk.deviceProperties.limits.lineWidthRange[0], vk.deviceProperties.limits.lineWidthRange[1], vks.lineWidth );
 		}
 		qvkCmdSetLineWidth( cmd, width );
+		vk.stats.dynamicStates++;
 	}
 
 	if ( vk_dirty & VK_DIRTY_STENCIL ) {
 		qvkCmdSetStencilCompareMask( cmd, VK_STENCIL_FACE_FRONT_AND_BACK, vks.stencilMask & 0xFF );
 		qvkCmdSetStencilWriteMask( cmd, VK_STENCIL_FACE_FRONT_AND_BACK, vks.stencilWriteMask & 0xFF );
 		qvkCmdSetStencilReference( cmd, VK_STENCIL_FACE_FRONT_AND_BACK, vks.stencilRef & 0xFF );
+		vk.stats.dynamicStates += 3;
 	}
 
 	if ( vk_dirty & VK_DIRTY_MVP ) {
@@ -2934,8 +3345,10 @@ static void VK_ApplyDynamicState( VkCommandBuffer cmd, qboolean stippled ) {
 			qvkCmdPushConstants( cmd, vkt.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, VK_PUSH_VERTEX_SIZE, &pc );
 			VK_TemporalPushConstants( &tp );
 			qvkCmdPushConstants( cmd, vkt.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, VK_TEMPORAL_PUSH_OFFSET, sizeof( tp ), &tp );
+			vk.stats.pushConstants += 2;
 		} else {
 			qvkCmdPushConstants( cmd, vk.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, VK_PUSH_VERTEX_SIZE, &pc );
+			vk.stats.pushConstants++;
 		}
 	}
 
@@ -2957,6 +3370,7 @@ static void VK_ApplyDynamicState( VkCommandBuffer cmd, qboolean stippled ) {
 		qvkCmdPushConstants( cmd, vkt.active ? vkt.pipelineLayout : vk.pipelineLayout,
 			vkt.active ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_FRAGMENT_BIT, VK_PUSH_VERTEX_SIZE,
 			offsetof( vkPushConstants_t, dlightBase ) - VK_PUSH_VERTEX_SIZE, (const byte *)&pc + VK_PUSH_VERTEX_SIZE );
+		vk.stats.pushConstants++;
 	}
 
 	if ( vk_dirty & VK_DIRTY_DLIGHT ) {
@@ -2967,11 +3381,13 @@ static void VK_ApplyDynamicState( VkCommandBuffer cmd, qboolean stippled ) {
 		qvkCmdPushConstants( cmd, vkt.active ? vkt.pipelineLayout : vk.pipelineLayout,
 			vkt.active ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_FRAGMENT_BIT, offsetof( vkPushConstants_t, dlightBase ),
 			sizeof( pc.dlightBase ) + sizeof( pc.dlightMask ), &pc.dlightBase );
+		vk.stats.pushConstants++;
 	}
 
 	if ( stippled ) {
 		if ( vk_dirty & VK_DIRTY_STIPPLE ) {
 			qvkCmdSetLineStippleEXT( cmd, vks.lineStippleFactor, vks.lineStipplePattern );
+			vk.stats.dynamicStates++;
 		}
 		vk_dirty = 0;
 	} else {
@@ -3110,8 +3526,18 @@ static void VK_BuildPipelineKey( vkPipelineKey_t *key, const vkState_t *s, primT
 		// the motion vectors of what moves: an entity with a last frame, a
 		// skeletal model's bones; the readers work out the camera's motion
 		// of the rest
-		if ( VK_TemporalWritesBuffers( bits ) && ( geometry->isSkinned || objectMotion ) ) {
+		if ( VK_TemporalWritesBuffers( bits ) && ( geometry->isSkinned || objectMotion
+			|| ( geometry->isStatic && geometry->staticFx >= 0 && geometry->staticFxMotion ) ) ) {
 			bits |= VK_PIPE_MOTION;
+		}
+		// blended effects put their share of the pixel into the scene's
+		// alpha (r_taaReactive); not decals, which lie on what is behind
+		// them, nor the sky's layers (depth range [1, 1]), which the
+		// camera's motion moves exactly: the 3 x 3 the resolve reads would
+		// take the history of the edges against the sky too
+		if ( s->reactive && ( bits & VK_PIPE_BLEND_BITS ) && !VK_TemporalWritesBuffers( bits )
+			&& !( bits & VK_PIPE_DEPTHBIAS ) && prim != PRIM_LINES && !( s->depthMin == 1.0f && s->depthMax == 1.0f ) ) {
+			bits |= VK_PIPE_REACTIVE;
 		}
 	}
 
@@ -3185,6 +3611,7 @@ static void VK_BindVertexBuffers( VkCommandBuffer cmd, const VkBuffer *buffers, 
 		qvkCmdBindVertexBuffers( cmd, 0, 4, buffers, offsets );
 		Com_Memcpy( vkb.vertexBuffers, buffers, sizeof( vkb.vertexBuffers ) );
 		Com_Memcpy( vkb.vertexOffsets, offsets, sizeof( vkb.vertexOffsets ) );
+		vk.stats.vertexBinds++;
 	}
 }
 
@@ -3193,6 +3620,7 @@ static void VK_BindIndexBuffer( VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSi
 		qvkCmdBindIndexBuffer( cmd, buffer, offset, VK_INDEX_TYPE_UINT32 );
 		vkb.indexBuffer = buffer;
 		vkb.indexOffset = offset;
+		vk.stats.indexBinds++;
 	}
 }
 
@@ -3201,7 +3629,22 @@ static void VK_BindNormals( VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize o
 		qvkCmdBindVertexBuffers( cmd, 4, 1, &buffer, &offset );
 		vkb.normalBuffer = buffer;
 		vkb.normalOffset = offset;
+		vk.stats.vertexBinds++;
 	}
+}
+
+/*
+===============
+VK_FrameIndexes
+
+Indexes copied into the frame's vertex buffer: bound once, at the buffer's
+start, and drawn from with firstIndex (VK_VertexAlloc keeps them 4-byte
+aligned); no bind per draw
+===============
+*/
+static uint32_t VK_FrameIndexes( VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset ) {
+	VK_BindIndexBuffer( cmd, buffer, 0 );
+	return (uint32_t)( offset / sizeof( glIndex_t ) );
 }
 
 /*
@@ -3213,7 +3656,7 @@ frame and binds them: positions, colors (or the constant color), texture
 coordinates of units 0 and 1, each in its own binding
 ===============
 */
-static void VK_UploadGeometry( VkCommandBuffer cmd, const drawGeometry_t *geometry, int numIndexes, const glIndex_t *indexes, qboolean normals ) {
+static uint32_t VK_UploadGeometry( VkCommandBuffer cmd, const drawGeometry_t *geometry, int numIndexes, const glIndex_t *indexes, qboolean normals ) {
 	VkBuffer buffer, buffers[4], indexBuffer;
 	VkDeviceSize offset, offsets[4], indexOffset;
 	VkDeviceSize xyzSize, colorSize, stSize[NUM_TEXTURE_BUNDLES], indexSize, normalSize, total, pos;
@@ -3311,7 +3754,7 @@ static void VK_UploadGeometry( VkCommandBuffer cmd, const drawGeometry_t *geomet
 	}
 
 	VK_BindVertexBuffers( cmd, buffers, offsets );
-	VK_BindIndexBuffer( cmd, indexBuffer, indexOffset );
+	return VK_FrameIndexes( cmd, indexBuffer, indexOffset );
 }
 
 /*
@@ -3344,7 +3787,7 @@ not a range of the static index stream: copied into the vertex buffer of
 the frame, once for the passes of a shader (drawGeometry_t::version)
 ===============
 */
-static void VK_BindCopiedIndexes( VkCommandBuffer cmd, const drawGeometry_t *geometry, int numIndexes, const glIndex_t *indexes ) {
+static uint32_t VK_BindCopiedIndexes( VkCommandBuffer cmd, const drawGeometry_t *geometry, int numIndexes, const glIndex_t *indexes ) {
 	if ( !geometry->version || vk_lastStaticIndexes.epoch != vk_vertexEpoch || vk_lastStaticIndexes.version != geometry->version
 		|| vk_lastStaticIndexes.indexes != indexes || vk_lastStaticIndexes.numIndexes != numIndexes ) {
 		VkDeviceSize size = sizeof( glIndex_t ) * numIndexes;
@@ -3357,7 +3800,7 @@ static void VK_BindCopiedIndexes( VkCommandBuffer cmd, const drawGeometry_t *geo
 		vk_lastStaticIndexes.indexes = indexes;
 		vk_lastStaticIndexes.numIndexes = numIndexes;
 	}
-	VK_BindIndexBuffer( cmd, vk_lastStaticIndexes.buffer, vk_lastStaticIndexes.offset );
+	return VK_FrameIndexes( cmd, vk_lastStaticIndexes.buffer, vk_lastStaticIndexes.offset );
 }
 
 /*
@@ -3368,7 +3811,7 @@ The streams of a draw from the terrain pool (the frame's copy, slot 0
 first) and its indexes, the slots
 ===============
 */
-static void VK_BindTerrainPool( VkCommandBuffer cmd, const drawGeometry_t *geometry, int numIndexes, const glIndex_t *indexes ) {
+static uint32_t VK_BindTerrainPool( VkCommandBuffer cmd, const drawGeometry_t *geometry, int numIndexes, const glIndex_t *indexes ) {
 	VkBuffer buffers[4];
 	VkDeviceSize offsets[4];
 	VkBuffer buffer = vk_terrain.copies[vk.frameIndex].buffer;
@@ -3395,9 +3838,9 @@ static void VK_BindTerrainPool( VkCommandBuffer cmd, const drawGeometry_t *geome
 	}
 
 	VK_BindVertexBuffers( cmd, buffers, offsets );
-	VK_BindCopiedIndexes( cmd, geometry, numIndexes, indexes );
 	// no slot may change from now on in this frame (vk_sync_terrain_pool)
 	vk_terrain.drawnSerial = vk.frameSerial;
+	return VK_BindCopiedIndexes( cmd, geometry, numIndexes, indexes );
 }
 
 /*
@@ -3462,8 +3905,7 @@ static uint32_t VK_BindStaticGeometry( VkCommandBuffer cmd, const drawGeometry_t
 		return geometry->staticFirstIndex;
 	}
 
-	VK_BindCopiedIndexes( cmd, geometry, numIndexes, indexes );
-	return 0;
+	return VK_BindCopiedIndexes( cmd, geometry, numIndexes, indexes );
 }
 
 void vk_draw( primType_t prim, const drawGeometry_t *geometry, int numIndexes, const glIndex_t *indexes ) {
@@ -3471,12 +3913,20 @@ void vk_draw( primType_t prim, const drawGeometry_t *geometry, int numIndexes, c
 	vkPipelineKey_t key;
 	VkCommandBuffer cmd;
 	VkPipeline pipeline;
+	uint32_t slots = 0;		// bindless textures: the units' slots, the draw's firstInstance
 	int i;
 
 	if ( !vk.device || numIndexes <= 0 || geometry->numVertexes <= 0 || ( geometry->isSkinned ? !vk_skin.buffer.buffer
 		: !( geometry->staticTerrain ? vk_terrain.numSlots > 0 : geometry->isStatic ? vk_static.buffer.buffer != VK_NULL_HANDLE
 		: geometry->xyz != NULL ) ) ) {
 		return;
+	}
+
+	// r_speeds 7
+	backEnd.pc.c_draws++;
+	if ( backEnd.in2D ) {
+		backEnd.pc.c_draws2D++;
+		backEnd.pc.c_vertexes2D += geometry->numVertexes;
 	}
 
 	VK_BeginRenderPass();
@@ -3509,14 +3959,38 @@ void vk_draw( primType_t prim, const drawGeometry_t *geometry, int numIndexes, c
 		vk.stats.pipelineBinds++;
 	}
 
-	// every set the shaders declare must be bound, used or not
-	for ( i = 0; i < NUM_TEXTURE_BUNDLES; i++ ) {
-		VkDescriptorSet set = ( textures[i] ? textures[i] : VK_DefaultTexture() )->descriptorSet;
-
-		if ( set != vkb.sets[i] ) {
-			qvkCmdBindDescriptorSets( cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkt.active ? vkt.pipelineLayout : vk.pipelineLayout, i, 1, &set, 0, NULL );
-			vkb.sets[i] = set;
+	if ( vk.bindless ) {
+		// the set of every texture, once per command buffer; the draw names
+		// its units' slots (generic draws in firstInstance, the effects and
+		// skinned draws in their records, below)
+		if ( vkb.sets[0] != vk.frame->textureArraySet ) {
+			qvkCmdBindDescriptorSets( cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkt.active ? vkt.pipelineLayout : vk.pipelineLayout, 0, 1,
+				&vk.frame->textureArraySet, 0, NULL );
+			vkb.sets[0] = vk.frame->textureArraySet;
 			vk.stats.descriptorBinds++;
+		}
+		slots = VK_TextureArraySlots( textures[0], textures[1] );
+	} else {
+		// every set the shaders declare must be bound, used or not: a unit
+		// the draw doesn't use keeps the set bound before (any texture's set
+		// does, the shader reads nothing from it), the first draw binds the
+		// default
+		for ( i = 0; i < NUM_TEXTURE_BUNDLES; i++ ) {
+			VkDescriptorSet set;
+
+			if ( !textures[i] ) {
+				if ( vkb.sets[i] ) {
+					continue;
+				}
+				set = VK_DefaultTexture()->descriptorSet;
+			} else {
+				set = textures[i]->descriptorSet;
+			}
+			if ( set != vkb.sets[i] ) {
+				qvkCmdBindDescriptorSets( cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkt.active ? vkt.pipelineLayout : vk.pipelineLayout, i, 1, &set, 0, NULL );
+				vkb.sets[i] = set;
+				vk.stats.descriptorBinds++;
+			}
 		}
 	}
 
@@ -3550,27 +4024,31 @@ void vk_draw( primType_t prim, const drawGeometry_t *geometry, int numIndexes, c
 
 			Com_Memcpy( data, indexes, sizeof( glIndex_t ) * numIndexes );
 			vk.stats.vertexBytes += sizeof( glIndex_t ) * numIndexes;
-			VK_BindIndexBuffer( cmd, buffer, offset );
-			firstIndex = 0;
+			firstIndex = VK_FrameIndexes( cmd, buffer, offset );
+		}
+		if ( vk.bindless ) {
+			// the draw record (vkSkinDraw_t, a record per draw) carries unit
+			// 0's slot above renderCount, which is below 1 << 16
+			uint32_t *record = (uint32_t *)( vkt.enabled ? vkt.skinRing[vkt.skinSlot]->mapped : vk.frame->skinBuffer.mapped ) + geometry->skinDraw * 8;
+
+			record[6] = ( record[6] & 0xFFFFu ) | ( ( slots & 0xFFFu ) << 16 );
 		}
 		qvkCmdDrawIndexed( cmd, numIndexes, 1, firstIndex, geometry->skinVertex, geometry->skinDraw );
 		vk.stats.skinDraws++;
 	} else if ( geometry->staticTerrain ) {
-		VK_BindTerrainPool( cmd, geometry, numIndexes, indexes );
-		qvkCmdDrawIndexed( cmd, numIndexes, 1, 0, 0, 0 );
+		qvkCmdDrawIndexed( cmd, numIndexes, 1, VK_BindTerrainPool( cmd, geometry, numIndexes, indexes ), 0, slots );
 		vk.stats.staticDraws++;
 		vk_terrain.draws++;
 	} else if ( geometry->isStatic ) {
 		// effects draws: firstInstance is the record
 		qvkCmdDrawIndexed( cmd, numIndexes, 1, VK_BindStaticGeometry( cmd, geometry, numIndexes, indexes, ( key.bits & VK_PIPE_NORMALS ) != 0 ), 0,
-			geometry->staticFx >= 0 ? geometry->staticFx : 0 );
+			geometry->staticFx >= 0 ? geometry->staticFx : slots );
 		vk.stats.staticDraws++;
 		if ( geometry->staticFx >= 0 ) {
 			vk.stats.effectsDraws++;
 		}
 	} else {
-		VK_UploadGeometry( cmd, geometry, numIndexes, indexes, ( key.bits & VK_PIPE_NORMALS ) != 0 );
-		qvkCmdDrawIndexed( cmd, numIndexes, 1, 0, 0, 0 );
+		qvkCmdDrawIndexed( cmd, numIndexes, 1, VK_UploadGeometry( cmd, geometry, numIndexes, indexes, ( key.bits & VK_PIPE_NORMALS ) != 0 ), 0, slots );
 	}
 	vk.stats.draws++;
 }
@@ -3589,6 +4067,7 @@ No stipple, stencil test or color mask: what the shader stages never set
 ===============
 */
 qboolean vk_prebuild_pipeline( const vkDrawState_t *state ) {
+	R_FrontEndSync();
 	vkTexture_t *textures[NUM_TEXTURE_BUNDLES];
 	drawGeometry_t geometry;
 	vkPipelineKey_t key;
@@ -3639,6 +4118,14 @@ qboolean vk_prebuild_pipeline( const vkDrawState_t *state ) {
 		geometry.normals = (const float *)&geometry;
 	}
 	VK_BuildPipelineKey( &key, &s, state->prim, &geometry, textures, vkt.enabled, qfalse );
+	if ( vkt.enabled && state->reactive && !VK_TemporalWritesBuffers( key.bits ) ) {
+		// a blended draw of effects (vk_set_reactive), and without it
+		qboolean built = state->reactive == 2 && VK_PrebuildPipeline( &key );
+
+		s.reactive = qtrue;
+		VK_BuildPipelineKey( &key, &s, state->prim, &geometry, textures, qtrue, qfalse );
+		return VK_PrebuildPipeline( &key ) || built;
+	}
 	if ( !vkt.enabled || state->skinned || !VK_TemporalWritesBuffers( key.bits ) ) {
 		return VK_PrebuildPipeline( &key );
 	}
@@ -3661,6 +4148,7 @@ draws from them
 ===============
 */
 void vk_set_static_geometry( const staticGeometry_t *geometry ) {
+	R_FrontEndSync();
 	VkDeviceSize xyzSize, stSize, colorSize, size;
 	VkBufferMemoryBarrier barrier;
 	VkBufferCopy region;
@@ -3740,6 +4228,10 @@ VK_FreeTerrainPool
 ===============
 */
 static void VK_FreeTerrainPool( qboolean deferred ) {
+	if ( vk_terrain.shadow ) {
+		VK_Free( vk_terrain.shadow );
+		vk_terrain.shadow = NULL;
+	}
 	int i;
 
 	for ( i = 0; i < VK_MAX_FRAMES; i++ ) {
@@ -3751,7 +4243,7 @@ static void VK_FreeTerrainPool( qboolean deferred ) {
 			VK_DestroyBuffer( &vk_terrain.copies[i] );
 		}
 		if ( vk_terrain.pending[i] ) {
-			ri.Free( vk_terrain.pending[i] );
+			VK_Free( vk_terrain.pending[i] );
 		}
 		Com_Memset( &vk_terrain.copies[i], 0, sizeof( vk_terrain.copies[i] ) );
 		vk_terrain.pending[i] = NULL;
@@ -3770,6 +4262,7 @@ the colors are written once
 ===============
 */
 void vk_set_terrain_pool( int numSlots ) {
+	R_FrontEndSync();
 	VkDeviceSize xyzSize, stSize, colorSize, size;
 	int i;
 
@@ -3794,12 +4287,15 @@ void vk_set_terrain_pool( int numSlots ) {
 
 	vk_terrain.numSlots = numSlots;
 	vk_terrain.words = ( numSlots + 63 ) >> 6;
+	// r_smp: the render thread's shadow of every slot (vk_sync_terrain_pool_smp)
+	vk_terrain.shadow = VK_Alloc( 7 * sizeof( float ) * numSlots );
+	Com_Memset( vk_terrain.shadow, 0, 7 * sizeof( float ) * numSlots );
 	for ( i = 0; i < VK_MAX_FRAMES; i++ ) {
 		VK_CreateBuffer( &vk_terrain.copies[i], size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT );
 		Com_Memset( (byte *)vk_terrain.copies[i].mapped + vk_terrain.colorOffset, 255, colorSize );
 		// every slot (those past numSlots are never drawn)
-		vk_terrain.pending[i] = ri.Malloc( sizeof( uint64_t ) * vk_terrain.words );
+		vk_terrain.pending[i] = VK_Alloc( sizeof( uint64_t ) * vk_terrain.words );
 		Com_Memset( vk_terrain.pending[i], 255, sizeof( uint64_t ) * vk_terrain.words );
 		vk_terrain.anyPending[i] = qtrue;
 	}
@@ -3861,6 +4357,120 @@ static void VK_WriteTerrainSlots( byte *data, const float *xyz, const float *st,
 		outSt1[0] = ( (const float *)t )[2];
 		outSt1[1] = ( (const float *)t )[3];
 	}
+}
+
+/*
+===============
+vk_terrain_shadow_all
+
+r_smp, the front end with the thread idle: the shadow from the pool's
+source (too many slots changed for a frame's snapshot)
+===============
+*/
+void vk_terrain_shadow_all( const float *xyz, const float *st, int stride, int numSlots ) {
+	int s;
+
+	if ( !vk_terrain.shadow || numSlots != vk_terrain.numSlots ) {
+		return;
+	}
+	for ( s = 0; s < numSlots; s++ ) {
+		const float *v = (const float *)( (const byte *)xyz + (size_t)s * stride );
+		const float *t = (const float *)( (const byte *)st + (size_t)s * stride );
+		float *out = vk_terrain.shadow + s * 7;
+
+		out[0] = v[0]; out[1] = v[1]; out[2] = v[2];
+		out[3] = t[0]; out[4] = t[1]; out[5] = t[2]; out[6] = t[3];
+	}
+}
+
+const float *vk_terrain_shadow_slots( void ) {
+	return vk_terrain.shadow;
+}
+
+/*
+===============
+vk_terrain_shadow_changes
+
+r_smp, the render thread, at each scene whether it draws terrain or not
+(RB_DrawSurfs): the scene's snapshot of the changed slots into the shadow,
+and into every copy's pending slots
+===============
+*/
+void vk_terrain_shadow_changes( const terrainSlotChange_t *changes, int count, qboolean all ) {
+	int f, i;
+
+	if ( !vk.device || !vk_terrain.numSlots || !vk_terrain.shadow ) {
+		return;
+	}
+	if ( all ) {
+		for ( f = 0; f < VK_MAX_FRAMES; f++ ) {
+			Com_Memset( vk_terrain.pending[f], 0xFF, sizeof( uint64_t ) * vk_terrain.words );
+			vk_terrain.anyPending[f] = qtrue;
+		}
+	}
+	for ( i = 0; i < count; i++ ) {
+		const terrainSlotChange_t *c = &changes[i];
+		float *out;
+
+		if ( c->slot < 0 || c->slot >= vk_terrain.numSlots ) {
+			continue;
+		}
+		out = vk_terrain.shadow + c->slot * 7;
+		out[0] = c->xyz[0]; out[1] = c->xyz[1]; out[2] = c->xyz[2];
+		out[3] = c->st[0][0]; out[4] = c->st[0][1]; out[5] = c->st[1][0]; out[6] = c->st[1][1];
+		for ( f = 0; f < VK_MAX_FRAMES; f++ ) {
+			vk_terrain.pending[f][c->slot >> 6] |= (uint64_t)1 << ( c->slot & 63 );
+			vk_terrain.anyPending[f] = qtrue;
+		}
+	}
+}
+
+/*
+===============
+vk_sync_terrain_pool_smp
+
+r_smp, the render thread: vk_sync_terrain_pool from the shadow, which keeps
+every slot for the copies' pending slots (vk_terrain_shadow_changes)
+===============
+*/
+qboolean vk_sync_terrain_pool_smp( void ) {
+	uint64_t *pending;
+	byte *data;
+	int f, w, written = 0;
+
+	if ( !vk.device || !vk_terrain.numSlots || !vk_terrain.shadow ) {
+		return qfalse;
+	}
+	VK_BeginFrameIfNeeded();
+	f = vk.frameIndex;
+	if ( !vk_terrain.anyPending[f] ) {
+		return qtrue;
+	}
+	if ( vk_terrain.drawnSerial == vk.frameSerial ) {
+		// a draw of this frame reads the copy as it is
+		return qfalse;
+	}
+	pending = vk_terrain.pending[f];
+	data = vk_terrain.copies[f].mapped;
+	for ( w = 0; w < vk_terrain.words; w++ ) {
+		uint64_t bits = pending[w];
+		while ( bits ) {
+			int first = VK_LowestBit( bits );
+			uint64_t rest = ~( bits >> first );
+			int n = rest ? VK_LowestBit( rest ) : 64;
+			int s = ( w << 6 ) + first;
+			bits &= ~( ( n == 64 ? ~(uint64_t)0 : ( (uint64_t)1 << n ) - 1 ) << first );
+			n = Q_min( n, vk_terrain.numSlots - s );
+			if ( n > 0 ) {
+				VK_WriteTerrainSlots( data, vk_terrain.shadow, vk_terrain.shadow + 3, 7 * sizeof( float ), s, n );
+				written += n;
+			}
+		}
+		pending[w] = 0;
+	}
+	vk_terrain.anyPending[f] = qfalse;
+	vk_terrain.slots += written;
+	return qtrue;
 }
 
 /*
@@ -3933,6 +4543,7 @@ qboolean vk_sync_terrain_pool( int numSlots, const float *xyz, const float *st, 
 vk_skin_available
 ===============
 */
+
 qboolean vk_skin_available( void ) {
 	return vk.device && vk_skin.buffer.buffer && vk.skinVertexShader;
 }
@@ -3959,6 +4570,7 @@ words written
 ===============
 */
 int vk_add_skin_data( const uint32_t *words, int numWords ) {
+	R_FrontEndSync();
 	VkBufferMemoryBarrier barrier;
 	VkBufferCopy region;
 	VkCommandBuffer cmd;
@@ -4009,6 +4621,7 @@ int vk_add_skin_data( const uint32_t *words, int numWords ) {
 }
 
 void vk_clear_skin_data( void ) {
+	R_FrontEndSync();
 	if ( !vk_skin.words ) {
 		return;
 	}
@@ -4044,6 +4657,7 @@ qboolean vk_skin_frame_room( int numWords ) {
 }
 
 unsigned int vk_frame_serial( void ) {
+	R_FrontEndSync();
 	if ( !vk.device ) {
 		return 0;
 	}
@@ -4172,7 +4786,8 @@ void vk_clear( int buffers, const vec4_t color ) {
 			attachments[numAttachments].clearValue.color.float32[0] = VK_ClearComponent( color[0] );
 			attachments[numAttachments].clearValue.color.float32[1] = VK_ClearComponent( color[1] );
 			attachments[numAttachments].clearValue.color.float32[2] = VK_ClearComponent( color[2] );
-			attachments[numAttachments].clearValue.color.float32[3] = 1.0f;
+			// the temporal path's scene keeps the reactive share there (0)
+			attachments[numAttachments].clearValue.color.float32[3] = vkt.active ? 0.0f : 1.0f;
 			numAttachments++;
 		} else {
 			drawColor = qtrue;
@@ -4235,8 +4850,303 @@ static VkAccessFlags VK_DepthImageWriteAccess( void ) {
 	return access;
 }
 
-void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, void *buffer ) {
-	VkBufferImageCopy region;
+/*
+====================================================================
+
+LATENCY PROBE (r_vkLatency)
+
+For measurements: each frame's input time is the end of the main thread's
+EndFrame before it (the game reads its input at the start of the next
+Com_Frame; with the render thread after its waits there), carried to the
+back end by the swap command. From it: the present call (the thread that
+presents), the GPU done with the frame (its last timestamp on the CPU's
+clock through calibrated timestamps, when the frame slot is used again),
+with vsync and present ids the frame seen shown (the thread that presents
+looks without waiting after each present, so every pacing depth sees
+it at the same point: up to a refresh late), and the main thread's frame
+times. vkinfo prints their percentiles since the last vkinfo. Each list is
+written by one thread; vkinfo reads them with the render and submit
+threads idle.
+
+====================================================================
+*/
+
+#define VK_PROBE_SAMPLES	131072
+
+typedef struct {
+	uint32_t	us[VK_PROBE_SAMPLES];
+	int			count;
+} vkProbeList_t;
+
+static struct {
+	vkProbeList_t	gpuDone, present, shown, frame;
+	uint64_t		idInput[64];		// the presenting thread's: input times by present id
+	uint64_t		oldestId;			// the oldest present not seen shown
+	uint64_t		calibratedAt;		// the back end's calibration: when (VK_Microseconds), 0 none
+	uint64_t		gpuTicks;
+	double			cpuUs;				// VK_Microseconds at gpuTicks
+	uint64_t		lastFrameEndUs;		// the main thread's
+} vk_probe;
+
+static void VK_ProbeAdd( vkProbeList_t *list, int64_t us ) {
+	if ( list->count < VK_PROBE_SAMPLES ) {
+		list->us[list->count++] = us <= 0 ? 0 : us >= 0xffffffffll ? 0xffffffffu : (uint32_t)us;
+	}
+}
+
+// the GPU's clock against VK_Microseconds, at most once a second
+static qboolean VK_ProbeCalibrate( void ) {
+	VkCalibratedTimestampInfoKHR info[2];
+	uint64_t ts[2], deviation, now = VK_Microseconds();
+	double offset = 0.0;
+
+	if ( vk.calibrationDomain == VK_TIME_DOMAIN_MAX_ENUM_KHR ) {
+		return qfalse;
+	}
+	if ( vk_probe.calibratedAt && now - vk_probe.calibratedAt < 1000000 ) {
+		return qtrue;
+	}
+	Com_Memset( info, 0, sizeof( info ) );
+	info[0].sType = info[1].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR;
+	info[0].timeDomain = VK_TIME_DOMAIN_DEVICE_KHR;
+	info[1].timeDomain = vk.calibrationDomain;
+	if ( qvkGetCalibratedTimestampsKHR( vk.device, 2, info, ts, &deviation ) != VK_SUCCESS ) {
+		return qfalse;
+	}
+#ifdef _WIN32
+	vk_probe.cpuUs = ts[1] * 1000000.0 / SDL_GetPerformanceFrequency();
+#else
+	{
+		// the domain's clock against VK_Microseconds (SDL's performance
+		// counter, the same clock: the offset is about 0)
+		struct timespec t;
+		uint64_t a = VK_Microseconds(), b;
+
+		clock_gettime( CLOCK_MONOTONIC_RAW, &t );
+		b = VK_Microseconds();
+		offset = ( a + b ) * 0.5 - ( t.tv_sec * 1000000.0 + t.tv_nsec / 1000.0 );
+	}
+	vk_probe.cpuUs = ts[1] / 1000.0 + offset;
+#endif
+	vk_probe.gpuTicks = ts[0];
+	vk_probe.calibratedAt = now;
+	return qtrue;
+}
+
+// the back end, when a frame's timestamps are read: input to GPU done
+static void VK_ProbeGpuDone( vkFrame_t *frame, uint64_t ticks ) {
+	int64_t delta;
+
+	if ( !r_vkLatency->integer || !frame->probeInputUs || !VK_ProbeCalibrate() ) {
+		return;
+	}
+	delta = (int64_t)( ticks - vk_probe.gpuTicks );
+	if ( vk.timestampValidBits < 64 ) {
+		const uint64_t mask = ( 1ull << vk.timestampValidBits ) - 1;
+		uint64_t d = ( ticks - vk_probe.gpuTicks ) & mask;
+
+		delta = d & ( 1ull << ( vk.timestampValidBits - 1 ) ) ? (int64_t)( d | ~mask ) : (int64_t)d;
+	}
+	VK_ProbeAdd( &vk_probe.gpuDone, (int64_t)( vk_probe.cpuUs + delta * vk.deviceProperties.limits.timestampPeriod / 1000.0 ) - (int64_t)frame->probeInputUs );
+}
+
+/*
+===============
+VK_ProbePresent
+
+The thread that presents, right after a present (before any wait for it):
+input to present, and with vsync and present ids the frames seen shown
+since the last look
+===============
+*/
+void VK_ProbePresent( uint64_t inputUs, uint64_t presentAt, uint64_t id ) {
+	uint64_t pid;
+	int looks;
+
+	if ( !r_vkLatency->integer ) {
+		return;
+	}
+	if ( inputUs ) {
+		VK_ProbeAdd( &vk_probe.present, (int64_t)presentAt - (int64_t)inputUs );
+	}
+	if ( !id || !qvkWaitForPresentKHR || ( vk.presentMode != VK_PRESENT_MODE_FIFO_KHR && vk.presentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR ) ) {
+		return;
+	}
+	vk_probe.idInput[id % ARRAY_LEN( vk_probe.idInput )] = inputUs;
+	if ( vk_probe.oldestId < vk.pacing.firstPresentId ) {
+		vk_probe.oldestId = vk.pacing.firstPresentId;
+	}
+	if ( id - vk_probe.oldestId >= ARRAY_LEN( vk_probe.idInput ) ) {
+		vk_probe.oldestId = id - ARRAY_LEN( vk_probe.idInput ) + 1;
+	}
+	for ( pid = vk_probe.oldestId, looks = 0; pid < id && looks < 8; pid++, looks++ ) {
+		uint64_t *input = &vk_probe.idInput[pid % ARRAY_LEN( vk_probe.idInput )];
+
+		if ( qvkWaitForPresentKHR( vk.device, vk.swapchain, pid, 0 ) != VK_SUCCESS ) {
+			break;
+		}
+		if ( *input ) {
+			VK_ProbeAdd( &vk_probe.shown, (int64_t)VK_Microseconds() - (int64_t)*input );
+		}
+		*input = 0;
+		vk_probe.oldestId = pid + 1;
+	}
+}
+
+uint64_t vk_probe_input_time( void ) {
+	return vk.device && r_vkLatency->integer ? vk_probe.lastFrameEndUs : 0;
+}
+
+void vk_probe_frame_end( void ) {
+	uint64_t now;
+
+	if ( !vk.device || !r_vkLatency->integer ) {
+		vk_probe.lastFrameEndUs = 0;
+		return;
+	}
+	now = VK_Microseconds();
+	if ( vk_probe.lastFrameEndUs ) {
+		VK_ProbeAdd( &vk_probe.frame, (int64_t)( now - vk_probe.lastFrameEndUs ) );
+	}
+	vk_probe.lastFrameEndUs = now;
+}
+
+void vk_probe_input( uint64_t inputUs ) {
+	if ( !vk.device ) {
+		return;
+	}
+	VK_BeginFrameIfNeeded();
+	vk.frame->probeInputUs = inputUs;
+}
+
+// the engine's name for the frame (RB_SwapBuffers), for the present gate
+void vk_frame_token( uint64_t token ) {
+	if ( !vk.device ) {
+		return;
+	}
+	VK_BeginFrameIfNeeded();
+	vk.frame->token = token;
+}
+
+static int VK_ProbeCompare( const void *a, const void *b ) {
+	uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+
+	return x < y ? -1 : x > y;
+}
+
+// "name p50 a p90 b p99 c p99.9 d (n)" in ms, and the list emptied
+static const char *VK_ProbePercentiles( const char *name, vkProbeList_t *list ) {
+	static char text[4][160];
+	static int which;
+	char *out = text[which++ & 3];
+	int n = list->count;
+
+	if ( !n ) {
+		Com_sprintf( out, sizeof( text[0] ), "%s -", name );
+		return out;
+	}
+	qsort( list->us, n, sizeof( list->us[0] ), VK_ProbeCompare );
+#define VK_PCT( p ) ( list->us[Q_min( n - 1, (int)( (p) * n ) )] / 1000.0 )
+	Com_sprintf( out, sizeof( text[0] ), "%s p50 %.3f p90 %.3f p99 %.3f p99.9 %.3f (%d)", name, VK_PCT( 0.5 ), VK_PCT( 0.9 ), VK_PCT( 0.99 ), VK_PCT( 0.999 ), n );
+#undef VK_PCT
+	list->count = 0;
+	return out;
+}
+
+static void VK_ProbeReport( void ) {
+	if ( !r_vkLatency->integer ) {
+		return;
+	}
+	ri.Printf( PRINT_ALL, "vkinfo: latency ms: %s; %s\n", VK_ProbePercentiles( "input to GPU done", &vk_probe.gpuDone ),
+		VK_ProbePercentiles( "input to present", &vk_probe.present ) );
+	ri.Printf( PRINT_ALL, "vkinfo: latency ms: %s; %s%s\n", VK_ProbePercentiles( "input to shown", &vk_probe.shown ),
+		VK_ProbePercentiles( "frame time", &vk_probe.frame ),
+		vk.calibrationDomain == VK_TIME_DOMAIN_MAX_ENUM_KHR ? " (no calibrated timestamps: no GPU done)" : "" );
+}
+
+/*
+====================================================================
+
+PIXEL READBACKS
+
+vk_read_pixels waits for the GPU (VK_FlushAndWait). vk_read_pixels_async
+records the same copy into a buffer of a small pool and returns at once;
+the copy is done once the frame that recorded it has completed, which the
+back end learns when it waits for that frame's fence (the frame slot is
+used again, a flush, vk_finish), and the main thread takes the pixels then
+(vk_readback_next, vk_readback_get, vk_readback_free): screenshots, video
+frames and r_measureOverdraw's stencil sums arrive a few frames later, in
+the order they were recorded, and nothing waits for the GPU. The pool's
+slots are taken under a lock: with the render thread (r_smp) the back end
+records on it and the main thread reads.
+
+====================================================================
+*/
+
+// the part of the framebuffer a readback copied and how its texels are laid
+// out; w 0: nothing was copied (outside of the framebuffer, no stencil
+// buffer, the depth image not readable), the pixels read as 0
+typedef struct {
+	int		x0, y0, w, h;
+	int		texelSize;
+	int		red;				// byte of red in a 4-byte color texel
+} vkReadRegion_t;
+
+#define VK_READBACKS		8		// readbacks in flight (a video frame each frame, screenshots)
+#define VK_READBACK_USER	( 2 * MAX_OSPATH + 256 )	// bytes of the caller's data kept with each (a shot's file name and message)
+
+typedef enum {
+	VK_READBACK_FREE,
+	VK_READBACK_RECORDING,			// being recorded by the back end
+	VK_READBACK_RECORDED,			// in a frame the GPU hasn't finished
+	VK_READBACK_READY,				// done, not taken yet
+	VK_READBACK_TAKEN				// taken by the main thread (vk_readback_next), until freed
+} vkReadbackState_t;
+
+typedef struct {
+	vkReadbackState_t	state;
+	uint64_t			sequence;	// in the order recorded
+	uint64_t			serial;		// the frame that recorded it
+	vkBuffer_t			buffer;		// kept from use to use, grown when needed
+	vkReadRegion_t		region;
+	int					x, y, width, height;
+	readFormat_t		format;
+	int					kind;
+	byte				user[VK_READBACK_USER];
+} vkReadback_t;
+
+static struct {
+	SDL_Mutex			*lock;
+	vkReadback_t		slots[VK_READBACKS];
+	uint64_t			nextSequence;
+	int					dropped;	// requests refused, the pool full (vk_readback_dropped)
+} vk_rb;
+
+static int VK_ReadPixelSize( readFormat_t format ) {
+	switch ( format ) {
+	case READ_RGB8:
+	case READ_BGR8:
+		return 3;
+	case READ_DEPTH_FLOAT:
+		return sizeof( float );
+	case READ_STENCIL8:
+	default:
+		return 1;
+	}
+}
+
+/*
+===============
+VK_RecordPixelCopy
+
+Records into the frame the copy of a part of the color target, depth or
+stencil to dest (grown when too small: nothing may use it), with the
+barriers that make it visible to the host once the frame has completed.
+Returns qfalse when nothing was copied (region->w 0)
+===============
+*/
+static qboolean VK_RecordPixelCopy( int x, int y, int width, int height, readFormat_t format, vkBuffer_t *dest, vkReadRegion_t *region ) {
+	VkBufferImageCopy copy;
 	VkImageAspectFlags aspect, barrierAspect;
 	VkImageLayout layout;
 	VkPipelineStageFlags stages;
@@ -4244,42 +5154,25 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 	VkCommandBuffer cmd;
 	VkImage image;
 	VkDeviceSize size;
-	int pixelSize, texelSize, red, blue;
-	int x0, y0, x1, y1, w, h, row, col;
+	int x0, y0, x1, y1;
 
-	switch ( format ) {
-	case READ_RGB8:
-	case READ_BGR8:
-		pixelSize = 3;
-		break;
-	case READ_DEPTH_FLOAT:
-		pixelSize = sizeof( float );
-		break;
-	case READ_STENCIL8:
-	default:
-		pixelSize = 1;
-		break;
-	}
+	Com_Memset( region, 0, sizeof( *region ) );
 
-	if ( width <= 0 || height <= 0 ) {
-		return;
-	}
 	// pixels outside of the framebuffer read as 0, and stencil without a
 	// stencil buffer
-	Com_Memset( buffer, 0, (size_t)pixelSize * width * height );
-	if ( format == READ_STENCIL8 && !( vk.depthAspect & VK_IMAGE_ASPECT_STENCIL_BIT ) ) {
-		return;
+	if ( !vk.device || width <= 0 || height <= 0 ) {
+		return qfalse;
 	}
-
+	if ( format == READ_STENCIL8 && !( vk.depthAspect & VK_IMAGE_ASPECT_STENCIL_BIT ) ) {
+		return qfalse;
+	}
 	x0 = Q_max( x, 0 );
 	y0 = Q_max( y, 0 );
 	x1 = Q_min( x + width, vk.width );
 	y1 = Q_min( y + height, vk.height );
-	if ( !vk.device || x1 <= x0 || y1 <= y0 ) {
-		return;
+	if ( x1 <= x0 || y1 <= y0 ) {
+		return qfalse;
 	}
-	w = x1 - x0;
-	h = y1 - y0;
 
 	VK_BeginFrameIfNeeded();
 	if ( format == READ_RGB8 || format == READ_BGR8 ) {
@@ -4290,7 +5183,7 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 		// zeros until the depth image is readable (vk_want_depth_reads)
 		vk.depthReadSerial = vk.frameSerial;
 		if ( !vk.depthReadable ) {
-			return;
+			return qfalse;
 		}
 	}
 	VK_EndRenderPass();
@@ -4305,7 +5198,9 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 		layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 		stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 		access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		texelSize = vk.colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? 8 : 4;
+		region->texelSize = vk.colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? 8 : 4;
+		// B8G8R8A8 targets have red third
+		region->red = vk.colorFormat == VK_FORMAT_B8G8R8A8_UNORM ? 2 : 0;
 	} else {
 		VK_ResolveDepth();
 		image = vk.depthImage;
@@ -4315,46 +5210,60 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 		stages = VK_DepthImageStages();
 		access = VK_DepthImageWriteAccess();
 		if ( format == READ_STENCIL8 ) {
-			texelSize = 1;
+			region->texelSize = 1;
 		} else if ( vk.depthFormat == VK_FORMAT_D16_UNORM_S8_UINT || vk.depthFormat == VK_FORMAT_D16_UNORM ) {
-			texelSize = 2;
+			region->texelSize = 2;
 		} else {
-			texelSize = 4;
+			region->texelSize = 4;
 		}
 	}
+	region->x0 = x0;
+	region->y0 = y0;
+	region->w = x1 - x0;
+	region->h = y1 - y0;
 
-	size = (VkDeviceSize)w * h * texelSize;
-	if ( vk.readbackBuffer.size < size ) {
-		// readbacks are waited for, nothing uses the old buffer
-		VK_DestroyBuffer( &vk.readbackBuffer );
-		VK_CreateBuffer( &vk.readbackBuffer, PAD( size, 65536 ), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+	size = (VkDeviceSize)region->w * region->h * region->texelSize;
+	if ( dest->size < size ) {
+		VK_DestroyBuffer( dest );
+		VK_CreateBuffer( dest, PAD( size, 65536 ), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_HOST_CACHED_BIT );
 	}
 
 	VK_ImageBarrier( cmd, image, barrierAspect, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		stages, access, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT );
 
-	Com_Memset( &region, 0, sizeof( region ) );
-	region.imageSubresource.aspectMask = aspect;
-	region.imageSubresource.layerCount = 1;
-	region.imageOffset.x = x0;
-	region.imageOffset.y = vk.height - y1;
-	region.imageExtent.width = w;
-	region.imageExtent.height = h;
-	region.imageExtent.depth = 1;
-	qvkCmdCopyImageToBuffer( cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk.readbackBuffer.buffer, 1, &region );
+	Com_Memset( &copy, 0, sizeof( copy ) );
+	copy.imageSubresource.aspectMask = aspect;
+	copy.imageSubresource.layerCount = 1;
+	copy.imageOffset.x = x0;
+	copy.imageOffset.y = vk.height - y1;
+	copy.imageExtent.width = region->w;
+	copy.imageExtent.height = region->h;
+	copy.imageExtent.depth = 1;
+	qvkCmdCopyImageToBuffer( cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dest->buffer, 1, &copy );
 
 	VK_ImageBarrier( cmd, image, barrierAspect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout,
 		VK_PIPELINE_STAGE_TRANSFER_BIT, 0, stages, access | ( format == READ_RGB8 || format == READ_BGR8 ? VK_ACCESS_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT ) );
 
-	VK_HostReadBarrier( cmd, vk.readbackBuffer.buffer );
+	VK_HostReadBarrier( cmd, dest->buffer );
+	return qtrue;
+}
 
-	VK_FlushAndWait();
+/*
+===============
+VK_ConvertPixels
 
-	// the copy has the top row first, the caller wants the bottom row first;
-	// B8G8R8A8 targets have red third
-	red = vk.colorFormat == VK_FORMAT_B8G8R8A8_UNORM ? 2 : 0;
-	blue = 2 - red;
+The copied texels (top row first) into the caller's layout: rows tightly
+packed, bottom row first, RGB for color; what wasn't copied reads as 0
+===============
+*/
+static void VK_ConvertPixels( const vkReadRegion_t *region, const byte *mapped, int x, int y, int width, int height, readFormat_t format, void *buffer ) {
+	int pixelSize = VK_ReadPixelSize( format );
+	int texelSize = region->texelSize;
+	int w = region->w, h = region->h;
+	int red = region->red, blue = 2 - region->red;
+	int row, col;
+
 	// Added in OPM
 	//  BGR: the first and third bytes of each pixel the other way round, a
 	//  copy of a B8G8R8A8 frame's texels without A
@@ -4362,9 +5271,14 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 		red = blue;
 		blue = 2 - red;
 	}
+
+	Com_Memset( buffer, 0, (size_t)pixelSize * width * height );
+	if ( !w ) {
+		return;
+	}
 	for ( row = 0; row < h; row++ ) {
-		const byte *src = vk.readbackBuffer.mapped + (size_t)( h - 1 - row ) * w * texelSize;
-		byte *dst = (byte *)buffer + ( (size_t)( y0 - y + row ) * width + ( x0 - x ) ) * pixelSize;
+		const byte *src = mapped + (size_t)( h - 1 - row ) * w * texelSize;
+		byte *dst = (byte *)buffer + ( (size_t)( region->y0 - y + row ) * width + ( region->x0 - x ) ) * pixelSize;
 
 		switch ( format ) {
 		case READ_RGB8:
@@ -4404,6 +5318,187 @@ void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, v
 			break;
 		}
 	}
+}
+
+void vk_read_pixels( int x, int y, int width, int height, readFormat_t format, void *buffer ) {
+	vkReadRegion_t region;
+
+	R_FrontEndSync();
+	if ( width <= 0 || height <= 0 ) {
+		return;
+	}
+	// readbacks are waited for: nothing uses the buffer when it is grown
+	if ( VK_RecordPixelCopy( x, y, width, height, format, &vk.readbackBuffer, &region ) ) {
+		VK_FlushAndWait();
+	}
+	VK_ConvertPixels( &region, vk.readbackBuffer.mapped, x, y, width, height, format, buffer );
+}
+
+/*
+===============
+vk_read_pixels_async
+
+On the back end: records the readback in the frame and returns its handle
+(user, userSize bytes, is kept with it for the main thread), or 0 when
+VK_READBACKS are in flight already or user is too large (the request is
+dropped and counted)
+===============
+*/
+int vk_read_pixels_async( int x, int y, int width, int height, readFormat_t format, int kind, const void *user, int userSize ) {
+	vkReadback_t *rb = NULL;
+	int i;
+
+	if ( !vk.device || !vk_rb.lock || width <= 0 || height <= 0 ) {
+		return 0;
+	}
+	SDL_LockMutex( vk_rb.lock );
+	for ( i = 0; i < VK_READBACKS && userSize <= VK_READBACK_USER; i++ ) {
+		if ( vk_rb.slots[i].state == VK_READBACK_FREE ) {
+			rb = &vk_rb.slots[i];
+			rb->state = VK_READBACK_RECORDING;
+			break;
+		}
+	}
+	if ( !rb ) {
+		vk_rb.dropped++;
+	}
+	SDL_UnlockMutex( vk_rb.lock );
+	if ( !rb ) {
+		return 0;
+	}
+
+	rb->x = x;
+	rb->y = y;
+	rb->width = width;
+	rb->height = height;
+	rb->format = format;
+	rb->kind = kind;
+	if ( userSize > 0 ) {
+		Com_Memcpy( rb->user, user, userSize );
+	}
+	// the slot is free: its buffer's last copy has been read
+	VK_BeginFrameIfNeeded();
+	VK_RecordPixelCopy( x, y, width, height, format, &rb->buffer, &rb->region );
+
+	SDL_LockMutex( vk_rb.lock );
+	rb->serial = vk.frame->serial;
+	rb->sequence = vk_rb.nextSequence++;
+	rb->state = VK_READBACK_RECORDED;
+	SDL_UnlockMutex( vk_rb.lock );
+	return (int)( rb - vk_rb.slots ) + 1;
+}
+
+/*
+===============
+VK_ReadbacksDone
+
+On the back end: the frames up to serial have completed, so have their
+readbacks
+===============
+*/
+static void VK_ReadbacksDone( uint64_t serial ) {
+	int i;
+
+	if ( !vk_rb.lock ) {
+		return;
+	}
+	SDL_LockMutex( vk_rb.lock );
+	for ( i = 0; i < VK_READBACKS; i++ ) {
+		vkReadback_t *rb = &vk_rb.slots[i];
+
+		if ( rb->state == VK_READBACK_RECORDED && rb->serial <= serial ) {
+			rb->state = VK_READBACK_READY;
+		}
+	}
+	SDL_UnlockMutex( vk_rb.lock );
+}
+
+/*
+===============
+vk_readback_next
+
+On the main thread: the oldest readback in flight not taken yet, if it is
+done (its handle, kind and user data, valid until vk_readback_free), else
+0: they are taken in the order they were recorded. A taken readback is the
+caller's: another thread may read its pixels (vk_readback_get) and free it
+===============
+*/
+int vk_readback_next( int *kind, void **user ) {
+	vkReadback_t *oldest = NULL;
+	int i, handle = 0;
+
+	if ( !vk_rb.lock ) {
+		return 0;
+	}
+	SDL_LockMutex( vk_rb.lock );
+	for ( i = 0; i < VK_READBACKS; i++ ) {
+		vkReadback_t *rb = &vk_rb.slots[i];
+
+		if ( rb->state == VK_READBACK_FREE || rb->state == VK_READBACK_TAKEN ) {
+			continue;
+		}
+		if ( rb->state == VK_READBACK_RECORDING ) {
+			// its sequence isn't known yet: newer than every other
+			continue;
+		}
+		if ( !oldest || rb->sequence < oldest->sequence ) {
+			oldest = rb;
+		}
+	}
+	if ( oldest && oldest->state == VK_READBACK_READY ) {
+		oldest->state = VK_READBACK_TAKEN;
+		handle = (int)( oldest - vk_rb.slots ) + 1;
+		*kind = oldest->kind;
+		*user = oldest->user;
+	}
+	SDL_UnlockMutex( vk_rb.lock );
+	return handle;
+}
+
+// the pixels of a taken readback, in vk_read_pixels' layout, for the
+// rectangle it was asked for (any thread: the back end leaves it alone)
+void vk_readback_get( int handle, void *buffer ) {
+	vkReadback_t *rb = &vk_rb.slots[handle - 1];
+
+	VK_ConvertPixels( &rb->region, rb->buffer.mapped, rb->x, rb->y, rb->width, rb->height, rb->format, buffer );
+}
+
+void vk_readback_free( int handle ) {
+	SDL_LockMutex( vk_rb.lock );
+	vk_rb.slots[handle - 1].state = VK_READBACK_FREE;
+	SDL_UnlockMutex( vk_rb.lock );
+}
+
+// requests dropped since the last call (the pool was full)
+int vk_readback_dropped( void ) {
+	int dropped;
+
+	if ( !vk_rb.lock ) {
+		return 0;
+	}
+	SDL_LockMutex( vk_rb.lock );
+	dropped = vk_rb.dropped;
+	vk_rb.dropped = 0;
+	SDL_UnlockMutex( vk_rb.lock );
+	return dropped;
+}
+
+static void VK_InitReadbacks( void ) {
+	Com_Memset( &vk_rb, 0, sizeof( vk_rb ) );
+	vk_rb.lock = SDL_CreateMutex();
+}
+
+// at vk_shutdown, the device idle: what wasn't taken is lost
+static void VK_ShutdownReadbacks( void ) {
+	int i;
+
+	for ( i = 0; i < VK_READBACKS; i++ ) {
+		VK_DestroyBuffer( &vk_rb.slots[i].buffer );
+	}
+	if ( vk_rb.lock ) {
+		SDL_DestroyMutex( vk_rb.lock );
+	}
+	Com_Memset( &vk_rb, 0, sizeof( vk_rb ) );
 }
 
 /*
@@ -4528,6 +5623,7 @@ frame about to start when called between frames (see VK_UpdateDepthTarget)
 ===============
 */
 void vk_want_depth_reads( void ) {
+	R_FrontEndSync();
 	vk.depthReadSerial = vk.frame ? vk.frameSerial : vk.frameSerial + 1;
 }
 
@@ -4607,6 +5703,8 @@ qboolean vk_begin_scene( const vkSceneView_t *view ) {
 
 		// the jitter of the frame: anti-aliasing needs it
 		vkt.taaOn = r_taa->integer && ( vkt.groups & VK_TEMPORAL_GROUP_TAA );
+		vkt.lodBias = vkt.taaOn ? r_taaLodBias->value : 0.0f;
+		vkt.reactiveOn = ( vkt.taaOn && r_taaReactive->value > 0.0f ) || r_temporalShow->integer == 14;
 		vkt.jitter = r_temporalJitter->integer != 0 || vkt.taaOn;
 		sample = (int)( vk.frameSerial % (uint64_t)Q_max( r_temporalJitterSamples->integer, 1 ) ) + 1;
 		vkt.jitterPixels[0] = vkt.jitter ? VK_Halton( sample, 2 ) - 0.5f : 0.0f;
@@ -4664,6 +5762,7 @@ qboolean vk_begin_scene( const vkSceneView_t *view ) {
 	}
 	vkt.prevModelviewSet = qfalse;
 	vkt.objectMotion = qfalse;
+	vkt.prevProjectionSet = qfalse;
 	vk_dirty |= VK_DIRTY_MVP;
 	return qtrue;
 }
@@ -4700,6 +5799,139 @@ void vk_end_scene( void ) {
 
 	// the composite's pipeline, layout and dynamic state replaced the
 	// bindings of the draws
+	Com_Memset( &vkb, 0, sizeof( vkb ) );
+	vk_dirty = VK_DIRTY_ALL;
+}
+
+/*
+===============
+vk_frame_blur
+
+The frame as drawn so far, blurred into image (the Reloaded menus'
+backdrop, "*frameblur": RB_StretchPic, the first time a frame draws it).
+The render pass ends (with multisampling its color resolved into the
+target); the target is halved down the mip levels of vk.blurImage to a 32nd
+of its size, and the last scaled up into the image (a 16th), which is drawn
+stretched: a box filter's pyramid and bilinear steps up, a wide and soft
+blur for six blits. The next render pass loads what was drawn
+===============
+*/
+#define VK_BLUR_LEVELS		5
+
+qboolean vk_frame_blur_supported( void ) {
+	const VkFormatFeatureFlags want = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+	VkFormatProperties color, texture;
+
+	if ( !vk.device ) {
+		return qfalse;
+	}
+	qvkGetPhysicalDeviceFormatProperties( vk.physicalDevice, vk.colorFormat, &color );
+	qvkGetPhysicalDeviceFormatProperties( vk.physicalDevice, VK_FORMAT_R8G8B8A8_UNORM, &texture );
+	return ( color.optimalTilingFeatures & want ) == want && ( texture.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT );
+}
+
+// a blit of src's whole level (its size w h) to dst's (dw dh), filtered
+static void VK_BlurBlit( VkCommandBuffer cmd, VkImage src, int srcLevel, int w, int h, VkImage dst, int dstLevel, int dw, int dh ) {
+	VkImageBlit blit;
+
+	Com_Memset( &blit, 0, sizeof( blit ) );
+	blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blit.srcSubresource.mipLevel = srcLevel;
+	blit.srcSubresource.layerCount = 1;
+	blit.srcOffsets[1].x = w;
+	blit.srcOffsets[1].y = h;
+	blit.srcOffsets[1].z = 1;
+	blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	blit.dstSubresource.mipLevel = dstLevel;
+	blit.dstSubresource.layerCount = 1;
+	blit.dstOffsets[1].x = dw;
+	blit.dstOffsets[1].y = dh;
+	blit.dstOffsets[1].z = 1;
+	qvkCmdBlitImage( cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR );
+}
+
+// a level of vk.blurImage blitted to: read from now
+static void VK_BlurLevelDone( VkCommandBuffer cmd, int level ) {
+	VkImageMemoryBarrier barrier;
+
+	Com_Memset( &barrier, 0, sizeof( barrier ) );
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = vk.blurImage;
+	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	barrier.subresourceRange.baseMipLevel = level;
+	barrier.subresourceRange.levelCount = 1;
+	barrier.subresourceRange.layerCount = 1;
+	qvkCmdPipelineBarrier( cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier );
+}
+
+void vk_frame_blur( image_t *image ) {
+	vkTexture_t *dst;
+	VkCommandBuffer cmd;
+	int level, w, h;
+
+	if ( !vk.device ) {
+		return;
+	}
+	VK_BeginFrameIfNeeded();
+	dst = VK_GetTexture( image->texnum );
+	// (nothing drawn yet: no target to blur)
+	if ( !dst || dst->compressed || vk.blurSerial == vk.frameSerial || vk.target == VK_TARGET_NONE ) {
+		return;
+	}
+	vk.blurSerial = vk.frameSerial;
+	if ( !vk.blurImage ) {
+		// (sampled: what its view needs; never sampled)
+		VK_CreateImage( vk.colorFormat, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+			VK_IMAGE_ASPECT_COLOR_BIT, Q_max( vk.width / 2, 1 ), Q_max( vk.height / 2, 1 ), VK_BLUR_LEVELS, &vk.blurImage, &vk.blurMemory,
+			&vk.blurView );
+	}
+	vk_end_scene();
+	VK_EndRenderPass();
+	cmd = vk.frame->mainCmd;
+
+	VK_ImageBarrier( cmd, vk.targetImage, VK_IMAGE_ASPECT_COLOR_BIT,
+		VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT );
+	// (its last contents not kept)
+	VK_ImageBarrier( cmd, vk.blurImage, VK_IMAGE_ASPECT_COLOR_BIT,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT );
+
+	w = vk.width;
+	h = vk.height;
+	for ( level = 0; level < VK_BLUR_LEVELS; level++ ) {
+		const int lw = Q_max( vk.width >> ( level + 1 ), 1 ), lh = Q_max( vk.height >> ( level + 1 ), 1 );
+
+		VK_BlurBlit( cmd, level ? vk.blurImage : vk.targetImage, level ? level - 1 : 0, w, h, vk.blurImage, level, lw, lh );
+		VK_BlurLevelDone( cmd, level );
+		w = lw;
+		h = lh;
+	}
+
+	VK_ImageBarrier( cmd, dst->image, VK_IMAGE_ASPECT_COLOR_BIT,
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT );
+	VK_BlurBlit( cmd, vk.blurImage, VK_BLUR_LEVELS - 1, w, h, dst->image, 0, dst->width, dst->height );
+	VK_ImageBarrier( cmd, dst->image, VK_IMAGE_ASPECT_COLOR_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT );
+	VK_ImageBarrier( cmd, vk.targetImage, VK_IMAGE_ASPECT_COLOR_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT );
+
+	VK_BeginRenderPass();
+	// (the draws that follow bind everything again)
 	Com_Memset( &vkb, 0, sizeof( vkb ) );
 	vk_dirty = VK_DIRTY_ALL;
 }
@@ -4742,6 +5974,31 @@ void vk_ao_scene( const float *fog ) {
 
 	Com_Memset( &vkb, 0, sizeof( vkb ) );
 	vk_dirty = VK_DIRTY_ALL;
+}
+
+void vk_set_reactive( qboolean reactive ) {
+	// only while the anti-aliasing reads it: without it the effects are
+	// drawn as before
+	vks.reactive = reactive && vkt.active && vkt.reactiveOn;
+}
+
+void vk_set_prev_projection( const float *matrix ) {
+	if ( !vkt.active ) {
+		return;
+	}
+	if ( !matrix ) {
+		if ( vkt.prevProjectionSet ) {
+			vkt.prevProjectionSet = qfalse;
+			vk_dirty |= VK_DIRTY_MVP;
+		}
+		return;
+	}
+	if ( vkt.prevProjectionSet && !memcmp( vkt.drawPrevProjection, matrix, sizeof( vkt.drawPrevProjection ) ) ) {
+		return;
+	}
+	Com_Memcpy( vkt.drawPrevProjection, matrix, sizeof( vkt.drawPrevProjection ) );
+	vkt.prevProjectionSet = qtrue;
+	vk_dirty |= VK_DIRTY_MVP;
 }
 
 void vk_set_prev_modelview( const float *matrix ) {

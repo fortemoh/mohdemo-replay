@@ -1,4 +1,4 @@
-if(NOT BUILD_GAME_LIBRARIES AND NOT BUILD_GAME_QVMS)
+if(NOT BUILD_GAME_LIBRARIES)
     return()
 endif()
 
@@ -16,8 +16,10 @@ file(GLOB_RECURSE CGAME_SOURCES
     ${SOURCE_DIR}/cgame/*.c ${SOURCE_DIR}/cgame/*.cpp
 )
 
+# Unit tests under cgame/tests must not ship in the cgame module.
+list(FILTER CGAME_SOURCES EXCLUDE REGEX "/cgame/tests/")
+
 set(CGAME_BINARY_SOURCES)
-set(CGAME_QVM_SOURCES)
 
 file(GLOB_RECURSE GAME_SOURCES
     ${SOURCE_DIR}/fgame/*.c ${SOURCE_DIR}/fgame/*.cpp
@@ -46,12 +48,10 @@ list(APPEND GAME_SOURCES
 )
 
 set(GAME_BINARY_SOURCES)
-set(GAME_QVM_SOURCES)
 
 set(UI_SOURCES)
 
 set(UI_BINARY_SOURCES)
-set(UI_QVM_SOURCES)
 
 set(GAME_MODULE_SHARED_SOURCES
     ${SOURCE_DIR}/qcommon/q_math.c

@@ -22,10 +22,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../uilib/ui_local.h"
 
-UConnection::UConnection()
-{
-}
-
 UConnection::UConnection(const Event& inevent, const Event& outevent)
 	: m_inevent(inevent)
 	, m_outevent(outevent)
@@ -66,33 +62,6 @@ bool UConnection::AddListener
 
 	e = new Event( ev );
 	m_events.AddObject( e );
-
-	return true;
-}
-
-bool UConnection::RemoveListener
-	(
-	Listener *object
-	)
-
-{
-	int i;
-	ListenerPtr ptr;
-
-	if( !object )
-		return false;
-
-	ptr = object;
-
-	if( !m_listeners.ObjectInList( ptr ) )
-	{
-		return false;
-	}
-
-	i = m_listeners.IndexOfObject( ptr );
-	delete m_events.ObjectAt( i );
-	m_events.RemoveObjectAt( i );
-	m_listeners.RemoveObjectAt( i );
 
 	return true;
 }
@@ -199,52 +168,3 @@ bool USignal::Connect
 	return c->AddListener( object, outevent );
 }
 
-bool USignal::Disconnect
-	(
-	Listener *object,
-	Event& ev
-	)
-
-{
-	int i;
-	int n;
-	UConnection *c;
-
-	n = m_connections.NumObjects();
-	for( i = 1; i <= n; i++ )
-	{
-		c = m_connections.ObjectAt( i );
-		if( c->TypeIs( ev ) )
-		{
-			return c->RemoveListener( object );
-		}
-	}
-
-	return false;
-}
-
-bool USignal::Disconnect
-	(
-	Listener *object
-	)
-
-{
-	int i;
-	int n;
-	bool result;
-	UConnection *c;
-
-	result = false;
-
-	n = m_connections.NumObjects();
-	for( i = 1; i <= n; i++ )
-	{
-		c = m_connections.ObjectAt( i );
-		if( c->RemoveListener( object ) )
-		{
-			result = true;
-		}
-	}
-
-	return result;
-}

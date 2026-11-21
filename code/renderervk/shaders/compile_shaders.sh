@@ -2,14 +2,16 @@
 #
 # Compiles the GLSL shaders in this directory to SPIR-V and writes them as
 # C arrays to ../vk_shaders.c (the renderer's shaders),
-# ../vk_shaders_temporal.c (those of the temporal path, r_temporal) and
-# ../vk_shaders_hdr.c (HDR output, r_hdrOutput), so that normal builds don't
-# need glslc. Run it after changing a shader and commit the regenerated
-# files. Another glslc (its spirv-opt) can make other SPIR-V from the same
-# source: with an argument only that file is written, main, temporal or
-# hdr, and the others' arrays stay as they are.
+# ../vk_shaders_temporal.c (those of the temporal path, r_temporal),
+# ../vk_shaders_hdr.c (HDR output, r_hdrOutput) and ../vk_shaders_radar.c
+# (the Competitive HUD radar's picture), so that normal builds don't need
+# glslc. Run it after changing a shader and commit the regenerated files.
+# Another glslc (its spirv-opt) can make other SPIR-V from the same source:
+# with an argument only that file is written, main, temporal, hdr or radar,
+# and the others' arrays stay as they are.
 #
-# Usage: code/renderervk/shaders/compile_shaders.sh [main|temporal|hdr]   (GLSLC=/path/to/glslc to override)
+# Usage: code/renderervk/shaders/compile_shaders.sh [main|temporal|hdr|radar]   (GLSLC=/path/to/glslc to override;
+#        GLSLC=code/renderervk/shaders/glslang_as_glslc.sh compiles with glslang instead, see there)
 
 set -eu
 
@@ -20,6 +22,7 @@ GLSLC=${GLSLC:-glslc}
 SHADERS="generic_vert:generic.vert:
 generic_clip_vert:generic.vert:-DCLIP_DISTANCE
 generic_frag:generic.frag:
+generic_bindless_frag:generic.frag:-DBINDLESS
 skinned_vert:skinned.vert:
 skinned_clip_vert:skinned.vert:-DCLIP_DISTANCE
 effects_vert:effects.vert:
@@ -27,6 +30,7 @@ effects_clip_vert:effects.vert:-DCLIP_DISTANCE"
 TEMPORAL_SHADERS="generic_temporal_vert:generic.vert:-DTEMPORAL
 generic_temporal_clip_vert:generic.vert:-DTEMPORAL,-DCLIP_DISTANCE
 generic_temporal_frag:generic.frag:-DTEMPORAL
+generic_temporal_bindless_frag:generic.frag:-DTEMPORAL,-DBINDLESS
 skinned_temporal_vert:skinned.vert:-DTEMPORAL
 skinned_temporal_clip_vert:skinned.vert:-DTEMPORAL,-DCLIP_DISTANCE
 effects_temporal_vert:effects.vert:-DTEMPORAL
@@ -41,10 +45,18 @@ ao_prefilter_comp:ao_prefilter.comp:
 gtao_main_comp:gtao_main.comp:
 ao_temporal_comp:ao_temporal.comp:
 ao_denoise_comp:ao_denoise.comp:
+ao_upsample_comp:ao_upsample.comp:
 ao_apply_frag:ao_apply.frag:
 motion_blur_tiles_comp:motion_blur.comp:
-motion_blur_neighbor_comp:motion_blur.comp:-DNEIGHBOR"
+motion_blur_neighbor_comp:motion_blur.comp:-DNEIGHBOR
+dof_focus_comp:dof.comp:-DFOCUS
+dof_setup_comp:dof.comp:-DSETUP
+dof_neighbor_comp:dof.comp:-DNEIGHBOR
+dof_gather_comp:dof.comp:-DGATHER
+dof_apply_comp:dof.comp:-DAPPLY"
 HDR_SHADERS="output_frag:output.frag:"
+RADAR_SHADERS="radar_comp:radar.comp:
+radar_changing_comp:radar.comp:-DCHANGING"
 
 # write <output file> <what it holds> <shader list>
 write() {
@@ -108,4 +120,7 @@ if [ -z "$ONLY" ] || [ "$ONLY" = temporal ]; then
 fi
 if [ -z "$ONLY" ] || [ "$ONLY" = hdr ]; then
 	write ../vk_shaders_hdr.c "the shaders of HDR output (r_hdrOutput)" "$HDR_SHADERS"
+fi
+if [ -z "$ONLY" ] || [ "$ONLY" = radar ]; then
+	write ../vk_shaders_radar.c "the Competitive HUD radar's picture (vk_radar.c)" "$RADAR_SHADERS"
 fi

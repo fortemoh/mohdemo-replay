@@ -33,8 +33,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // level 4. One pixel an invocation (16 x 16) was a fifth slower; its
 // level 0 written in four 8 x 8 blocks (a warp's stores next to each
 // other), or without the normals' class, took the same time.
+// With AO_HALF (always since Plan 49) the grid's view distances too, a texel a 2 x 2:
+// the top-left one's (ao_common.glsl).
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #include "ao_common.glsl"
 
 layout( local_size_x = 8, local_size_y = 8 ) in;
@@ -71,18 +74,6 @@ float Filter( vec4 d ) {
 	return all( weapon ) ? -r : r;
 }
 
-// the view distance of a pixel from its depth and its normal's class
-float Distance( float wz, float a ) {
-	int cls = int( a * 3.0 + 0.5 );		// TemporalClass
-	bool weapon = cls == TEMPORAL_CLASS_WEAPON;
-	float d = TemporalViewDistance( pc.view, wz, weapon );
-
-	if ( cls == TEMPORAL_CLASS_NONE || cls == TEMPORAL_CLASS_SKY ) {
-		return AoFar();
-	}
-	return weapon ? -max( d, 1e-4 ) : min( d, AoFar() );
-}
-
 void main() {
 	ivec2 size = textureSize( u_depth, 0 );
 	ivec2 local = ivec2( gl_LocalInvocationID.xy );
@@ -98,10 +89,41 @@ void main() {
 	vec4 wz = textureGather( u_depth, uv, 0 );
 	vec4 cls = textureGather( u_normal, uv, 3 );
 
-	d.x = Distance( wz.w, cls.w );
-	d.y = Distance( wz.z, cls.z );
-	d.z = Distance( wz.x, cls.x );
-	d.w = Distance( wz.y, cls.y );
+	d.x = AoDistance( wz.w, cls.w );
+	d.y = AoDistance( wz.z, cls.z );
+	d.z = AoDistance( wz.x, cls.x );
+	d.w = AoDistance( wz.y, cls.y );
+	if ( AO_HALF && all( lessThan( t, imageSize( o_grid ) ) ) ) {
+		imageStore( o_grid, t, vec4( d.x ) );
+
+		// the texel's motion (its pixel's), for ao_temporal.comp: the
+		// draw's motion vector where it moves, the camera's worked out
+		// from the view distance elsewhere (as the other readers do,
+		// temporal_common.glsl), with the view distance the surface had
+		// in the last frame for its history's depth match
+		float sd = d.x;
+		float dist = abs( sd );
+		vec2 motion = vec2( 0.0 );
+		float expected = dist;
+		float cls0 = AO_MOTION_CAMERA;
+
+		if ( ( TemporalFlags( texelFetch( u_normal, p, 0 ) ) & TEMPORAL_FLAG_MOTION ) != 0u ) {
+			motion = texelFetch( u_velocity, p, 0 ).rg;
+			cls0 = AO_MOTION_DRAW;
+		} else if ( sd >= 0.0 ) {
+			// a weapon without motion vectors moves with the camera: none
+			vec2 pixel = vec2( p ) + 0.5;
+			vec4 prevClip = pc.view.reproject * vec4( TemporalViewPosition( pc.view, pixel, dist ), 1.0 );
+
+			if ( prevClip.w <= 1e-6 ) {
+				cls0 = AO_MOTION_NONE;
+			} else {
+				motion = ( TemporalPixelNdc( pc.view, pixel ) - prevClip.xy / prevClip.w ) * vec2( 0.5, -0.5 );
+				expected = prevClip.w;
+			}
+		}
+		imageStore( o_gridMotion, t, vec4( motion, expected, cls0 ) );
+	}
 	if ( p.x < size.x && p.y < size.y ) {
 		imageStore( o_depth0, p, vec4( d.x ) );
 	}

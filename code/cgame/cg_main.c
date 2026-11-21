@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "cg_parsemsg.h"
 #include "cg_archive.h"
 #include "cg_radar.h"
+#include "cg_remotepredict.h"
 #include "../corepp/tiki.h"
 
 #ifdef _WIN32
@@ -89,6 +90,12 @@ cvar_t *cg_crosshair_length;
 cvar_t *cg_crosshair_gap;
 cvar_t *cg_crosshair_thickness;
 cvar_t *cg_crosshair_color;
+cvar_t *cg_crosshair_alpha;
+cvar_t *cg_crosshair_outline;
+cvar_t *cg_crosshair_outline_color;
+cvar_t *cg_crosshair_outline_alpha;
+cvar_t *cg_crosshair_dot;
+cvar_t *cg_crosshair_t;
 cvar_t *vm_offset_max;
 cvar_t *vm_offset_speed;
 cvar_t *vm_sway_front;
@@ -112,10 +119,11 @@ cvar_t *vm_offset_vel_side;
 cvar_t *vm_offset_vel_up;
 cvar_t *vm_offset_upvel;
 cvar_t *vm_lean_lower;
+cvar_t *cg_viewmodel_movedrop;
+cvar_t *cg_righthand;
 cvar_t *voiceChat;
 cvar_t *cg_shadowscount;
 cvar_t *cg_shadowdebug;
-cvar_t *ui_timemessage;
 
 //
 // Added in OPM
@@ -171,7 +179,7 @@ void CG_RegisterCvars(void)
     cg_hidetempmodels             = cgi.Cvar_Get("cg_hidetempmodels", "0", 0);
     cg_synchronousClients         = cgi.Cvar_Get("g_synchronousClients", "0", 0);
     cg_stereoSeparation           = cgi.Cvar_Get("cg_stereosep", "0.4", CVAR_ARCHIVE);
-    cg_lagometer                  = cgi.Cvar_Get("cg_lagometer", "0", 0);
+    cg_lagometer                  = cgi.Cvar_Get("cg_lagometer", "0", CVAR_ARCHIVE);
     paused                        = cgi.Cvar_Get("paused", "0", 0);
     r_lerpmodels                  = cgi.Cvar_Get("r_lerpmodels", "1", 0);
     cg_3rd_person                 = cgi.Cvar_Get("cg_3rd_person", "0", CVAR_CHEAT);
@@ -201,12 +209,20 @@ void CG_RegisterCvars(void)
     cg_hud                        = cgi.Cvar_Get("cg_hud", "0", 0);
     cg_huddraw_force              = cgi.Cvar_Get("cg_huddraw_force", "0", CVAR_SAVEGAME);
     cg_drawsvlag                  = cgi.Cvar_Get("cg_drawsvlag", "1", CVAR_ARCHIVE);
-    // the crosshair (CG_UpdateCrosshair): by default the stock image's shape, in HUD pixels
+    // the crosshair (CG_UpdateCrosshair): by default CS2's default crosshair without its outline, white, in pixels at 1080 lines
     ui_crosshair                  = cgi.Cvar_Get("ui_crosshair", "1", CVAR_ARCHIVE);
-    cg_crosshair_length           = cgi.Cvar_Get("cg_crosshair_length", "4", CVAR_ARCHIVE);
-    cg_crosshair_gap              = cgi.Cvar_Get("cg_crosshair_gap", "3", CVAR_ARCHIVE);
-    cg_crosshair_thickness        = cgi.Cvar_Get("cg_crosshair_thickness", "1", CVAR_ARCHIVE);
+    cg_crosshair_length           = cgi.Cvar_Get("cg_crosshair_length", "8", CVAR_ARCHIVE);
+    cg_crosshair_gap              = cgi.Cvar_Get("cg_crosshair_gap", "4", CVAR_ARCHIVE);
+    cg_crosshair_thickness        = cgi.Cvar_Get("cg_crosshair_thickness", "2", CVAR_ARCHIVE);
     cg_crosshair_color            = cgi.Cvar_Get("cg_crosshair_color", "FFFFFF", CVAR_ARCHIVE);
+    cg_crosshair_alpha            = cgi.Cvar_Get("cg_crosshair_alpha", "255", CVAR_ARCHIVE);
+    // 0 none, 1 around every box, 2 above and left of them only (CS2's half outline)
+    cg_crosshair_outline          = cgi.Cvar_Get("cg_crosshair_outline", "0", CVAR_ARCHIVE);
+    cg_crosshair_outline_color    = cgi.Cvar_Get("cg_crosshair_outline_color", "000000", CVAR_ARCHIVE);
+    cg_crosshair_outline_alpha    = cgi.Cvar_Get("cg_crosshair_outline_alpha", "255", CVAR_ARCHIVE);
+    // the center square, and the T style (no top arm); crosshair_import/export (client) read CS2's share codes
+    cg_crosshair_dot              = cgi.Cvar_Get("cg_crosshair_dot", "0", CVAR_ARCHIVE);
+    cg_crosshair_t                = cgi.Cvar_Get("cg_crosshair_t", "0", CVAR_ARCHIVE);
     vm_offset_max                 = cgi.Cvar_Get("vm_offset_max", "8.0", 0);
     vm_offset_speed               = cgi.Cvar_Get("vm_offset_speed", "8.0", 0);
     vm_sway_front                 = cgi.Cvar_Get("vm_sway_front", "0.1", 0);
@@ -230,9 +246,13 @@ void CG_RegisterCvars(void)
     vm_offset_vel_up              = cgi.Cvar_Get("vm_offset_vel_up", "-4.0", 0);
     vm_offset_upvel               = cgi.Cvar_Get("vm_offset_upvel", "0.0025", 0);
     vm_lean_lower                 = cgi.Cvar_Get("vm_lean_lower", "0.1", 0);
+    // how far the first-person weapon dips and pulls back while moving (Options' Weapon Dip), from 0 (not at
+    // all, like CS2) to 1 (the game's own; CG_ViewModelSettings)
+    cg_viewmodel_movedrop         = cgi.Cvar_Get("cg_viewmodel_movedrop", "1", CVAR_ARCHIVE);
+    // 0: the first-person weapon in the left hand (mirrored, CG_MirrorViewModel)
+    cg_righthand                  = cgi.Cvar_Get("cg_righthand", "1", CVAR_ARCHIVE);
     voiceChat                     = cgi.Cvar_Get("cg_voicechat", "1", 0);
 
-    ui_timemessage = cgi.Cvar_Get("ui_timemessage", "", 0);
 
     // see if we are also running the server on this machine
     temp            = cgi.Cvar_Get("sv_running", "0", 0);
@@ -282,6 +302,10 @@ void CG_RegisterCvars(void)
     // 0: other players' taunts (the instant messages' voices) aren't played; their radar icon and text stay
     // (MoHAA Reloaded, as on the metal branch)
     cg_tauntsounds = cgi.Cvar_Get("cg_tauntsounds", "1", CVAR_ARCHIVE);
+    // Added: remote prediction's (cg_remotePrediction, cg_remotePredictionMaxLead)
+    CG_RP_RegisterCvars();
+    // Added: the hitmarker's (cg_hitmarker, cg_hitmarker_sound)
+    CG_Hitmarker_RegisterCvars();
 }
 /*
 ===============
@@ -505,15 +529,7 @@ void CG_ProcessConfigString(int num, qboolean modelOnly)
             }
             return;
         case CS_CURRENT_OBJECTIVE:
-            cg.ObjectivesCurrentIndex = atoi(str);
             return;
-        }
-
-        if (num >= CS_OBJECTIVES && num < CS_OBJECTIVES + MAX_OBJECTIVES) {
-            cobjective_t *objective = &cg.Objectives[num - CS_OBJECTIVES];
-
-            objective->flags = atoi(Info_ValueForKey(str, "flags"));
-            Q_strncpyz(objective->text, Info_ValueForKey(str, "text"), sizeof(objective->text));
         }
 
         switch (num) {
@@ -866,13 +882,10 @@ player models and the precache scripts, 2 the map's models, 4 cgame's own.
 */
 static void CG_PrecacheMatch(void)
 {
-    static const char *shaders[] = {
-        "blastmark", "textures/hud/allies", "textures/hud/axis", "textures/hud/radar_allies.tga",
-        "textures/hud/radar_axis.tga", "gfx/2d/net.tga"
-    };
     static const char *sprites[] = {
-        "textures/hud/allies_headicon.spr", "textures/hud/axis_headicon.spr", "textures/hud/talking_headicon.spr",
-        "textures/hud/inmenu_headicon.spr"
+        "textures/hud/talking_headicon.spr", "textures/hud/inmenu_headicon.spr",
+        // Added: the Competitive HUD's (CG_TeamHeadIcon)
+        "textures/hud/reloaded_allies_headicon.spr", "textures/hud/reloaded_axis_headicon.spr"
     };
     char  level[MAX_QPATH];
     char  script[MAX_QPATH];
@@ -909,9 +922,7 @@ static void CG_PrecacheMatch(void)
     }
 
     if (cg_precache->integer & 4) {
-        for (i = 0; i < ARRAY_LEN(shaders); i++) {
-            cgi.R_RegisterShader(shaders[i]);
-        }
+        cgi.R_RegisterShader("blastmark");
         for (i = 0; i < ARRAY_LEN(sprites); i++) {
             cgi.R_RegisterModel(sprites[i]);
         }
@@ -956,20 +967,8 @@ void CG_PrepRefresh(void)
     cgs.media.shadowMarkShader         = cgi.R_RegisterShader("markShadow");
     cgs.media.footShadowMarkShader     = cgi.R_RegisterShader("footShadow");
     cgs.media.wakeMarkShader           = cgi.R_RegisterShader("ripple.spr");
-    cgs.media.lagometerShader          = cgi.R_RegisterShaderNoMip("gfx/2d/blank");
-    cgs.media.levelExitShader          = cgi.R_RegisterShaderNoMip("textures/menu/exit");
-    cgs.media.pausedShader             = cgi.R_RegisterShaderNoMip("textures/menu/paused");
     cgs.media.backTileShader           = cgi.R_RegisterShader("gfx/2d/backtile");
-    cgs.media.zoomOverlayShader        = cgi.R_RegisterShaderNoMip("textures/hud/zoomoverlay");
-    cgs.media.kar98TopOverlayShader    = cgi.R_RegisterShaderNoMip("textures/hud/kartop.tga");
-    cgs.media.kar98BottomOverlayShader = cgi.R_RegisterShaderNoMip("textures/hud/karbottom.tga");
-    cgs.media.binocularsOverlayShader  = cgi.R_RegisterShaderNoMip("textures/hud/binocularsoverlay");
     cgs.media.hudDrawFont              = cgi.R_LoadFont("verdana-14");
-    cgs.media.attackerFont             = cgi.R_LoadFont("facfont-20");
-    cgs.media.objectiveFont            = cgi.R_LoadFont("facfont-20"); // was courier-16 before 2.0
-    cgs.media.objectivesBackShader     = cgi.R_RegisterShaderNoMip("textures/hud/objectives_backdrop");
-    cgs.media.checkedBoxShader         = cgi.R_RegisterShaderNoMip("textures/objectives/filledbox");
-    cgs.media.uncheckedBoxShader       = cgi.R_RegisterShaderNoMip("textures/objectives/emptybox");
 
     // go through all the configstrings and process them
     for (i = CS_SYSTEMINFO + 1; i < MAX_CONFIGSTRINGS; i++) {
@@ -1017,9 +1016,14 @@ void CG_GameStateReceived(void)
 {
     const char *s;
     int checksum;
+    int clientNum;
 
     // clear everything
+    // Fixed in Reloaded
+    //  Keep our client number (set by CG_Init just before), it was always 0
+    clientNum = cg.clientNum;
     memset(&cg, 0, sizeof(cg));
+    cg.clientNum = clientNum;
     memset(cg_entities, 0, sizeof(cg_entities));
 
     // clear the light styles
@@ -1051,6 +1055,7 @@ void CG_GameStateReceived(void)
     CG_InitMarks();
 
     CG_RegisterSounds();
+    CG_Hitmarker_RegisterSound(); // Added
 
     CG_PrepRefresh();
 
@@ -1137,6 +1142,8 @@ void CG_Init(clientGameImport_t *imported, int serverMessageNum, int serverComma
     CG_InitializeCommandManager();
 
     CG_GameStateReceived();
+    // Added: remote prediction starts again
+    CG_RP_Init();
 
     CG_InitConsoleCommands();
 
@@ -1183,7 +1190,7 @@ void CG_Shutdown(void)
     //  Don't leave a key pressed by cg_followplayer down
     CG_ReleaseFollowKey();
     // Shutdown radar
-    cgi.CL_InitRadar(NULL, NULL, -1);
+    cgi.CL_InitRadar(NULL, -1);
 
     // some mods may need to do cleanup work here,
     // like closing files or archiving session data
@@ -1199,11 +1206,6 @@ void CG_Shutdown(void)
 int CG_GetParent(int entnum)
 {
     return cg_entities[entnum].currentState.parent;
-}
-
-float CG_GetObjectiveAlpha()
-{
-    return cg.ObjectivesCurrentAlpha;
 }
 
 /*
@@ -1235,11 +1237,9 @@ clientGameExport_t *GetCGameAPI(void)
     cge.CG_ProcessInitCommands      = CG_ProcessInitCommands;
     cge.CG_EndTiki                  = CG_EndTiki;
     cge.CG_GetParent                = CG_GetParent;
-    cge.CG_GetObjectiveAlpha        = CG_GetObjectiveAlpha;
     cge.CG_WeaponCommandButtonBits  = CG_WeaponCommandButtonBits;
     cge.CG_CheckCaptureKey          = CG_CheckCaptureKey;
     cge.CG_ReadNonPVSClient         = CG_ReadNonPVSClient;
-    cge.CG_UpdateRadar              = CG_UpdateRadar;
     cge.CG_SaveStateToBuffer        = CG_SaveStateToBuffer;
     cge.CG_LoadStateToBuffer        = CG_LoadStateToBuffer;
     cge.CG_CleanUpTempModels        = CG_CleanUpTempModels;

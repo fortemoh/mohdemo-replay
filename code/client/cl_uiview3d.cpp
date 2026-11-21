@@ -21,6 +21,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "cl_ui.h"
+#include "cl_uimenus.h"
+#include "cl_uiextras.h"
 #include "../qcommon/localization.h"
 
 #include "../server/server.h"
@@ -97,7 +99,6 @@ void View3D::OnActivate(Event *ev)
     UIWidget         *wid;
     UList<UIWidget *> widgets;
 
-    UI_CloseInventory();
     Key_SetCatcher(Key_GetCatcher() & ~KEYCATCH_UI);
 
     for (wid = getParent()->getFirstChild(); wid; wid = getParent()->getNextChild(wid)) {
@@ -283,43 +284,6 @@ void ProfPrint(UIFont* m_font, float minY, int line, char* label, prof_var_t* va
 void View3D::DrawProf(void)
 {
     // FIXME: unimplemented
-}
-
-void View3D::PrintSound(int channel, const char *name, float vol, int rvol, float pitch, float base, int& line)
-{
-    char  buf[255];
-    float x;
-    float xStep;
-    float height;
-
-    height = m_font->getHeight(getHighResScale());
-    xStep  = height;
-
-    x = 0;
-    Com_sprintf(buf, sizeof(buf), "%d", channel);
-    m_font->Print(x, height * line + m_frame.pos.y, buf, -1, getHighResScale());
-
-    x += xStep + xStep;
-    Com_sprintf(buf, sizeof(buf), "%s", name);
-    m_font->Print(x, height * line + m_frame.pos.y, buf, -1, getHighResScale());
-
-    x += xStep * 30.0;
-    Com_sprintf(buf, sizeof(buf), "vol:%.2f", vol);
-    m_font->Print(x, height * line + m_frame.pos.y, buf, -1, getHighResScale());
-
-    x += xStep * 8;
-    Com_sprintf(buf, sizeof(buf), "rvol:%.2f", (float)(rvol / 128.f));
-    m_font->Print(x, height * line + m_frame.pos.y, buf, -1, getHighResScale());
-
-    x += xStep * 5;
-    Com_sprintf(buf, sizeof(buf), "pit:%.2f", pitch);
-    m_font->Print(x, height * line + m_frame.pos.y, buf, -1, getHighResScale());
-
-    x += xStep * 5;
-    Com_sprintf(buf, sizeof(buf), "base:%d", (int)base);
-    m_font->Print(x, height * line + m_frame.pos.y, buf, -1, getHighResScale());
-
-    line++;
 }
 
 void View3D::DrawSoundOverlay(void)
@@ -587,11 +551,17 @@ void View3D::Draw2D(void)
             cge->CG_Draw2D();
         }
 
-        if (m_locationprint) {
+        // Changed: no prints under the Reloaded weapon and Esc menus (no HUD there); they run down there
+        // as if drawn, so one that came under a menu isn't shown in full when it closes
+        if (UI_Menus_Covering()) {
+            m_printfadetime = Q_max(0.0f, m_printfadetime - cls.frametime);
+        } else if (m_locationprint) {
             LocationPrint();
         } else {
             CenterPrint();
         }
+        // Added: the Competitive HUD's round banner and chat typing line
+        UI_Extras_Draw2D();
 
         if (!cls.no_menus) {
             DrawSoundOverlay();
@@ -632,26 +602,8 @@ void View3D::CenterPrint(void)
     alpha = Q_clamp_float(alpha, 0, 1);
 
     if (!m_print_mat) {
-        UIRect2D frame;
-        m_font->setColor(UColor(0, 0, 0, alpha));
-
-        frame = getClientFrame();
-
-        m_font->PrintJustified(
-            UIRect2D(frame.pos.x + 1, frame.pos.y + 1, frame.size.width, frame.size.height),
-            m_iFontAlignmentHorizontal,
-            m_iFontAlignmentVertical,
-            p,
-            getVirtualScale()
-        );
-
-        m_font->setColor(UColor(1, 1, 1, alpha));
-
-        frame = getClientFrame();
-
-        m_font->PrintJustified(frame, m_iFontAlignmentHorizontal, m_iFontAlignmentVertical, p, getVirtualScale());
-
-        m_font->setColor(UBlack);
+        // Changed: the Competitive HUD's boxed print
+        UI_Extras_Print(p, alpha, -2, -2);
     } else if ((mat = m_print_mat->GetMaterial())) {
         vec4_t col {alpha, alpha, alpha, alpha};
 
@@ -674,20 +626,13 @@ void View3D::CenterPrint(void)
 
 void View3D::LocationPrint(void)
 {
-    fonthorzjustify_t horiz;
-    fontvertjustify_t vert;
-    int               x, y;
-    const char       *p;
-    float             alpha;
-    UIRect2D          frame;
+    const char *p;
+    float       alpha;
 
     if (!m_printfadetime) {
         m_locationprint = false;
         return;
     }
-
-    horiz = FONT_JUSTHORZ_LEFT;
-    vert  = FONT_JUSTVERT_TOP;
 
     p = Sys_LV_CL_ConvertString(m_printstring);
     if (m_printfadetime > 3250) {
@@ -700,46 +645,9 @@ void View3D::LocationPrint(void)
 
     alpha = Q_clamp_float(alpha, 0, 1);
 
-    x = m_x_coord / 640.f * m_screenframe.size.width;
-    y = (480 - m_font->getHeight(getHighResScale()) - m_y_coord) / 480.f * m_screenframe.size.height;
-
-    if (m_x_coord == -1) {
-        horiz = FONT_JUSTHORZ_CENTER;
-        x     = 0;
-    }
-    if (m_y_coord == -1) {
-        vert = FONT_JUSTVERT_CENTER;
-        y    = 0;
-    }
-
-    m_font->setColor(UColor(0, 0, 0, alpha));
-    frame = getClientFrame();
-
-    m_font->PrintJustified(
-        UIRect2D(frame.pos.x + x + 1, frame.pos.y + y + 1, frame.size.width, frame.size.height),
-        horiz,
-        vert,
-        p,
-        getVirtualScale()
-    );
-
-    m_font->setColor(UColor(1, 1, 1, alpha));
-    frame = getClientFrame();
-
-    m_font->PrintJustified(
-        UIRect2D(frame.pos.x + x, frame.pos.y + y, frame.size.width, frame.size.height),
-        horiz,
-        vert,
-        p,
-        getVirtualScale()
-    );
-
-    m_font->setColor(UBlack);
-    m_printfadetime -= cls.frametime;
-
-    if (m_printfadetime < 0) {
-        m_printfadetime = 0;
-    }
+    // Changed: the Competitive HUD's boxed print
+    UI_Extras_Print(p, alpha, m_x_coord, m_y_coord);
+    m_printfadetime = Q_max(0.0f, m_printfadetime - cls.frametime);
 }
 
 void View3D::DrawLetterbox(void)
@@ -815,6 +723,24 @@ void View3D::InitSubtitle(void)
     avWidth = totalWidth / 26.0;
 }
 
+// a subtitle's next piece to lay out: a word and the spaces or dashes after it (a character below a space alone), 0 at
+// the end; what UIFont's two-byte word count (gone) gave for the games' one-byte fonts
+static int UI_SubtitleWord(const char *text)
+{
+    const unsigned char *p = (const unsigned char *)text;
+    int                  len;
+
+    if (!p[0]) {
+        return 0;
+    }
+    if (p[0] < ' ') {
+        return 1;
+    }
+    for (len = 1; p[len] >= ' ' && !((p[len - 1] == ' ' || p[len - 1] == '-') && p[len] != ' ' && p[len] != '-'); len++) {
+    }
+    return len;
+}
+
 void View3D::DrawSubtitleOverlay(void)
 {
     cvar_t *subAlpha;
@@ -880,7 +806,7 @@ void View3D::DrawSubtitleOverlay(void)
             buf[0] = 0;
 
             while (*c) {
-                blockcount = m_font->DBCSGetWordBlockCount(c, -1);
+                blockcount = UI_SubtitleWord(c);
                 if (!blockcount) {
                     break;
                 }
@@ -977,9 +903,3 @@ qboolean View3D::LetterboxActive(void)
 {
     return m_letterbox_active;
 }
-
-CLASS_DECLARATION(UIWidget, ConsoleView, NULL) {
-    {NULL, NULL}
-};
-
-void ConsoleView::Draw(void) {}

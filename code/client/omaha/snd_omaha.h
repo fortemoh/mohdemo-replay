@@ -230,6 +230,8 @@ struct omaha_internal_t {
     omaha_channel_two_d_stream chan_song[MAX_SOUNDSYSTEM_SONGS];
     omaha_channel_two_d_stream chan_mp3;
     omaha_channel_two_d_stream chan_trig_music;
+    // (the stock movie channel: nothing plays on it, the client has no video player; kept, a save's
+    // channels count it, MAX_SOUNDSYSTEM_MISC_CHANNELS)
     omaha_channel_two_d_stream chan_movie;
 
     // Pointers to channels (baseline slots; overflow appended at runtime).

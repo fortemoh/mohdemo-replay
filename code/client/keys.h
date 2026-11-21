@@ -33,6 +33,7 @@ typedef struct {
 
 extern	qboolean	key_overstrikeMode;
 extern	qkey_t		keys[MAX_KEYS];
+extern	int			key_serial;		// changes with every binding set
 
 extern	int				anykeydown;
 extern	qboolean	chat_team;

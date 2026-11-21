@@ -1065,6 +1065,22 @@ int Com_HexStrToInt( const char *str )
 	return -1;
 }
 
+/*
+===================
+Com_HexColor
+
+A color written RRGGBB or #RRGGBB (the crosshair's cvars), else the fallback
+===================
+*/
+unsigned int Com_HexColor( const char *str, unsigned int fallback )
+{
+	str += str[ 0 ] == '#';
+	if ( strlen( str ) == 6 && strspn( str, "0123456789abcdefABCDEF" ) == 6 )
+		return strtoul( str, NULL, 16 );
+
+	return fallback;
+}
+
 
 /*
 ============================================================================

@@ -102,6 +102,19 @@ This prevents some tricks such as `ghost walking` where a player rapidly switch 
 
 If enabled, a player can stand on another player's head without being pushed off. Defaults to `0`.
 
+### `g_spectatefollow_firstperson`
+
+How spectators view the player they follow, until they pick a view themselves:
+
+- `0` (the default): from behind the player (third person)
+- `1`: through the player's eyes, with their weapon, HUD and scope (first person)
+
+Each spectator can switch with the `spectatemode` console command: `spectatemode 1` for first person, `spectatemode 0` for third person, or `spectatemode` alone to toggle. It can be bound to a key, for example `bind v spectatemode`. This works with original game clients too, as it only changes what the server sends.
+
+### `g_spectatefollow_stockbob`
+
+Original game clients don't bob the view of a player they watch in first person, as they only know a player is walking from their own movement prediction. Set it to `1` to have the server add the view bob for them. It is worked out 20 times a second (`sv_fps`) instead of every frame, and the weapon moves with the view without swaying on its own. OpenMoHAA clients bob on their own and are left alone. Defaults to `0`.
+
 ### `g_splean`
 
 Set it to `1` to allow leaning in the Allied Assault single-player campaign, which the original game doesn't allow. It uses the Allied Assault multiplayer lean. Defaults to `0`. Spearhead and Breakthrough are not affected.

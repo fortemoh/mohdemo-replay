@@ -76,6 +76,9 @@ layout(location = 1) out vec2 v_st0;
 layout(location = 2) out vec2 v_st1;
 layout(location = 3) out vec2 v_fogClip;
 layout(location = 4) out vec3 v_position;
+// bindless textures: the units' slots from the record (FX_TEX); unused
+// without them
+layout(location = 11) flat out uvec2 v_tex;
 #ifdef TEMPORAL
 // generic.vert's
 layout(location = 5) out vec4 v_currClip;
@@ -83,6 +86,8 @@ layout(location = 6) out vec4 v_prevClip;
 layout(location = 7) out vec3 v_viewNormal;
 layout(location = 8) out vec3 v_viewPos;
 layout(location = 9) flat out float v_class;
+// the anti-aliasing's texture LOD bias (r_taaLodBias), for every pipeline
+layout(location = 10) flat out float v_lodBias;
 #endif
 
 #ifdef CLIP_DISTANCE
@@ -111,6 +116,7 @@ const uint FX_DEFORMS = 16u;
 const uint FX_UNITS = 40u;
 const uint FX_UNIT_SIZE = 40u;
 const uint FX_COLOR = 120u;
+const uint FX_TEX = 124u;		// bindless textures: unit 0's slot | unit 1's << 16
 
 // flags
 const uint FLAG_OVERBRIGHT = 1u << 17;
@@ -276,6 +282,53 @@ void deform( inout vec3 xyz, vec3 normal, vec2 st ) {
 		}
 	}
 }
+
+#ifdef TEMPORAL
+// deform() at the last frame's game time: the same operations on the values
+// RB_FxDeformMotion keeps in the words each deform leaves free (wave's time
+// * frequency at 7, flap's scale and bulge's phase at 4, move's offset at 4
+// to 6), so a deform that didn't change gives the same position, no motion
+vec3 deformPrev( vec3 position, vec3 normal, vec2 st ) {
+	uint flags = frame[rec + FX_FLAGS];
+	uint numDeforms = flags & 3u;
+	precise vec3 xyz = position;
+
+	for ( uint i = 0u; i < numDeforms; i++ ) {
+		uint d = FX_DEFORMS + i * 8u;
+		uint type = frame[rec + d];
+		precise vec3 offset;
+		precise float scale;
+
+		if ( type == DEFORM_WAVE_CONST ) {
+			scale = recFloat( d + 1u );
+			offset = normal * scale;
+			xyz = xyz + offset;
+		} else if ( type == DEFORM_WAVE ) {
+			precise float off = ( xyz.x + xyz.y + xyz.z ) * recFloat( d + 6u );
+			precise float arg = ( ( recFloat( d + 4u ) + off ) + recFloat( d + 7u ) ) * 1024.0;
+			scale = recFloat( d + 2u ) + table( frame[rec + d + 1u], int( arg ) ) * recFloat( d + 3u );
+			offset = normal * scale;
+			xyz = xyz + offset;
+		} else if ( type == DEFORM_FLAP_S || type == DEFORM_FLAP_T ) {
+			precise float minV = recFloat( d + 2u );
+			precise float maxV = recFloat( d + 3u );
+			precise float vertexScale = ( maxV - minV ) * ( type == DEFORM_FLAP_S ? st.x : st.y ) + minV;
+			scale = recFloat( d + 4u );
+			offset = vec3( scale * vertexScale ) * normal;
+			xyz = xyz + offset;
+		} else if ( type == DEFORM_BULGE ) {
+			precise float arg = 1024.0 * ( st.x * recFloat( d + 2u ) + recFloat( d + 4u ) );
+			scale = table( 0u, int( arg ) ) * recFloat( d + 3u );
+			offset = normal * scale;
+			xyz = xyz + offset;
+		} else if ( type == DEFORM_MOVE ) {
+			offset = recVec3( d + 4u );
+			xyz = xyz + offset;
+		}
+	}
+	return xyz;
+}
+#endif
 
 // Q_rsqrt of q_math.c
 float qRsqrt( float number ) {
@@ -446,6 +499,7 @@ float distFade( uint mode, vec3 xyz ) {
 void main() {
 	rec = uint( gl_InstanceIndex ) * 8u;
 	uint flags = frame[rec + FX_FLAGS];
+	v_tex = uvec2( frame[rec + FX_TEX] & 0xFFFFu, frame[rec + FX_TEX] >> 16 );
 	precise vec3 xyz = in_position;
 	vec3 normal = in_normal;
 
@@ -486,14 +540,16 @@ void main() {
 	v_position = xyz;
 
 #ifdef TEMPORAL
+	v_lodBias = pc.jitter.w;
 	if ( !TEMPORAL_NORMALS ) {
 		return;
 	}
 	if ( TEMPORAL_MOTION ) {
-		// the deforms of the last frame aren't known: its position is this
-		// frame's deformed one (the motion of the entity only)
+		// where the deforms had the vertex in the last frame (deformPrev),
+		// through the last frame's transform: the entity's motion, or the
+		// camera's, and the deforms' own
 		v_currClip = gl_Position - vec4( pc.jitter.xy * gl_Position.w, 0.0, 0.0 );
-		v_prevClip = pc.prevMvp * vec4( xyz, 1.0 );
+		v_prevClip = pc.prevMvp * vec4( deformPrev( in_position, normal, in_st0 ), 1.0 );
 	}
 	v_viewPos = vec3( dot( pc.mvRow0, vec4( xyz, 1.0 ) ), dot( pc.mvRow1, vec4( xyz, 1.0 ) ), dot( pc.eyeZ, vec4( xyz, 1.0 ) ) );
 	v_viewNormal = vec3( dot( pc.mvRow0.xyz, normal ), dot( pc.mvRow1.xyz, normal ), dot( pc.eyeZ.xyz, normal ) );

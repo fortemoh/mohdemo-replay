@@ -28,9 +28,6 @@ class UIButtonBase : public UIWidget
 {
 protected:
     mouseState_t m_mouseState;
-    str          m_hoverSound;
-    str          m_hoverCommand;
-    str          m_mouseExitedCommand;
 
 public:
     CLASS_PROTOTYPE(UIButtonBase);
@@ -41,9 +38,6 @@ protected:
     void MouseEntered(Event *ev);
     void MouseExited(Event *ev);
     void Dragged(Event *ev);
-    void SetHoverSound(Event *ev);
-    void SetHoverCommand(Event *ev);
-    void SetMouseExitedCommand(Event *ev);
 
 public:
     UIButtonBase();
@@ -65,43 +59,4 @@ public:
     UIButton();
 
     qboolean KeyEvent(int key, unsigned int time) override;
-};
-
-class ToggleCVar : public USignal
-{
-protected:
-    str       m_cvarname;
-    UIButton *m_button;
-
-protected:
-    CLASS_PROTOTYPE(ToggleCVar);
-
-    void Press(Event *ev);
-
-public:
-    ToggleCVar();
-    ToggleCVar(UIButton *button, const char *cvar);
-
-    void setCVar(const char *cvar);
-    void setButton(UIButton *button);
-};
-
-class ExecCmd : public USignal
-{
-protected:
-    UIButton *m_button;
-    str       m_cmd;
-
-public:
-    CLASS_PROTOTYPE(ExecCmd);
-
-protected:
-    void Press(Event *ev);
-
-public:
-    ExecCmd();
-    ExecCmd(UIButton *button, const char *cmd);
-
-    void setCommand(const char *cmd);
-    void setButton(UIButton *button);
 };

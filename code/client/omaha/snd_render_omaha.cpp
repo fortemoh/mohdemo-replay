@@ -377,6 +377,19 @@ static qboolean   s_nullDevice;
 static ma_channel s_map[OM_OUT_MAX];
 
 /*
+ * Added: on Linux the device opens through PipeWire's ALSA plugin when it can.
+ * PipeWire's PulseAudio layer wakes a client at most every 5.3 ms, and every
+ * 10.7 ms when it resamples 44.1 kHz; a sound starts at the next wake-up, so
+ * shots 100 ms apart were heard 90 to 110 ms apart. The ALSA plugin follows
+ * s_period_ms, so a sound starts within one period.
+ */
+#ifndef _WIN32
+static std::atomic<unsigned> s_underruns{0}; /* ALSA EPIPE on write: the device ran dry */
+static unsigned              s_underrunsShown;
+static int                   s_underrunPrinted;
+#endif
+
+/*
  * Added in Omaha: device loss recovery. Changed: a device is lost when its
  * callbacks stopped (OM_DEVICE_STALL_MS), not on a stop notification: WASAPI
  * notifies the stop of a reroute it restarts itself, and an unplugged device
@@ -3178,10 +3191,21 @@ static qboolean Om_LoadHrtf(void)
 	return ok;
 }
 
-/* Added in Omaha: device callback length in ms (s_period_ms, 1..20). */
+/*
+ * Added in Omaha: device callback length in ms (s_period_ms, 1..20). Changed:
+ * 3 by default. A sound starts at the next callback, so this is the step shots
+ * are heard on (stock's Miles mixer stepped 8 ms). Windows keeps 5: its audio
+ * is as it was before the 3 ms change (995929b6), which brought hiss there.
+ */
+#ifdef _WIN32
+#define OM_PERIOD_MS_DEFAULT 5
+#else
+#define OM_PERIOD_MS_DEFAULT 3
+#endif
+
 static int Om_PeriodMs(void)
 {
-	int ms = s_period_ms ? s_period_ms->integer : 5;
+	int ms = s_period_ms ? s_period_ms->integer : OM_PERIOD_MS_DEFAULT;
 	if (ms < 1) {
 		ms = 1;
 	} else if (ms > 20) {
@@ -3190,12 +3214,88 @@ static int Om_PeriodMs(void)
 	return ms;
 }
 
+#ifndef _WIN32
+/*
+ * Added: miniaudio posts this at debug level, from the audio thread: a write
+ * into a drained ALSA device (EPIPE, heard as a click). Not on Windows, whose
+ * audio is as it was before 995929b6.
+ */
+static void Om_MaLog(void *userData, ma_uint32 level, const char *message)
+{
+	(void)userData;
+	if (level == MA_LOG_LEVEL_DEBUG && message && !strncmp(message, "EPIPE (write)", 13)) {
+		s_underruns.fetch_add(1, std::memory_order_relaxed);
+	}
+}
+#endif
+
+/* Opens and starts the playback device on s_context. */
+static qboolean Om_StartDevice(const ma_device_id *id)
+{
+	ma_device_config dcfg;
+
+	dcfg                      = ma_device_config_init(ma_device_type_playback);
+	dcfg.playback.format      = ma_format_f32;
+	dcfg.playback.channels    = (ma_uint32)s_outCh;
+	dcfg.playback.pChannelMap = s_map;
+	dcfg.playback.pDeviceID   = id;
+	dcfg.sampleRate           = (ma_uint32)s_sampleRate;
+	dcfg.dataCallback         = Om_DataCallback;
+	/* Changed in Omaha: s_period_ms x 3. HRTF stays on 128-sample blocks via the mix stash. */
+	dcfg.periodSizeInMilliseconds = (ma_uint32)Om_PeriodMs();
+	dcfg.periods                  = 3;
+#ifndef _WIN32
+	/*
+	 * Added: where miniaudio converts the rate (a device refusing the mixer's),
+	 * the highest filter order. Windows: as it was before 995929b6, where
+	 * miniaudio converting the rate brought hiss.
+	 */
+	dcfg.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER;
+#endif
+	if (ma_device_init(&s_context, &dcfg, &s_device) != MA_SUCCESS) {
+		return qfalse;
+	}
+	if (ma_device_start(&s_device) != MA_SUCCESS) {
+		ma_device_uninit(&s_device);
+		return qfalse;
+	}
+	return qtrue;
+}
+
+#if defined(__linux__) && !defined(__ANDROID__)
+/*
+ * Added: PipeWire's own ALSA PCM ("pipewire", from pipewire-alsa): a shared
+ * PipeWire stream like any other application's, never the card itself. It
+ * fails to open when PipeWire isn't running or the plugin isn't installed.
+ */
+static qboolean Om_OpenPipeWire(void)
+{
+	ma_backend   alsa[1];
+	ma_device_id id;
+
+	alsa[0] = ma_backend_alsa;
+	if (ma_context_init(alsa, 1, NULL, &s_context) != MA_SUCCESS) {
+		return qfalse;
+	}
+	s_contextReady = qtrue;
+	ma_log_register_callback(ma_context_get_log(&s_context), ma_log_callback_init(Om_MaLog, NULL));
+	memset(&id, 0, sizeof(id));
+	Q_strncpyz(id.alsa, "pipewire", sizeof(id.alsa));
+	if (!Om_StartDevice(&id)) {
+		ma_context_uninit(&s_context);
+		s_contextReady = qfalse;
+		return qfalse;
+	}
+	return qtrue;
+}
+#endif
+
 static void Om_LogStarted(void)
 {
 	const ma_uint32 frames  = s_device.playback.internalPeriodSizeInFrames;
 	const ma_uint32 periods = s_device.playback.internalPeriods;
 	const ma_uint32 devRate = s_device.playback.internalSampleRate;
-	const int       rate    = s_sampleRate > 0 ? s_sampleRate : (int)devRate;
+	const int       rate    = devRate > 0 ? (int)devRate : s_sampleRate; /* the granted frames are the device's */
 	const float     ms      = rate > 0 ? (1000.f * (float)frames / (float)rate) : 0.f;
 	const char     *backend = "unknown";
 
@@ -3229,9 +3329,16 @@ static void Om_LogStarted(void)
 #endif
 }
 
+static void Om_DeviceStarted(qboolean nullBackend)
+{
+	s_deviceReady      = qtrue;
+	s_nullDevice       = nullBackend;
+	s_seenCallbacks    = s_callbacks.load(std::memory_order_relaxed);
+	s_lastCallbackTime = Sys_Milliseconds();
+}
+
 static qboolean Om_OpenDevice(const sndDeviceConfig_t *cfg, qboolean nullBackend)
 {
-	ma_device_config dcfg;
 	ma_device_id     devId;
 	qboolean         haveId = qfalse;
 	ma_result        res;
@@ -3241,6 +3348,20 @@ static qboolean Om_OpenDevice(const sndDeviceConfig_t *cfg, qboolean nullBackend
 		ma_context_uninit(&s_context);
 		s_contextReady = qfalse;
 	}
+#ifndef _WIN32
+	s_underruns.store(0, std::memory_order_relaxed);
+	s_underrunsShown = 0;
+#endif
+#if defined(__linux__) && !defined(__ANDROID__)
+	/* Added: the default output through PipeWire first; a device named in s_device keeps the default backends. */
+	if (!nullBackend && !(cfg && cfg->deviceName && cfg->deviceName[0])) {
+		if (Om_OpenPipeWire()) {
+			Om_DeviceStarted(qfalse);
+			return qtrue;
+		}
+		Com_Printf("Sound/omaha: PipeWire's ALSA device did not open; using the default backends.\n");
+	}
+#endif
 	if (nullBackend) {
 		nulls[0] = ma_backend_null;
 		res       = ma_context_init(nulls, 1, NULL, &s_context);
@@ -3251,37 +3372,19 @@ static qboolean Om_OpenDevice(const sndDeviceConfig_t *cfg, qboolean nullBackend
 		return qfalse;
 	}
 	s_contextReady = qtrue;
+#ifndef _WIN32
+	ma_log_register_callback(ma_context_get_log(&s_context), ma_log_callback_init(Om_MaLog, NULL));
+#endif
 	if (!nullBackend && developer && developer->integer) {
 		Om_LogDevices();
 	}
 	haveId = nullBackend ? qfalse : Om_FindDevice(cfg ? cfg->deviceName : NULL, &devId);
-	dcfg                    = ma_device_config_init(ma_device_type_playback);
-	dcfg.playback.format    = ma_format_f32;
-	dcfg.playback.channels  = (ma_uint32)s_outCh;
-	dcfg.playback.pChannelMap = s_map;
-	dcfg.playback.pDeviceID = haveId ? &devId : NULL;
-	dcfg.sampleRate         = (ma_uint32)s_sampleRate;
-	dcfg.dataCallback       = Om_DataCallback;
-	/* Changed in Omaha: s_period_ms x 3. HRTF stays on 128-sample blocks via the mix stash. */
-	dcfg.periodSizeInMilliseconds = (ma_uint32)Om_PeriodMs();
-	dcfg.periods            = 3;
-	res = ma_device_init(&s_context, &dcfg, &s_device);
-	if (res != MA_SUCCESS) {
+	if (!Om_StartDevice(haveId ? &devId : NULL)) {
 		ma_context_uninit(&s_context);
 		s_contextReady = qfalse;
 		return qfalse;
 	}
-	res = ma_device_start(&s_device);
-	if (res != MA_SUCCESS) {
-		ma_device_uninit(&s_device);
-		ma_context_uninit(&s_context);
-		s_contextReady = qfalse;
-		return qfalse;
-	}
-	s_deviceReady      = qtrue;
-	s_nullDevice       = nullBackend;
-	s_seenCallbacks    = s_callbacks.load(std::memory_order_relaxed);
-	s_lastCallbackTime = Sys_Milliseconds();
+	Om_DeviceStarted(nullBackend);
 	return qtrue;
 }
 
@@ -3417,7 +3520,7 @@ static qboolean Om_Init(const sndDeviceConfig_t *cfg)
 	Om_BuildSinc();
 	Om_BuildStereoPair();
 	/* Added in Omaha: playback callback length in ms. Takes effect on snd_restart. */
-	s_period_ms         = Cvar_Get("s_period_ms", "5", CVAR_ARCHIVE | CVAR_SOUND_LATCH);
+	s_period_ms         = Cvar_Get("s_period_ms", XSTRING(OM_PERIOD_MS_DEFAULT), CVAR_ARCHIVE | CVAR_SOUND_LATCH);
 	Cvar_CheckRange(s_period_ms, 1, 20, qtrue);
 	s_limiter           = Cvar_Get("s_limiter", "1", CVAR_ARCHIVE);
 	s_limiter_threshold = Cvar_Get("s_limiter_threshold", "-3.6", CVAR_ARCHIVE);
@@ -3851,6 +3954,20 @@ static void Om_Update(void)
 	Om_SnapshotCvars();
 	Om_Reclaim();
 	Om_FlushSpill();
+#ifndef _WIN32
+	{
+		/* Added: report the device running dry (once a second at most). */
+		const unsigned underruns = s_underruns.load(std::memory_order_relaxed);
+		if (underruns != s_underrunsShown && (!s_underrunPrinted || now - s_underrunPrinted >= 1000)) {
+			Com_Printf(
+				"Sound/omaha: the device ran dry %u time(s) since it started (a click each; a higher s_period_ms gives more margin)\n",
+				underruns
+			);
+			s_underrunsShown  = underruns;
+			s_underrunPrinted = now;
+		}
+	}
+#endif
 	if (s_deviceReady && Om_DeviceStalled(now, OM_DEVICE_STALL_MS)) {
 		s_deviceLost = true;
 	}

@@ -1,0 +1,35 @@
+// The Reloaded Options over the game (cl_uimain.cpp), shown over the Esc menu by its OPTIONS (or the vote's page, by its
+// VOTE): the main menu's page, no photos, the game under it
+menu "reloaded_options" 640 480 NONE 0
+align left top
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle NONE
+virtualres 1
+drawcache 1
+
+resource
+ReloadedMenu
+{
+name "back"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen options
+layer back
+}
+
+resource
+ReloadedMenu
+{
+name "front"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen options
+layer front
+}
+
+end.

@@ -619,7 +619,7 @@ Event EV_Camera_SetupCamera
 );
 
 /*****************************************************************************/
-/*       func_camera (0 0.25 0.5) (-8 -8 0) (8 8 16) ORBIT START_ON AUTOMATIC NO_TRACE NO_WATCH LEVEL_EXIT
+/*       func_camera (0 0.25 0.5) (-8 -8 0) (8 8 16) ORBIT START_ON AUTOMATIC NO_TRACE NO_WATCH
 
 Camera used for cinematic sequences.
 
@@ -653,7 +653,6 @@ switching automatically, this turns off that feature
 NO_WATCH if this is an automatic camera, the camera will automatically watch the player 
 unless this is set, camera's "score" will be affected by how close to the middle of the camera
 the player is.
-LEVEL_EXIT if the camera is being used, the level exit state will be set
 
 ******************************************************************************/
 
@@ -766,11 +765,6 @@ void Camera::SetupCamera(Event *ev)
 qboolean Camera::IsAutomatic(void)
 {
     return (spawnflags & AUTOMATIC);
-}
-
-qboolean Camera::IsLevelExit(void)
-{
-    return (spawnflags & LEVEL_EXIT);
 }
 
 float Camera::CalculateScore(Entity *player, str state)

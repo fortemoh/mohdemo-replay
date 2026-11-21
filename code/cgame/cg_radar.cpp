@@ -27,15 +27,11 @@ void CG_InitRadar()
 {
     int i;
 
-    cg.radarShaders[0] = cgi.R_RegisterShader("textures/hud/radar_allies.tga");
-    cg.radarShaders[1] = cgi.R_RegisterShader("textures/hud/radar_axis.tga");
-
     for (i = 0; i < MAX_CLIENTS; i++) {
-        cg.radars[i].time          = 0;
-        cg.radars[i].lastSpeakTime = 0;
+        cg.radars[i].time = 0;
     }
 
-    cgi.CL_InitRadar(cg.radars, cg.radarShaders, cg.snap->ps.clientNum);
+    cgi.CL_InitRadar(cg.radars, cg.snap->ps.clientNum);
 }
 
 bool CG_InTeamGame(centity_t *ent)
@@ -74,17 +70,6 @@ bool CG_ValidRadarClient(centity_t *ent)
     return CG_SameTeam(ent);
 }
 
-int CG_RadarIcon()
-{
-    switch (cg.clientinfo[cg.snap->ps.clientNum].team) {
-    case TEAM_ALLIES:
-        return 0;
-    default:
-    case TEAM_AXIS:
-        return 1;
-    }
-}
-
 void CG_UpdateRadarClient(centity_t *ent)
 {
     radarClient_t *radar;
@@ -95,8 +80,7 @@ void CG_UpdateRadarClient(centity_t *ent)
         return;
     }
 
-    radar->time       = cg.time;
-    radar->teamShader = CG_RadarIcon();
+    radar->time = cg.time;
     if (cg.snap->ps.clientNum == ent->currentState.number) {
         radar->origin[0] = cg.refdef.vieworg[0];
         radar->origin[1] = cg.refdef.vieworg[1];
@@ -125,9 +109,8 @@ void CG_ReadNonPVSClient(radarUnpacked_t *radarUnpacked)
         return;
     }
 
-    radar             = &cg.radars[radarUnpacked->clientNum];
-    radar->time       = cg.time;
-    radar->teamShader = CG_RadarIcon();
+    radar       = &cg.radars[radarUnpacked->clientNum];
+    radar->time = cg.time;
     // copy origin
     radar->origin[0] = radarUnpacked->x;
     radar->origin[1] = radarUnpacked->y;
@@ -136,26 +119,4 @@ void CG_ReadNonPVSClient(radarUnpacked_t *radarUnpacked)
     radar->axis[0] = axis[0];
     radar->axis[1] = axis[1];
     VectorNormalize2D(radar->axis);
-}
-
-void CG_UpdateRadar()
-{
-    int i;
-
-    for (i = 0; i < MAX_CLIENTS; i++) {
-        if (cg.radars[i].time) {
-            if (!CG_ValidRadarClient(&cg_entities[i])) {
-                cg.radars[i].time = 0;
-            }
-        }
-    }
-}
-
-void CG_RadarClientSpeaks(int num)
-{
-    if (!CG_ValidRadarClient(&cg_entities[num])) {
-        return;
-    }
-
-    cg.radars[num].lastSpeakTime = cg.time;
 }

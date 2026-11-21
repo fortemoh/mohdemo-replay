@@ -628,6 +628,7 @@ static qboolean RB_StaticBatchAllowed( void ) {
 		return qfalse;
 	}
 
+	tess.staticFxBatch = fx;
 	tess.numStaticSurfs = 0;
 	tess.numStaticInstances = 0;
 	tess.staticCopiedIndexes = 0;
@@ -842,7 +843,13 @@ A draw of the stage iterators in a static batch: the arrays they set are
 those of tess, which stand for the streams of the batch and the stage
 (RB_StaticStage); one draw per instance. With deforms, or stage colors or
 texture coordinates the effects shader computes, the draw has its record
-(and the batch one instance, see RB_StaticBatchAllowed)
+(and the batch one instance, see RB_StaticBatchAllowed). So do the other
+draws of such a batch, the plain stages too: every pass of a surface then
+runs the same vertex shader. The later passes test their depth against the
+earlier ones' (depthFunc lequal or equal), and two different vertex
+shaders needn't round the same positions the same way: with the reflection
+(effects) under the texture (generic) of frenchfloor_wood1, a GPU that
+rounded them differently drew the reflection over the floor in patches
 ===============
 */
 void RB_StaticDraw( drawGeometry_t *geometry ) {
@@ -855,6 +862,7 @@ void RB_StaticDraw( drawGeometry_t *geometry ) {
 	geometry->isStatic = qtrue;
 	geometry->staticTerrain = tess.staticTerrain;
 	geometry->staticFx = -1;
+	geometry->staticFxMotion = qfalse;
 
 	stageColors = arrays->colorsEnabled && arrays->colors == tess.svars.colors[0];
 	if ( arrays->colorsEnabled && ( !stageColors || tess.staticStageColor == STATIC_COLOR_CONSTANT ) ) {
@@ -868,7 +876,7 @@ void RB_StaticDraw( drawGeometry_t *geometry ) {
 
 	// what the effects shader does to the stage's colors, the constant too
 	colorFx = stageColors ? tess.staticStageFx : 0;
-	fx = tess.shader->numDeforms || colorFx;
+	fx = tess.staticFxBatch || tess.shader->numDeforms || colorFx;
 
 	for ( i = 0; i < NUM_TEXTURE_BUNDLES; i++ ) {
 		const float *st = geometry->st[i];
@@ -905,7 +913,7 @@ void RB_StaticDraw( drawGeometry_t *geometry ) {
 		qboolean constant = !stageColors || tess.staticStageColor == STATIC_COLOR_CONSTANT;
 
 		assert( tess.numStaticInstances == 1 );
-		geometry->staticFx = RB_StaticFxRecord( tess.staticFxStage, colorFx, units, constant ? geometry->color : NULL );
+		geometry->staticFx = RB_StaticFxRecord( tess.staticFxStage, colorFx, units, constant ? geometry->color : NULL, &geometry->staticFxMotion );
 		if ( geometry->staticFx < 0 ) {
 			// RB_StaticBatchAllowed made sure there is room
 			assert( 0 );

@@ -81,7 +81,6 @@ public:
 
     void Draw(void) override;
     void AlignBar(alignment_t align, float height);
-    void DontAlignBar(void);
     void EnableSizeBox(UIWidget *which);
     void ParentSized(Event *ev);
     void SelfSized(Event *ev);

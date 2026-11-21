@@ -258,11 +258,6 @@ void UIFloatingWindow::OnActivated(Event *ev)
     }
 }
 
-void UIFloatingWindow::OnDeactivated(Event *ev)
-{
-    PostEvent(EV_Remove, 0.0);
-}
-
 void UIFloatingWindow::Create(
     UIWidget *parent, const UIRect2D& rect, const char *title, const UColor& bgColor, const UColor& fgColor
 )

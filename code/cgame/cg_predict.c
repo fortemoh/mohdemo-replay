@@ -169,7 +169,8 @@ void CG_ClipMoveToEntities(
             cmodel = cgi.CM_TempBoxModel(bmins, bmaxs, CONTENTS_BBOX);
         }
 
-        VectorCopy(cent->lerpOrigin, origin);
+        // Changed: where the server has it, not where remote prediction draws it
+        VectorCopy(cent->netLerpOrigin, origin);
         if (ent->eFlags & EF_LINKANGLES) {
             VectorCopy(cent->lerpAngles, angles);
         } else {
@@ -725,7 +726,7 @@ void CG_PredictPlayerState(void)
         commandTime = cg.predicted_player_state.commandTime;
         elapsed     = cg.time - commandTime;
         interval    = 1000 / (int)Com_Clamp(85, 125, cl_movefps->integer);
-        if (elapsed > 0 && interval > 0) {
+        if (elapsed > 0) {
             cgi.GetLiveUserCmd(&cmd);
             // the next command's time: a shorter step with cl_movesubgrid
             // (half of it to a shot's or a jump's command, the rest after it)

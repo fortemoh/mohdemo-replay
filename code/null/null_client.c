@@ -65,6 +65,9 @@ void CL_Disconnect() {
 void CL_AbnormalDisconnect() {
 }
 
+void SCR_AbortUpdate( void ) {
+}
+
 void CL_MapLoading( qboolean flush, const char *pszMapName ) {
 }
 
@@ -123,10 +126,6 @@ void Key_GetKeysForCommand( const char *command, int *key1, int *key2 ) {
 }
 
 void SCR_DebugGraph( float value ) {
-}
-
-qboolean CL_FinishedIntro( void ) {
-	return qtrue;
 }
 
 int R_CountTextureMemory() {

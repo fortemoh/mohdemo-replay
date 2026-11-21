@@ -140,10 +140,24 @@ void		vk_create_texture( image_t *image, int width, int height, int mipLevels, t
 // one mip level. Uploads may happen in the middle of a frame: draws recorded
 // before the upload see the old contents, draws after it the new ones.
 void		vk_upload_texture( image_t *image, int mipLevel, int x, int y, int width, int height, const byte *rgba );
+// make a texture (one RGBA level) again at another size, its texels kept at 0,0 (waits for the GPU when a draw not yet submitted reads it)
+void		vk_resize_texture( image_t *image, int width, int height );
 // upload one complete mip level of a BC-compressed texture
 void		vk_upload_compressed_texture( image_t *image, int mipLevel, int width, int height, const byte *data, int size );
 // release the storage of an image and reset image->texnum to 0
 void		vk_destroy_texture( image_t *image );
+// The Competitive HUD radar's picture made on the GPU (vk_radar.c, RE_RegisterRadar2D): image's texels, in its
+// place (in the 2D atlas page at image->atlasRoom with its edge texels copied around it, as R_AtlasFill's; else a
+// texture of its own, made at its size), for height z from each cell's floors, the UI's own picture's bytes. The
+// floors (radar->memory) are copied to the GPU and given back here, in every case. Uploaded as vk_upload_texture's
+// (the draws recorded before see the old texels). qfalse: not on this device (the image unchanged). After
+// R_FrontEndSync
+qboolean	vk_radar_image( const image_t *image, const radar2D_t *radar, float z );
+// its texels for height z, for the draws after this (an image that isn't the radar's: nothing); the render
+// thread's, or the front end's without it
+void		vk_radar_height( const image_t *image, float z );
+// the image no longer the radar's picture (its texels from the CPU again, or freed); after R_FrontEndSync
+void		vk_radar_forget( const image_t *image );
 // minification filter of mipmapped textures; magnification is nearest for the
 // TEXFILTER_NEAREST* modes and linear otherwise
 void		vk_set_texture_filter( texFilter_t filter );
@@ -206,6 +220,9 @@ void		vk_set_state( unsigned long stateBits );
 // result of unit 0. A unit only contributes when the geometry passed to
 // vk_draw() has texture coordinates for it.
 void		vk_bind_texture( int tmu, image_t *image );
+// bindless textures: the slots of the units bound, unit 0 | unit 1 << 16 (the
+// effects records, FX_TEX_SLOTS); 0 without them (vk.bindless)
+uint32_t	vk_bound_texture_slots( void );
 void		vk_set_texenv( int tmu, texEnv_t env );
 
 void		vk_set_cull( cullFace_t face );
@@ -318,6 +335,18 @@ void		vk_ao_scene( const float *fog );
 // the last frame's modelview of the following draws while the modelview is
 // the current one (vk_set_modelview); NULL: the camera's motion only
 void		vk_set_prev_modelview( const float *matrix );
+// the last frame's projection of the following perspective draws, while
+// they have a projection other than the view's (the first-person weapon's
+// own); NULL: the view's (vkSceneView_t prevProjection). A scene starts
+// with NULL
+void		vk_set_prev_projection( const float *matrix );
+// the following draws show what the motion vectors don't follow (effects,
+// sprites, flares, animated textures): blended ones put their share of the
+// pixel into the scene's alpha, where the anti-aliasing takes less history
+// (r_taaReactive, VK_PIPE_REACTIVE); decals (polygon offset) never do.
+// Only in a scene with the anti-aliasing and r_taaReactive (or
+// r_temporalShow 14): otherwise the draws are as before
+void		vk_set_reactive( qboolean reactive );
 
 /*
 ====================================================================
@@ -381,6 +410,10 @@ typedef struct {
 	staticSt_t		staticSt[NUM_TEXTURE_BUNDLES];
 	int				staticFirstIndex;
 	int				staticFx;
+	// with staticFx >= 0: its deforms move the vertexes over time, and the
+	// record has their last frame's values too (the temporal path's motion
+	// vectors, VK_PIPE_MOTION)
+	qboolean		staticFxMotion;
 	// a skinned draw (see SKINNED DRAWS below) instead of xyz, colors and
 	// st: vertex i of the indexes is vertex record skinVertex + i of the
 	// skin data, the colors and the texture coordinates of unit 0 (when
@@ -418,6 +451,9 @@ typedef struct {
 	qboolean		colorArray;			// geometry colors per vertex (not the constant color)
 	qboolean		skinned;
 	qboolean		effects;			// from the static geometry with the effects shader (colorArray unused)
+	// a blended draw of a 3D view as vk_set_reactive will have it: 0 not
+	// reactive, 1 reactive, 2 both can happen (built twice)
+	int				reactive;
 } vkDrawState_t;
 
 qboolean	vk_prebuild_pipeline( const vkDrawState_t *state );
@@ -555,6 +591,12 @@ qboolean	vk_skin_frame_room( int numWords );
 // a number that changes with every frame (the frame data starts empty);
 // starts the frame
 unsigned int vk_frame_serial( void );
+// the frame as drawn so far, blurred into image ("*frameblur", about a
+// VK_FRAME_BLUR-th of the color target's size), once a frame; whether the
+// device can
+#define VK_FRAME_BLUR		16
+void		vk_frame_blur( image_t *image );
+qboolean	vk_frame_blur_supported( void );
 
 #define CLEAR_COLOR		1
 #define CLEAR_DEPTH		2	// to 1.0
@@ -579,6 +621,25 @@ typedef enum {
 // the frame, RB_TakePendingScreenshots). Depth and stencil read as 0 until
 // the depth buffer is readable, see vk_want_depth_reads.
 void		vk_read_pixels( int x, int y, int width, int height, readFormat_t format, void *buffer );
+// the latency probe (r_vkLatency): the main thread's EndFrame (it returns
+// the end of the last one, when the next frame's input is read after) and
+// the back end's frame (the input time its swap command carries)
+uint64_t	vk_probe_input_time( void );
+void		vk_probe_frame_end( void );
+void		vk_probe_input( uint64_t inputUs );
+void		vk_frame_token( uint64_t token );
+// the same without waiting: the back end records the copy and gets a handle
+// (0: too many in flight, dropped); the main thread takes the readbacks
+// once the GPU has done them, in the order they were recorded, with the
+// caller's kind and user data (at most 2 * MAX_OSPATH + 256 bytes): vk_readback_next gives
+// the oldest when it is done, vk_readback_get its pixels (as vk_read_pixels
+// writes them, for the rectangle asked for), vk_readback_free returns it.
+// vk_finish completes every submitted frame's readbacks
+int			vk_read_pixels_async( int x, int y, int width, int height, readFormat_t format, int kind, const void *user, int userSize );
+int			vk_readback_next( int *kind, void **user );
+void		vk_readback_get( int handle, void *buffer );
+void		vk_readback_free( int handle );
+int			vk_readback_dropped( void );
 // the frame being recorded will be read back (a screenshot, a video frame):
 // with HDR output its 3D scene is drawn without the expansion, so the
 // readback is the SDR frame (vk_output.c)

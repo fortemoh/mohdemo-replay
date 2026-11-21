@@ -58,6 +58,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define SVF_NOSERVERINFO                (1<<16) // don't send CS_SERVERINFO updates to this client
                                                 // so that it can be updated for ping tools without
                                                 // lagging clients
+#define SVF_VIEWCLIENT                  (1<<17) // Added in Reloaded: build this client's snapshots from
+                                                // the point of view of another client (entityShared_t->viewClient).
+                                                // Used for first-person spectating
 
 typedef struct gclient_s   gclient_t;
 typedef struct dtiki_s     dtiki_t;
@@ -124,6 +127,10 @@ typedef struct {
     // (used for when the entity shouldn't be sent to clients)
     nonpvs_sound_t nonpvs_sounds[MAX_NONPVS_SOUNDS];
     int            num_nonpvs_sounds;
+
+    // Added in Reloaded
+    //  client whose point of view is used for this client's snapshots when SVF_VIEWCLIENT is set
+    int viewClient;
 } entityShared_t;
 
 // client data that stays across multiple respawns, but is cleared

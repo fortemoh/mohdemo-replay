@@ -180,6 +180,8 @@ enum sfx_flags_t {
     // Added in Omaha: streamed combat VO force-load (s_pain_hrtf) was tried once
     SFX_FLAG_PROMOTE_DONE   = 32,
     SFX_FLAG_PROMOTE_FAILED = 64,
+    // Added in the Metal port
+    SFX_FLAG_STREAM_FAILED = 128, // the stream couldn't be opened; not searched for again until the next registration
 };
 
 enum loopsound_flags_t {
@@ -229,10 +231,10 @@ qboolean S_LoadSound(const char *fileName, sfx_t *sfx, int streamed, qboolean fo
 //
 // Driver-specific functions
 //
-// Changed in Omaha: the driver is the sound host selected at S_Init (snd_host.h)
+// Changed in Omaha: the driver is the sound host (snd_host.h)
 #include "snd_host.h"
 
-#define S_Driver_Init                   S_Host_Init
+#define S_Driver_Init                   s_sndHost->Init
 #define S_Driver_Shutdown               s_sndHost->Shutdown
 #define S_Driver_StartSound             s_sndHost->StartSound
 #define S_Driver_AddLoopingSound        s_sndHost->AddLoopingSound

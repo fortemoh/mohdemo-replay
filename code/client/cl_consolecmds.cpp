@@ -170,4 +170,7 @@ void CL_InitConsoleCommands(void)
     Cmd_AddCommand("cl_classevents", CL_ClassEvents_f);
     Cmd_AddCommand("cl_dumpclassevents", CL_DumpClassEvents_f);
     Cmd_AddCommand("cl_dumpallclasses", CL_DumpAllClasses_f);
+    // CS2's crosshair share codes (cl_crosshair.c)
+    Cmd_AddCommand("crosshair_import", CL_CrosshairImport_f);
+    Cmd_AddCommand("crosshair_export", CL_CrosshairExport_f);
 }

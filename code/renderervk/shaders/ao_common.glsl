@@ -29,18 +29,39 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //    (AoBlur) into the factor the apply pass multiplies the scene with
 //    (AoResult, ao_apply.frag), or the first of two blurs
 //  - ao_denoise.comp: the second of two blurs
+//  - ao_apply.frag: the half resolution's blurred visibility to the
+//    framebuffer's pixels, blended into the scene (ao_upsample.comp does
+//    the same into the result image, only for r_temporalShow 9's view)
 // View distances are positive, the view weapon's negative (it is in its own
 // depth range and only occludes itself), the sky at the far distance.
+// The occlusion, its blending over frames and its blur work on a grid
+// (AO_HALF, always true since Plan 49): the framebuffer's pixels, or one texel a 2 x 2 of
+// them, which is its top-left pixel (its view distance and its position:
+// a plane stays a plane on the grid; the nearest and the farthest of the
+// four on alternate texels made it a zigzag that occluded itself).
+// Positions, the radius and the motion are in the framebuffer's pixels
+// either way.
 
 #extension GL_GOOGLE_include_directive : require
 #include "temporal_common.glsl"
 
 #define AO_LEVELS	5	// of the view distances (VK_TEMPORAL_AO_LEVELS)
 
+// the pipelines are made with it true (vk_temporal.c); false, the full
+// resolution of Plan 44, is kept in the code but no longer used
+layout( constant_id = 2 ) const bool AO_HALF = false;
+const int AO_SHIFT = AO_HALF ? 1 : 0;		// framebuffer pixels to the grid
+const float AO_SCALE = AO_HALF ? 2.0 : 1.0;	// the grid's texel in framebuffer pixels
+
+// the framebuffer position of a grid texel's pixel's center
+vec2 AoGridPixel( ivec2 t ) {
+	return vec2( t ) * AO_SCALE + 0.5;
+}
+
 layout( set = 0, binding = 0 ) uniform sampler2D u_depth;		// the depth buffer
 layout( set = 0, binding = 1 ) uniform sampler2D u_normal;
 layout( set = 0, binding = 2 ) uniform sampler2D u_velocity;
-layout( set = 0, binding = 3 ) uniform sampler2D u_aoDepth;		// this frame's view distances, every level
+layout( set = 0, binding = 3 ) uniform sampler2D u_aoDepth;		// this frame's view distances of the grid (every level without AO_HALF)
 layout( set = 0, binding = 4 ) uniform sampler2D u_prevAoDepth;	// the last frame's
 layout( set = 0, binding = 5 ) uniform sampler2D u_raw;			// gtao_main.comp's result: one frame's visibility
 layout( set = 0, binding = 6 ) uniform sampler2D u_history;		// the last frame's accumulated visibility, frames
@@ -53,8 +74,24 @@ layout( set = 0, binding = 12, r8 ) uniform writeonly image2D o_raw;
 layout( set = 0, binding = 13, rg16f ) uniform writeonly image2D o_history;	// this frame's accumulated visibility, frames
 layout( set = 0, binding = 14, rg16f ) uniform writeonly image2D o_blur;		// the first blur's result with two blurs
 layout( set = 0, binding = 15, rgba8 ) uniform writeonly image2D o_result;	// what ao_apply.frag blends (8 bits: less than a step of the frame)
-layout( set = 0, binding = 16 ) uniform sampler2D u_curHistory;	// o_history, sampled (the blur reads it)
+layout( set = 0, binding = 16 ) uniform sampler2D u_aoLevels;		// with AO_HALF the view distances of the framebuffer, every level (without, u_aoDepth has them)
 layout( set = 0, binding = 17 ) uniform sampler2D u_blur;			// o_blur, sampled
+layout( set = 0, binding = 18, rg16f ) uniform writeonly image2D o_blur2;	// with AO_HALF: the last blur's result, which ao_upsample.comp reads
+layout( set = 0, binding = 19 ) uniform sampler2D u_blur2;			// o_blur2, sampled
+layout( set = 0, binding = 20, r32f ) uniform writeonly image2D o_grid;	// with AO_HALF: the grid's view distances (u_aoDepth)
+layout( set = 0, binding = 21, rgba16f ) uniform writeonly image2D o_gridMotion;	// the grid's motion (ao_prefilter.comp)
+layout( set = 0, binding = 22 ) uniform sampler2D u_gridMotion;		// what ao_temporal.comp moves its history by
+
+// the grid's motion, baked by the prefilter so the passes after it read
+// nothing of the scene (the motion vectors and the normals stay the
+// draws'): the texel's motion in units of the viewport, the view distance
+// its surface had in the last frame, and AO_MOTION_*: 0 nothing to take
+// history from (behind the camera), 1 a surface or the weapon (the
+// camera's motion, or none), 2 a draw's motion vector (a looser depth
+// match, less history)
+#define AO_MOTION_NONE		0.0
+#define AO_MOTION_CAMERA	1.0
+#define AO_MOTION_DRAW		2.0
 
 // vkAoPush_t
 layout( push_constant ) uniform Push {
@@ -83,16 +120,28 @@ const int AO_PASS_BLUR_TO_RESULT = 2;
 	g[2] = textureGather( tex, vec2( p + ivec2( 0, 1 ) ) * inv_, comp ); \
 	g[3] = textureGather( tex, vec2( p + ivec2( 1, 1 ) ) * inv_, comp ); }
 
-// the sky and what is farther at AoFar. The view distances are 32-bit
-// floats: in half floats (XeGTAO's) a wall close to the eye or seen at a
-// grazing angle stepped from pixel to pixel, each step a ledge that
-// occluded the next: the wall went dark in stripes
-float AoFar() {
-	return min( pc.view.depth.w, 60000.0 );
+// the grid's view rectangle: the views' texels
+ivec2 AoGridLo() {
+	return pc.view.rect.xy >> AO_SHIFT;
 }
 
-bool AoIsFar( float d ) {
-	return d >= AoFar() * 0.999;
+ivec2 AoGridHi() {
+	return ( pc.view.rect.xy + pc.view.rect.zw - 1 ) >> AO_SHIFT;
+}
+
+// AoFar, AoIsFar, AoMultiBounce, AoResult (ao_apply.frag shares them)
+#include "ao_result.glsl"
+
+// the view distance of a pixel from its depth and its normal's class
+float AoDistance( float wz, float a ) {
+	int cls = int( a * 3.0 + 0.5 );		// TemporalClass
+	bool weapon = cls == TEMPORAL_CLASS_WEAPON;
+	float d = TemporalViewDistance( pc.view, wz, weapon );
+
+	if ( cls == TEMPORAL_CLASS_NONE || cls == TEMPORAL_CLASS_SKY ) {
+		return AoFar();
+	}
+	return weapon ? -max( d, 1e-4 ) : min( d, AoFar() );
 }
 
 // XeGTAO's edges of a pixel of view distance z to its neighbours (left,
@@ -109,7 +158,8 @@ vec4 AoEdges( float z, float l, float r, float t, float b ) {
 	vec4 adjusted = e + vec4( slopeLR, -slopeLR, slopeTB, -slopeTB );
 
 	e = min( abs( e ), abs( adjusted ) );
-	return clamp( 1.25 - e / ( abs( z ) * 0.011 + 1e-4 ), 0.0, 1.0 );
+	// a texel of the half resolution grid is two pixels across
+	return clamp( 1.25 - e / ( abs( z ) * ( 0.011 * AO_SCALE ) + 1e-4 ), 0.0, 1.0 );
 }
 
 // XeGTAO's blur (Intel, MIT license) of the pixel C: the 3 x 3 around it,
@@ -140,39 +190,3 @@ float AoBlur( float v[9], float z[13], float frames, bool final ) {
 	return sum / ( center + dot( eC, vec4( 1.0 ) ) + wTL + wTR + wBL + wBR );
 }
 
-// Jimenez et al. 2016, the multi-bounce fit
-float AoMultiBounce( float v, float albedo ) {
-	float a = 2.0404 * albedo - 0.3324;
-	float b = -4.7951 * albedo + 0.6417;
-	float c = 2.7552 * albedo + 0.6903;
-
-	return max( v, ( ( v * a + b ) * v + c ) * v );
-}
-
-// what ao_apply.frag blends into the scene for the blurred visibility v at
-// view distance sd: v to the power r_aoStrength, the multi-bounce fit, in
-// the scene's gamma-encoded values (2.2: the game draws them so), undone
-// through the fog: the scene is C f + fog (1 - f), the occlusion belongs on
-// C alone; with a the factor, rgb = fog (1 - f)(1 - a), blended ONE,
-// SRC_ALPHA: dst a + rgb
-vec4 AoResult( float v, float sd ) {
-	float d = abs( sd );
-
-	if ( AoIsFar( d ) ) {
-		return vec4( 0.0, 0.0, 0.0, 1.0 );
-	}
-	// in linear light, then the scene's encoding
-	v = pow( clamp( v, 0.0, 1.0 ), pc.ao.w );
-	if ( pc.ao2.x > 0.0 ) {
-		v = AoMultiBounce( v, pc.ao2.x );
-	}
-	float a = pow( clamp( v, 0.0, 1.0 ), 1.0 / 2.2 );
-	vec3 fog = vec3( 0.0 );
-
-	if ( pc.fogColor.w != 0.0 ) {
-		float f = clamp( d * pc.fogParams.x + pc.fogParams.y, 0.0, 1.0 );
-
-		fog = pc.fogColor.rgb * ( 1.0 - f ) * ( 1.0 - a );
-	}
-	return vec4( fog, a );
-}

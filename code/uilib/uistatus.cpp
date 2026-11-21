@@ -184,11 +184,6 @@ void UIStatusBar::AlignBar(alignment_t align, float height)
     m_align.dist      = height;
 }
 
-void UIStatusBar::DontAlignBar(void)
-{
-    m_align.alignment = WND_ALIGN_NONE;
-}
-
 void UIStatusBar::EnableSizeBox(UIWidget *which)
 {
     m_sizeenabled = which;

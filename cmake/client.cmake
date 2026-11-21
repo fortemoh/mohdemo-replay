@@ -13,37 +13,24 @@ set(CLIENT_SOURCES
     ${SOURCE_DIR}/client/cl_avi.cpp
     ${SOURCE_DIR}/client/cl_censor.cpp
     ${SOURCE_DIR}/client/cl_cgame.cpp
-    ${SOURCE_DIR}/client/cl_cin.cpp
     ${SOURCE_DIR}/client/cl_consolecmds.cpp
-    ${SOURCE_DIR}/client/cl_curl.c
+    ${SOURCE_DIR}/client/cl_crosshair.c
     ${SOURCE_DIR}/client/cl_demohits.cpp
     ${SOURCE_DIR}/client/cl_demohud.cpp
     ${SOURCE_DIR}/client/cl_demoindex.cpp
     ${SOURCE_DIR}/client/cl_input.cpp
-    ${SOURCE_DIR}/client/cl_instantAction.cpp
-    ${SOURCE_DIR}/client/cl_inv.cpp
     ${SOURCE_DIR}/client/cl_invrender.cpp
     ${SOURCE_DIR}/client/cl_keys.cpp
+    ${SOURCE_DIR}/client/cl_lagometer.cpp
     ${SOURCE_DIR}/client/cl_main.cpp
     ${SOURCE_DIR}/client/cl_net_chan.cpp
     ${SOURCE_DIR}/client/cl_parse.cpp
     ${SOURCE_DIR}/client/cl_scrn.cpp
     ${SOURCE_DIR}/client/cl_ui.cpp
-    ${SOURCE_DIR}/client/cl_uibind.cpp
-    ${SOURCE_DIR}/client/cl_uidmbox.cpp
-    ${SOURCE_DIR}/client/cl_uifilepicker.cpp
-    ${SOURCE_DIR}/client/cl_uigamespy.cpp
-    ${SOURCE_DIR}/client/cl_uigmbox.cpp
-    ${SOURCE_DIR}/client/cl_uilangame.cpp
-    ${SOURCE_DIR}/client/cl_uiloadsave.cpp
-    ${SOURCE_DIR}/client/cl_uimaprotationsetup.cpp
-    ${SOURCE_DIR}/client/cl_uimaprunner.cpp
-    ${SOURCE_DIR}/client/cl_uiminicon.cpp
-    ${SOURCE_DIR}/client/cl_uimpmappicker.cpp
-    ${SOURCE_DIR}/client/cl_uiplayermodelpicker.cpp
-    ${SOURCE_DIR}/client/cl_uiradar.cpp
-    ${SOURCE_DIR}/client/cl_uiserverlist.cpp
-    ${SOURCE_DIR}/client/cl_uisoundpicker.cpp
+    ${SOURCE_DIR}/client/cl_uicomp.cpp
+    ${SOURCE_DIR}/client/cl_uimenus.cpp
+    ${SOURCE_DIR}/client/cl_uimain.cpp
+    ${SOURCE_DIR}/client/cl_uiextras.cpp
     ${SOURCE_DIR}/client/cl_uistd.cpp
     ${SOURCE_DIR}/client/cl_uiview3d.cpp
     ${SOURCE_DIR}/client/libmumblelink.c
@@ -67,6 +54,7 @@ set(CLIENT_SOURCES
     ${SOURCE_DIR}/client/omaha/snd_stream_async.cpp
     ${SOURCE_DIR}/client/snd_stream_memory.cpp
     ${SOURCE_DIR}/client/usignal.cpp
+    ${SOURCE_DIR}/fgame/bg_voteoptions.cpp
     ${SOURCE_DIR}/sdl/sdl_input.c
     ${SOURCE_DIR}/sdl/sdl_mouse.c
     ${CLIENT_PLATFORM_SOURCES}
@@ -83,7 +71,6 @@ add_git_dependency(${SOURCE_DIR}/client/cl_console.c)
 
 set(CLIENT_BINARY ${CLIENT_NAME})
 
-list(APPEND CLIENT_DEFINITIONS BOTLIB)
 list(APPEND CLIENT_DEFINITIONS APP_MODULE)
 
 if(BUILD_STANDALONE)
@@ -92,10 +79,6 @@ endif()
 
 # the renderer is loaded at run time: renderer_<cl_renderer> (renderer_vulkan)
 list(APPEND CLIENT_DEFINITIONS USE_RENDERER_DLOPEN)
-
-if(USE_HTTP)
-    list(APPEND CLIENT_DEFINITIONS USE_HTTP)
-endif()
 
 if(USE_VOIP)
     list(APPEND CLIENT_DEFINITIONS USE_VOIP)
@@ -106,15 +89,38 @@ if(USE_MUMBLE)
     list(APPEND CLIENT_LIBRARY_SOURCES ${SOURCE_DIR}/client/libmumblelink.c)
 endif()
 
+if(USE_DISCORD)
+    list(APPEND CLIENT_DEFINITIONS USE_DISCORD)
+    list(APPEND CLIENT_LIBRARY_SOURCES ${SOURCE_DIR}/client/cl_discord.c)
+endif()
+
+# the Competitive HUD's menus, faces, pictures, outlines and shader script
+# (cg_hudstyle 1) compiled in: the files the filesystem reads when no file on
+# disk or in a pak has the name (cl_uicomp.cpp, FS_SetBuiltinFiles); any .svg
+# under ui/
+file(GLOB BUILTIN_FILES CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/assets/main/ui/*.urc
+    ${CMAKE_SOURCE_DIR}/assets/main/ui/competitive/*.png
+    ${CMAKE_SOURCE_DIR}/assets/main/fonts/*
+    ${CMAKE_SOURCE_DIR}/assets/main/scripts/*.shader)
+file(GLOB_RECURSE BUILTIN_SVG CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/assets/main/ui/*.svg)
+list(APPEND BUILTIN_FILES ${BUILTIN_SVG})
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/builtin_files.c
+    COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_SOURCE_DIR}/assets/main -DOUT=${CMAKE_BINARY_DIR}/builtin_files.c
+        "-DFILES=${BUILTIN_FILES}" -P ${CMAKE_SOURCE_DIR}/cmake/utils/embed_files.cmake
+    DEPENDS ${BUILTIN_FILES} ${CMAKE_SOURCE_DIR}/cmake/utils/embed_files.cmake
+    COMMENT "Compiling in the Competitive HUD's files"
+    VERBATIM)
+list(APPEND CLIENT_SOURCES ${CMAKE_BINARY_DIR}/builtin_files.c)
+
 list(APPEND CLIENT_BINARY_SOURCES
     ${SERVER_SOURCES}
     ${CLIENT_SOURCES}
     ${UI_SOURCES}
     ${COMMON_SOURCES}
     ${SCRIPT_SYSTEM_SOURCES}
-    ${BOTLIB_SOURCES}
     ${SYSTEM_SOURCES}
-    ${ASM_SOURCES}
     ${CLIENT_LIBRARY_SOURCES})
 
 add_executable(${CLIENT_BINARY} ${CLIENT_EXECUTABLE_OPTIONS} ${CLIENT_BINARY_SOURCES})
@@ -132,8 +138,6 @@ set_output_dirs(${CLIENT_BINARY})
 # OMAHA-SOUND-LICENSES.txt is the binary-form notice required by libmysofa,
 # the Speex resampler, kdtree, and PFFFT. The SADIE Apache text goes with the data.
 add_custom_command(TARGET ${CLIENT_BINARY} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_FILE_DIR:${CLIENT_BINARY}>/main/sound/prom
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets/main/sound
         $<TARGET_FILE_DIR:${CLIENT_BINARY}>/main/sound

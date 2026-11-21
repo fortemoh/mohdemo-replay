@@ -1,0 +1,53 @@
+// The Reloaded weapon select, shown for SelectPrimaryWeapon[_<nation>] and the team menus (SelectTeam, ObjSelectTeam, SelectFFAModel; cl_uimenus.cpp): one menu for the side, the model and the weapon; the figure of the side and model previewed beside the grid, from the knees up (placed, made and framed by cl_uimenus.cpp: RL_FIG*)
+menu "reloaded_weapon" 640 480 NONE 0
+align left top
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle NONE
+virtualres 1
+drawcache 1
+
+resource
+ReloadedMenu
+{
+name "back"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen weapon
+layer back
+}
+
+resource
+Label
+{
+name "figure"
+rect 0 0 64 64
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+linkcvar "ui_reloaded_figure"
+rendermodel 1
+modeloffset "0 0 -15"
+modelrotateoffset "0 0 0"
+modelangles "4 160 0"
+modelscale 0.82
+modelaspect 1
+modelstudio 1
+modelanim reloadedidle
+}
+
+resource
+ReloadedMenu
+{
+name "front"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen weapon
+layer front
+}
+
+end.

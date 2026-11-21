@@ -22,8 +22,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_cgame.c  -- client system interaction with client game
 
 #include "client.h"
+#include "cl_uicomp.h"
+#include "cl_uimenus.h"
+#include "cl_uiextras.h"
+#include "cl_lagometer.h"
 #include "cl_ui.h"
-#include "cl_uiradar.h"
 #include "../corepp/tiki.h"
 #include "../qcommon/localization.h"
 #include "../qcommon/bg_compat.h"
@@ -334,6 +337,8 @@ void CL_ConfigstringModified(int index, char* s) {
 	if ( !strcmp( old, s ) ) {
 		return;		// unchanged
 	}
+	UI_CompHud_ConfigString();
+	UI_Menus_ConfigString();
 
 	len = strlen( s );
 	if ( cl_csAppend->integer && len + 1 + cl.gameState.dataCount <= MAX_GAMESTATE_CHARS ) {
@@ -593,6 +598,9 @@ qboolean CL_GetServerCommand( int serverCommandNumber, qboolean differentServer 
 		Cmd_TokenizeString(s);
 		cmd = Cmd_Argv(0);
 	}
+
+	// Added: the Reloaded scoreboard reads the scores the cgame is given
+	UI_Menus_ServerCommand();
 
 	return CL_ProcessServerCommand(s, cmd, differentServer);
 }
@@ -936,7 +944,6 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->UI_ShowMenu				= UI_ShowMenu;
 	cgi->UI_HideMenu				= UI_HideMenu;
 	cgi->UI_FontStringWidth			= CL_FontStringWidth;
-	cgi->UI_GetObjectivesTop		= UI_GetObjectivesTop;
 	cgi->UI_GetHighResolutionScale  = UI_GetHighResolutionScale;
 	cgi->Key_StringToKeynum			= Key_StringToKeynum;
 	cgi->Key_KeynumToBindString		= Key_KeynumToBindString;
@@ -997,6 +1004,13 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->CM_EntityString			= CM_EntityString;
 	cgi->GetConfigString			= CL_ConfigString;
 	cgi->R_DrawBoxes				= re.DrawBoxes;
+	cgi->UI_DrawZoomOverlay			= UI_DrawZoomOverlay;
+	cgi->UI_DrawInstaMessage		= UI_DrawInstaMessage;
+	cgi->UI_DrawObjectives			= UI_Menus_DrawObjectives;
+	cgi->UI_DrawStatusIcon			= UI_DrawStatusIcon;
+	cgi->UI_DrawLagometer			= UI_DrawLagometer;
+	cgi->Lagometer_Prediction		= CL_Lagometer_Prediction;
+	cgi->UI_DrawTeamTag				= UI_DrawTeamTag;
 	// FIXME
 	//cgi->pUnknownVar				= NULL;
 
@@ -1089,6 +1103,11 @@ void CL_InitCGame( void ) {
 
 	t1 = Sys_Milliseconds();
 
+	// Added: the Competitive HUD's pictures begun now, baked at the load's end (UI_CompHud_MapLoaded)
+	UI_CompHud_PreBake(qtrue);
+	// Added: the zoom overlays' masks too (registered at the load's end)
+	UI_Extras_PreBake(qtrue);
+
 	// find the current mapname
 	info = cl.gameState.stringData + cl.gameState.stringOffsets[ CS_SERVERINFO ];
 	mapname = Info_ValueForKey( info, "mapname" );
@@ -1136,7 +1155,16 @@ void CL_InitCGame( void ) {
 	// will cause the server to send us the first snapshot
 	clc.state = CA_PRIMED;
 
+	// Added: the Competitive HUD's radar walks the map now, while it loads
+	UI_CompHud_MapLoaded();
+	// Added: the Reloaded menus' faces and shapes baked with the load
+	UI_Menus_PreBake();
+	// Added: the HUD's extras' too (the zoom overlays' masks made while it loaded)
+	UI_Extras_PreBake(qfalse);
+
 	CL_EndRegistration();
+	// Added: the radar's picture to the renderer, after the load's other pictures
+	UI_CompHud_LoadEnd();
 
 	t2 = Sys_Milliseconds();
 
@@ -1290,7 +1318,11 @@ void CL_FirstSnapshot( void ) {
 	cl.serverStartTime = cl.snap.serverTime;
 	cl.serverTimeDelta = cl.snap.serverTime - cls.realtime;
 
-	clc.timeDemoBaseTime = cl.snap.serverTime;
+	// Fixed: less the frames a timedemo already played, so that after a map
+	// change its time (base + frames * 50) starts at this snapshot; else it
+	// jumped ahead by every frame played and the next map was read in one
+	// frame, the cgame never run (its configstrings cycled out)
+	clc.timeDemoBaseTime = cl.snap.serverTime - clc.timeDemoFrames * 50;
 
 	// Added in OPM
 	//  Demo times count from the first snapshot of the demo

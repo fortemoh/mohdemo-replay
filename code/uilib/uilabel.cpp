@@ -21,26 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "ui_local.h"
-#include "../qcommon/localization.h"
 
-Event EV_UILabel_LinkString
-(
-    "linkstring",
-    EV_DEFAULT,
-    "is",
-    "value string",
-    "Creates a link from the specified value to a string. "
-    "Use this if you want the label to display a string different from the value of the cvar"
-
-);
-Event EV_UILabel_LinkCvarToShader
-(
-    "linkcvartoshader",
-    EV_DEFAULT,
-    NULL,
-    NULL,
-    "Links the label's cvar to its shader"
-);
 // Added in 2.0
 //====
 Event EV_UILabel_OneShotSound
@@ -60,57 +41,25 @@ Event EV_UILabel_LoopingSound
     "Set the sound to play"
 
 );
-Event EV_UILabel_OutlinedText
-(
-    "outlinedtext",
-    EV_DEFAULT,
-    "i",
-    "outlined",
-    "Set/clear outline text"
-);
 //====
-
-static const char *localizableVars[] = {
-    "cl_langamerefreshstatus",
-    "ui_timemessage",
-    "cg_obj_axistext1",
-    "cg_obj_axistext2",
-    "cg_obj_axistext3",
-    "cg_obj_axistext4",
-    "cg_obj_axistext5"
-    "cg_obj_alliedtext1",
-    "cg_obj_alliedtext2",
-    "cg_obj_alliedtext3",
-    "cg_obj_alliedtext4",
-    "cg_obj_alliedtext5",
-    "g_gametypestring",
-    "dm_serverstatus",
-    "com_errormessage",
-    NULL
-};
 
 CLASS_DECLARATION(UIWidget, UILabel, NULL) {
     {&W_MouseEntered,              &UILabel::MouseEntered         },
     {&W_MouseExited,               &UILabel::MouseExited          },
-    {&EV_UILabel_LinkString,       &UILabel::LinkString           },
-    {&EV_UILabel_LinkCvarToShader, &UILabel::SetLinkCvarToShader  },
     {&EV_UILabel_OneShotSound,     &UILabel::OneShotSound         },
     {&EV_UILabel_LoopingSound,     &UILabel::LoopingSound         },
-    {&EV_Layout_Shader,            &UILabel::LabelLayoutShader    },
-    {&EV_Layout_TileShader,        &UILabel::LabelLayoutTileShader},
-    {&EV_UILabel_OutlinedText,     &UILabel::EventSetOutlinedText },
     {NULL,                         NULL                           }
 };
 
 UILabel::UILabel()
 {
     AllowActivate(false);
-    m_bLinkCvarToShader = false;
     m_bOneShotTriggered = false;
     m_iNextOneShotTime  = 0;
     m_iNextStateTime    = 0;
     m_iLastDrawTime     = 0;
-    m_bOutlinedText     = false;
+    m_linkVar           = NULL;
+    m_linkCount         = -1;
 }
 
 void UILabel::MouseEntered(Event *ev)
@@ -121,66 +70,6 @@ void UILabel::MouseEntered(Event *ev)
 void UILabel::MouseExited(Event *ev)
 {
     SetHovermaterialActive(false);
-    SetPressedmaterialActive(false);
-}
-
-void UILabel::LinkString(Event *ev)
-{
-    linkstring *ls;
-    str         value;
-    str         string;
-
-    value  = ev->GetString(1);
-    string = ev->GetString(2);
-
-    ls = new linkstring(value, string);
-
-    m_linkstrings.AddObject(ls);
-}
-
-void UILabel::SetLabel(str lab)
-{
-    label = lab;
-}
-
-int UILabel::FindLinkString(str val)
-{
-    int i;
-
-    for (i = 1; i <= m_linkstrings.NumObjects(); i++) {
-        if (val == m_linkstrings.ObjectAt(i)->value) {
-            return i;
-        }
-    }
-
-    return 0;
-}
-
-void UILabel::LabelLayoutShader(Event *ev)
-{
-    m_sCurrentShaderName = ev->GetString(1);
-    setMaterial(uWinMan.RegisterShader(m_sCurrentShaderName));
-
-    m_flags &= ~WF_TILESHADER;
-}
-
-void UILabel::LabelLayoutTileShader(Event *ev)
-{
-    m_sCurrentShaderName = ev->GetString(1);
-    if (m_sCurrentShaderName.length() > 1) {
-        setMaterial(uWinMan.RegisterShader(m_sCurrentShaderName));
-    } else {
-        // Added in 2.0
-        //  Don't set the material if the shader name is considered empty
-        m_sCurrentShaderName = "";
-    }
-
-    m_flags |= WF_TILESHADER;
-}
-
-void UILabel::SetLinkCvarToShader(Event *ev)
-{
-    m_bLinkCvarToShader = true;
 }
 
 void UILabel::OneShotSound(Event *ev)
@@ -224,109 +113,112 @@ void UILabel::LoopingSound(Event *ev)
     }
 }
 
-void UILabel::EventSetOutlinedText(Event *ev)
+// Added: the linked cvar's text: the cvar found once, its text made again
+// only when it changed
+const char *UILabel::LinkedText(void)
 {
-    if (ev->NumArgs() > 0) {
-        m_bOutlinedText = ev->GetInteger(1) ? true : false;
-    } else {
-        m_bOutlinedText = true;
+    const char *string;
+
+    if (!m_linkVar || Q_stricmp(m_linkVar->name, m_cvarname)) {
+        m_linkVar   = UI_FindCvar(m_cvarname);
+        m_linkCount = -1;
     }
+    if (!m_linkVar) {
+        UI_DrawLive();
+        return "";
+    }
+    UI_DrawDep(m_linkVar);
+    if (m_linkVar->modificationCount != m_linkCount) {
+        string = m_linkVar->latchedString && *m_linkVar->latchedString ? m_linkVar->latchedString : m_linkVar->string;
+
+        m_linkText  = string;
+        m_linkCount = m_linkVar->modificationCount;
+    }
+    return m_linkText.c_str();
+}
+
+// Added: the text it draws
+const char *UILabel::CurrentText(void)
+{
+    if (m_cvarname.length()) {
+        return LinkedText();
+    }
+    return label.length() ? label.c_str() : m_title.length() ? m_title.c_str() : "";
+}
+
+// Added: its text's box (empty: none at its top left; no text at all: its
+// rect), design units
+UIRect2D UILabel::ContentBox(void)
+{
+    const char *text;
+    float       w = 0.0f, h, fit;
+    int         lines = 1;
+    UIRect2D    r;
+
+    if (!m_cvarname.length() && !label.length() && !m_title.length()) {
+        return UIWidget::ContentBox();
+    }
+    Flow();
+    r    = m_designRect;
+    text = CurrentText();
+    if (!*text || !m_font) {
+        return UIRect2D(r.pos.x, r.pos.y, 0.0f, 0.0f);
+    }
+    fit = m_font->FitScale(text, m_fitWidth);
+    for (const char *p = text, *e; *p; p = *e ? e + 1 : e) {
+        char line[1024];
+
+        e = strchr(p, '\n');
+        e = e ? e : p + strlen(p);
+        Q_strncpyz(line, p, Q_min((int)sizeof(line), (int)(e - p) + 1));
+        w = Q_max(w, m_font->getWidth(line, -1));
+        lines += *e == '\n';
+    }
+    w *= fit;
+    h = lines * m_font->getHeight((const float *)NULL) * fit;
+    if (m_iFontAlignmentHorizontal == FONT_JUSTHORZ_CENTER) {
+        r.pos.x += (r.size.width - w) * 0.5f;
+    } else if (m_iFontAlignmentHorizontal == FONT_JUSTHORZ_RIGHT) {
+        r.pos.x += r.size.width - w;
+    }
+    if (m_iFontAlignmentVertical == FONT_JUSTVERT_CENTER) {
+        r.pos.y += (r.size.height - h) * 0.5f;
+    } else if (m_iFontAlignmentVertical == FONT_JUSTVERT_BOTTOM) {
+        r.pos.y += r.size.height - h;
+    }
+    return UIRect2D(r.pos.x, r.pos.y, w, h);
 }
 
 void UILabel::Draw(void)
 {
     const char *string;
-    str         val;
 
     ProcessSounds();
+    // (sounds: not kept by the draw cache)
+    if (m_sOneShotSoundName.length() || m_sLoopingSoundName.length()) {
+        UI_DrawLive();
+    }
 
     m_iLastDrawTime = uii.Sys_Milliseconds();
 
-    if (m_cvarname.length()) {
-        string = uii.Cvar_GetString(m_cvarname, "");
-
-        //
-        // localize the cvar value when possible
-        //
-        for (int i = 0; localizableVars[i]; i++) {
-            if (!strcmp(localizableVars[i], string)) {
-                string = Sys_LV_CL_ConvertString(localizableVars[i]);
-            }
-        }
-
-        if (m_linkstrings.NumObjects()) {
-            cvar_t *cvar = UI_FindCvar(m_cvarname);
-            if (cvar) {
-                int ret;
-
-                if (cvar->latchedString) {
-                    val = cvar->latchedString;
-                } else {
-                    val = cvar->string;
-                }
-
-                ret = FindLinkString(val);
-                if (ret) {
-                    string = m_linkstrings.ObjectAt(ret)->string;
-                }
-            }
-        }
-
-        if (m_bLinkCvarToShader) {
-            if (str::icmp(m_sCurrentShaderName, string)) {
-                m_sCurrentShaderName = string;
-
-                setMaterial(uWinMan.RegisterShader(m_sCurrentShaderName));
-
-                if (!m_material->GetMaterial()) {
-                    setMaterial(NULL);
-                }
-            }
-
-            if (label.length()) {
-                string = label;
-            } else if (m_title.length()) {
-                string = m_title;
-            } else {
-                string = "";
-            }
-        }
-    } else {
-        if (label.length()) {
-            string = label;
-        } else if (m_title.length()) {
-            string = m_title;
-        } else {
-            string = "";
-        }
-    }
+    string = CurrentText();
 
     if (*string) {
         float nr, ng, nb;
-        float alpha;
 
         nr = m_foreground_color.r;
         ng = m_foreground_color.g;
         nb = m_foreground_color.b;
 
         m_font->setColor(UColor(nr, ng, nb, m_foreground_color.a * m_local_alpha));
+        // Added: a long text smaller to fit (fitwidth)
+        m_font->setFit(m_font->FitScale(string, m_fitWidth));
 
-        if (m_bOutlinedText) {
-            // print the text
-            m_font->PrintOutlinedJustified(
-                getClientFrame(),
-                m_iFontAlignmentHorizontal,
-                m_iFontAlignmentVertical,
-                string,
-                UBlack,
-                getVirtualScale()
-            );
-        } else {
-            // print the text
-            m_font->PrintJustified(
-                getClientFrame(), m_iFontAlignmentHorizontal, m_iFontAlignmentVertical, string, getVirtualScale()
-            );
-        }
+        // print the text
+        m_font->PrintJustified(
+            getClientFrame(), m_iFontAlignmentHorizontal, m_iFontAlignmentVertical, string, getVirtualScale()
+        );
+        m_font->setFit(1.0f);
     }
 }
 

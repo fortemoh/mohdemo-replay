@@ -285,6 +285,16 @@ private:
     bool m_bAllowFighting;
     bool m_bReady;
     int  m_iPlayerSpectating;
+    // Added in Reloaded
+    //  follow view chosen with "spectatemode": -1 = server default (g_spectatefollow_firstperson),
+    //  0 = third person, 1 = first person
+    int m_iSpectateFollowMode;
+    // Added in Reloaded
+    //  view bob the server works out for an original client watching someone in first person
+    //  (g_spectatefollow_stockbob), with the followed client it was worked out for
+    float m_fSpectateBobPhase;
+    float m_fSpectateBobAmp;
+    int   m_iSpectateBobClient;
 
     teamtype_t             dm_team;
     class SafePtr<DM_Team> current_team;
@@ -835,6 +845,10 @@ public:
     void       SetPlayerSpectateRandom(void); // Added in 2.0
     bool       IsValidSpectatePlayer(Player *pPlayer);
     void       GetSpectateFollowOrientation(Player *pPlayer, Vector& vPos, Vector& vAng);
+    bool       IsSpectateFollowFirstPerson() const;       // Added in Reloaded
+    Player    *GetFirstPersonSpectateTarget();            // Added in Reloaded
+    void       SpectateMode(Event *ev);                   // Added in Reloaded
+    void       AddStockClientViewBob(Player *player);     // Added in Reloaded
     void       UpdateStatus(const char *s);
     void       SetDM_Team(DM_Team *team);
     DM_Team   *GetDM_Team();

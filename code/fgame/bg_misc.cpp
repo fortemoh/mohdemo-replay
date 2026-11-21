@@ -418,3 +418,88 @@ int BG_MapCGMToProtocol(int protocol, int messageNumber)
 
     return newMessageNumber;
 }
+
+/*
+================
+The quick messages (the V key's: "dmmessage 0 *<group><line>"), moved here
+from player.cpp to be the cgame's too: what the server says in the chat
+(the localization's keys), and the groups' names (the stock pictures')
+================
+*/
+//
+// mohaas 2.0 and above
+//
+const char *pInstantMsgEng[6][9] = {
+    {"Good job team!",
+     "Alright!", "We've done it!",
+     "Wooohoo!", "Objective achieved.",
+     "We've completed an objective.", "We've lost an objective!",
+     "The enemy has overrun our objective!", NULL},
+    {"Squad, move in!",
+     "Squad, fall back!", "Squad, attack right flank!",
+     "Squad, attack left flank!", "Squad, hold this position!",
+     "Squad, covering fire!", "Squad, regroup!",
+     "Squad, split up!", NULL},
+    {"Cover me!",
+     "I'll cover you!", "Follow me!",
+     "You take point.", "Taking Fire!  Need some help!",
+     "Get ready to move in on my signal.", "Attack!",
+     "Open fire!", NULL},
+    {"Yes sir!",
+     "No sir!", "Enemy Spotted.",
+     "Sniper!", "Grenade! Take Cover!",
+     "Area Clear.", "Thanks.",
+     "I owe you one.", NULL},
+    {"Who wants more?!",
+     "Never send boys to do a man's job.", "This is too easy!",
+     "You mess with the best, you die like the rest.", "Watch that friendly fire!",
+     "Hey!  I'm on your team!", "Come on out you cowards!",
+     "Where are you hiding?", NULL},
+    // Added in 2.30
+    {"Guard our jail!",
+     "Capture the enemy jail!", "I'm defending our jail!",
+     "I'm attacking the enemy jail!", "Rescue the Prisoners!",
+     "The enemy is attacking our jail!"}
+};
+
+//
+// for mohaa version 1.11 and below
+//
+const char *pInstantMsgEng_ver6[5][9] = {
+    {"Squad, move in!",
+     "Squad, fall back!", "Squad, attack right flank!",
+     "Squad, attack left flank!", "Squad, hold this position!",
+     "Squad, covering fire!", "Squad, regroup!",
+     "", ""},
+    {
+     "Cover me!", "I'll cover you!",
+     "Follow me!", "You take point.",
+     "You take the lead.", "Taking Fire!  Need some help!",
+     "Charge!", "Attack!",
+     "Open fire!", },
+    {
+     "Yes sir!", "No sir!",
+     "Enemy Spotted.", "Sniper!",
+     "Grenade! Take Cover!", "Area Clear.",
+     "Great Shot!", "Thanks.",
+     "I owe you one.", },
+    {
+     "Is that all you've got?", "I think they are all out of real men!",
+     "Go on and run, you yellow-bellies!", "They're a bunch of cowards!",
+     "Come back when you've had some target practice!", "Come prepared next time!",
+     "Try again!", "I've seen French school girls shoot better!",
+     "That made a mess.", },
+    {"He's going to get us killed!",
+     "A lot of good men are going to die because of his poor leadership", "Good riddance!",
+     "That guy is going to get us all killed!", "Hey buddy, get down!",
+     "Stay out of my foxhole, pal!", "Find your own hiding place!",
+     "Get out of my way!", ""}
+};
+
+const char *const pInstantMsgGroupsEng[6] = {
+    "Goal Messages", "Squad Commands", "Individual Commands", "Statements and Responses", "Taunts", "Liberation Messages"
+};
+
+const char *const pInstantMsgGroupsEng_ver6[5] = {
+    "Squad Commands", "Individual Commands", "Statements&Responses", "Taunts", "Team Taunts"
+};

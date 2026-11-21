@@ -34,10 +34,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // Added in OPM
 #include "cl_censor.h"
 
-#ifdef USE_CURL
-#include "cl_curl.h"
-#endif /* USE_CURL */
-
 #ifdef USE_VOIP
 #include <opus.h>
 #endif
@@ -227,16 +223,6 @@ typedef struct {
 	fileHandle_t download;
 	char		downloadTempName[MAX_OSPATH];
 	char		downloadName[MAX_OSPATH];
-#ifdef USE_CURL
-	qboolean	cURLEnabled;
-	qboolean	cURLUsed;
-	qboolean	cURLDisconnected;
-	char		downloadURL[MAX_OSPATH];
-	CURL		*downloadCURL;
-	CURLM		*downloadCURLM;
-#endif /* USE_CURL */
-	int		sv_allowDownload;
-	char		sv_dlURL[MAX_CVAR_VALUE_STRING];
 	int			downloadNumber;
 	int			downloadBlock;	// block we are waiting for
 	size_t		downloadCount;	// how many bytes we got
@@ -358,7 +344,6 @@ typedef enum loadProgress_e {
 } loadProgress_t;
 
 typedef struct {
-	int				startStage;
 	loadProgress_t	loading;
 	int				keyCatchers;
 	qboolean		vid_restart;
@@ -503,15 +488,9 @@ extern	cvar_t	*cl_aviPipeFormat;
 extern	cvar_t	*cl_activeAction;
 
 extern	cvar_t	*cl_allowDownload;
-extern  cvar_t  *cl_downloadMethod;
 extern	cvar_t	*cl_conXOffset;
-extern	cvar_t	*cl_inGameVideo;
 
 extern	cvar_t	*cl_lanForcePackets;
-extern	cvar_t	*cl_langamerefreshstatus;
-extern	cvar_t	*cl_radar_icon_size;
-extern	cvar_t	*cl_radar_speak_time;
-extern	cvar_t	*cl_radar_blink_time;
 extern	cvar_t	*cl_autoRecordDemo;
 
 extern	cvar_t	*cl_r_fullscreen;
@@ -665,6 +644,7 @@ int CL_DemoShots( int client, int startTime, int endTime, demoShotInfo_t *shots,
 void CL_DemoHitFlesh( const vec3_t pos, qboolean large );
 qboolean CL_DemoShownFromBehind( const playerState_t *ps );
 qboolean CL_DemoHidesHealth( void );
+int CL_DemoShownClient( void );
 qboolean CL_DemoFollowedFromEyes( void );
 qboolean CL_DemoUnspeccedFromEyes( void );
 void CL_DemoSpectatorHud( void );
@@ -694,7 +674,6 @@ void	CL_GlobalServers_f( void );
 void	CL_FavoriteServers_f( void );
 void	CL_Ping_f( void );
 void	CL_SaveShot_f( void );
-void	CL_Dialog_f( void );
 void	CL_ServerRestarted( void );
 qboolean CL_UpdateVisiblePings_f( int source );
 
@@ -744,23 +723,6 @@ void	SCR_DrawSmallChar( int x, int y, int ch );
 void	UpdateStereoSide( stereoFrame_t s );
 
 //
-// cl_cin.c
-//
-
-void CL_PlayCinematic_f( void );
-void SCR_DrawCinematic (void);
-void SCR_RunCinematic (void);
-void SCR_StopCinematic (void);
-int CIN_PlayCinematic( const char *arg0, int xpos, int ypos, int width, int height, int bits);
-e_status CIN_StopCinematic(int handle);
-e_status CIN_RunCinematic (int handle);
-void CIN_DrawCinematic (int handle);
-void CIN_SetExtents (int handle, int x, int y, int w, int h);
-void CIN_SetLooping (int handle, qboolean loop);
-void CIN_UploadCinematic(int handle);
-void CIN_CloseAllVideos(void);
-
-//
 // cl_cgame.cpp
 //
 void CL_InitCGame( void );
@@ -783,8 +745,6 @@ void CL_InitializeUI( void );
 void CL_ShutdownUI( void );
 int Key_GetCatcher( void );
 void Key_SetCatcher( int catcher );
-void LAN_LoadCachedServers( void );
-void LAN_SaveServersToCache( void );
 */
 
 
@@ -816,6 +776,21 @@ int CL_DemoClipNumber( void );
 // cl_consolecmds.cpp
 //
 void CL_InitConsoleCommands( void );
+
+//
+// cl_crosshair.c
+//
+void CL_CrosshairImport_f( void );
+void CL_CrosshairExport_f( void );
+
+#ifdef USE_DISCORD
+//
+// cl_discord.c
+//
+void CL_Discord_Init( void );
+void CL_Discord_Frame( void );
+void CL_Discord_Shutdown( void );
+#endif
 
 #ifdef __cplusplus
 }

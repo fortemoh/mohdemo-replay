@@ -27,6 +27,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qcommon.h"
 #include "tr_public.h"
 #include "../renderercommon/tr_common.h"
+#include "../tiki/tiki_shared.h"	// skelBoneCache_t (the frame's bone pool)
+#include "../tiki/tiki_mesh.h"		// MAX_SKELBONES, MAX_SKELMORPH
 
 #ifdef __cplusplus
 extern "C" {
@@ -554,7 +556,10 @@ typedef struct shader_s {
 	int			lightmapIndex;			// for a shader to match, both name and lightmapIndex must match
 
 	int			index;					// this shader == tr.shaders[index]
+	int			join2D, join2DGen;		// the 2D draws it joins (R_2DJoinClass), made at R_2DShadersChanged's join2DGen - 1
+	struct image_s	*atlas2D;			// ... and its first stage's image when in the 2D atlas
 	int			sortedIndex;			// this shader == tr.sortedShaders[sortedIndex]
+	unsigned	pipelineClass;			// what of the shader decides its draws' pipelines; opaque shaders are sorted by it (r_sortPipelines)
 
 	float		sort;					// lower numbered shaders draw before higher numbered
 
@@ -604,6 +609,7 @@ typedef struct shader_s {
 	int			needsLSpherical;
 	int			stagesWithAlphaFog;
 	int			flags;
+	int			temporalAnimated;	// 0 not known yet, 1 no, 2 it changes over time (RB_ShaderAnimated)
 
 	void		(*optimalStageIteratorFunc)( void );
 
@@ -680,6 +686,10 @@ typedef struct {
 
     int			numStaticModelData;
     unsigned char		*staticModelData;
+	// the frame's bone and morph pools (backEndData's): the skeletal
+	// surfaces are drawn from them (RB_SkelMesh, tr_skin.c)
+	skelBoneCache_t		*skelBones;
+	int					*skelMorphs;
     qboolean sky_portal;
     float sky_alpha;
     vec3_t sky_origin;
@@ -689,6 +699,9 @@ typedef struct {
     qboolean skybox_farplane;
     qboolean render_terrain;
 	//==
+
+	// refdef_t's: the field of view of the depth hack's draws, 0: the scene's
+	float		viewmodel_fov_x, viewmodel_fov_y;
 
 } trRefdef_t;
 
@@ -748,6 +761,10 @@ typedef struct {
 	int			viewportX, viewportY, viewportWidth, viewportHeight;
 	float		fovX, fovY;
 	float		projectionMatrix[16];
+	// the depth hack's draws (the first-person weapon) have a projection of
+	// their own (refdef_t viewmodel_fov_x/y): not in a portal
+	qboolean	vmProjection;
+	float		vmProjectionMatrix[16];
 	cplane_t	frustum[5];
 	vec3_t		visBounds[2];
 	float		zFar;
@@ -757,6 +774,19 @@ typedef struct {
 	float		farplane_color[3];
     int			farplane_cull;
     qboolean	renderTerrain; // added in 2.0
+	// the frame's tr.skyRendered, tr.portalRendered and tr.farclip when the
+	// view's draw command was made, for the back end (r_smp: tr's are the
+	// frame being built by then)
+	qboolean	skyRendered, portalRendered;
+	int			farclip;
+	// the lens flares' lines of sight, traced by the front end for the
+	// view (R_FlareTraces, tr_sun_flare.cpp): a bit per entity and per
+	// dynamic light whose flare is in view, and the sun's. The thread's
+	// R_DrawLensFlares reads them: CM_BoxTrace keeps its counters in the
+	// clipmap, which the game traces with on the main thread
+	uint32_t	flareEntsVisible[( MAX_REFENTITIES + 31 ) / 32];
+	uint32_t	flareDlightsVisible;
+	qboolean	sunFlareVisible;
 } viewParms_t;
 
 
@@ -972,6 +1002,21 @@ typedef struct srfTerrain_s {
     dlightMask_t dlightBits;
     dlightMask_t dlightMap;	// as in srfGridMesh_t (R_RealDlightTerrain)
 } srfTerrain_t;
+
+// a terrain patch as the frame draws it (R_TerrainFrameSurface, tr_terrain.c):
+// what RB_DrawTerrainTris needs of its srfTerrain_t, and the slots of its
+// drawn triangles copied into the frame's data, since the render thread
+// draws the frame while the next frame's tessellation changes the lists
+typedef struct {
+	surfaceType_t		surfaceType;	// SF_TERRAIN_PATCH
+	const srfTerrain_t	*live;			// the patch's own lists (the fallback without a copy)
+	int					nVerts, nTris;
+	dlightMask_t		dlightBits, dlightMap;
+	const glIndex_t		*indexes;		// NULL: no copy (the frame's pool was full)
+	int					numIndexes;
+} terrainPatchFrame_t;
+#define MAX_TERRAIN_FRAME_PATCHES	4096
+#define MAX_TERRAIN_FRAME_INDEXES	( 256 * 1024 )
 
 typedef struct cTerraPatchUnpacked_s {
     srfTerrain_t drawinfo;
@@ -1327,6 +1372,7 @@ typedef struct {
 	float		projection[16];
 	float		modelview[16];
 	int			faceCulling;
+	qboolean	faceCullingMirror;	// faceCulling's, turned around (R_Cull)
 	int			cntTexEnvExt;
 	int			cntnvblendmode;
 	long unsigned int glStateBits;
@@ -1337,6 +1383,7 @@ typedef struct {
 
 typedef struct {
 	int		c_surfaces, c_shaders, c_vertexes, c_indexes, c_totalIndexes, c_characterlights;
+	int		c_draws, c_draws2D, c_vertexes2D;	// GPU draws (vk_draw), those in 2D and their vertexes: r_speeds 7
 	float	c_overDraw;
 	
 	int		c_dlightVertexes;
@@ -1391,6 +1438,9 @@ typedef struct {
 	// keeps the entities' motion for the next frame
 	qboolean	temporalScene;
 	qboolean	temporalPrimary;
+	// the current entity is a first-person one with a mirrored axis (the
+	// left-handed view weapon): its culling is turned around (R_Cull)
+	qboolean	entityMirrored;
 } backEndState_t;
 
 /*
@@ -1426,8 +1476,10 @@ typedef struct {
 	image_t					*flareImage;
 	image_t					*whiteImage;			// full of 0xff
 	image_t					*identityLightImage;	// full of tr.identityLightByte
+	image_t					*frameBlurImage;		// "*frameblur.tga": the frame blurred where it is drawn (vk_frame_blur), NULL unsupported
 
 	shader_t				*defaultShader;
+	shader_t				*white2D;		// the 2D atlas's white texel (R_White2D)
 	shader_t				*shadowShader;
 	shader_t				*projectionShadowShader;
 
@@ -1908,6 +1960,8 @@ void Draw_StretchPic2(float x, float y, float w, float h, float s1, float t1, fl
 void Draw_TilePic(float x, float y, float w, float h, qhandle_t hShader);
 void Draw_TilePicOffset(float x, float y, float w, float h, qhandle_t hShader, int offsetX, int offsetY);
 void Draw_TrianglePic(const vec2_t vPoints[3], const vec2_t vTexCoords[3], qhandle_t hShader);
+void DrawPolygon2D(const float (*points)[4], int count, qhandle_t hShader);
+void RE_Radar2DHeight(qhandle_t shader, float z);
 void DrawBox(float x, float y, float w, float h);
 void AddBox(float x, float y, float w, float h);
 void DrawBoxes(const float (*boxes)[4], int count, const float *color);
@@ -1920,15 +1974,24 @@ void RE_Scissor(int x, int y, int width, int height);
 void DrawLineLoop(const vec2_t* points, int count, int stipple_factor, int stipple_mask);
 
 // 2D batches (tr_draw.c)
-typedef enum {
-	R2D_STREAM,		// RB_Vertex2f and friends: vertex colors from the 2D color
-	R2D_GLYPHS		// R_DrawString_sgl: no vertex colors
-} r2dSource_t;
-
 extern cvar_t *r_batch2D;	// 1: 2D draws of one shader in one surface, 2: transparent boxes left out
+extern cvar_t *r_sortPipelines;	// 1: opaque shaders ordered by the pipelines their draws bind
 
 void R_IssuePending2DCommands( void );
-void R_Begin2D( shader_t *shader, r2dSource_t source, int numVertexes, int numIndexes );
+void R_Begin2D( shader_t *shader, int numVertexes, int numIndexes );
+void R_2DReserve( int numVertexes, int numIndexes );
+qboolean R_2DQueued( void );
+void *R_2DCommandBuffer( int bytes );
+int RE_Begin2DList( int handle );
+void RE_End2DList( void );
+void RE_Draw2DList( int handle );
+void RE_Free2DList( int handle );
+void R_2DListsEndFrame( void );
+void R_2DListsShutdown( void );
+void R_2DTransform( float *x, float *y );
+void R_2DScissor( qboolean clip );
+shader_t *R_White2D( void );	// the atlas's white texel (tr_image.c)
+void R_2DShadersChanged( void );	// an image made again or the atlas resized: the shaders' 2D info made again (tr_draw.c)
 void R_End2D( void );
 void R_End2DBatch( void );
 void R_Forget2DBatch( void );
@@ -1972,6 +2035,11 @@ image_t* R_CreateImageOld(
 );
 
 qboolean R_ImageExists(const char* name);
+qhandle_t RE_RegisterImage2D(const char *name, byte *rgba, int width, int height);
+qhandle_t RE_RegisterTexture2D(const char *name, byte *rgba, int width, int height);
+qhandle_t RE_RegisterRadar2D(const char *name, const radar2D_t *radar, float z);
+void R_AtlasShutdown( void );
+qboolean R_ShaderTextExists(const char *name);
 int R_CountTextureMemory();
 qboolean R_LoadRawImage(const char *name, byte **pic, int *width, int *height);
 void R_FreeRawImage(byte *pic);
@@ -1987,7 +2055,10 @@ void	R_SkinList_f( void );
 const void *RB_TakeScreenshotCmd( const void *data );
 void RB_TakePendingScreenshots( void );
 void RB_TakePendingVideoFrame( void );
+void R_ProcessReadbacks( void );
+void R_FlushReadbacks( void );
 void	R_ScreenShot_f( void );
+void	R_ScreenShotPNG_f( void );
 
 void	R_InitImages( void );
 void	R_FreeImage(image_t* image);
@@ -2106,6 +2177,7 @@ typedef struct shaderCommands_s
 	shaderStage_t	**xstages;
     qboolean no_global_fog;
     qboolean vertexColorValid;
+    qboolean colors2D;		// the 2D color is in the vertexes: a global color's stage reads it there (tr_draw.c)
 
 	// a batch drawn from the static geometry (tr_staticgeom.c,
 	// STATIC_BATCH_ON) doesn't fill the vertex arrays above: numVertexes
@@ -2116,6 +2188,7 @@ typedef struct shaderCommands_s
 	qboolean	staticTerrain;		// terrain patches, drawn from the terrain pool (RB_TerrainPool)
 	qboolean	staticNeedsOpaque;	// a stage takes the vertex colors with alpha 255
 	qboolean	staticMergeable;	// more static models can join the batch (RB_StaticMerge)
+	qboolean	staticFxBatch;		// a stage needs the effects shader: every draw of the batch has a record (RB_StaticDraw)
 	int			numStaticInstances;
 	staticInstance_t	staticInstances[MAX_STATIC_INSTANCES];
 	int			staticCopiedIndexes;	// in indexes
@@ -2213,7 +2286,9 @@ typedef enum {
 qboolean RB_StaticFxOn( void );
 qboolean RB_StaticFxDeforms( const shader_t *shader );
 qboolean RB_StaticFxBundle( const textureBundle_t *bundle, qboolean entity );
-int RB_StaticFxRecord( const shaderStage_t *pStage, int colorFx, const staticFxUnit_t units[NUM_TEXTURE_BUNDLES], const float *constantColor );
+// motion: its deforms move the vertexes over time (drawGeometry_t::staticFxMotion)
+int RB_StaticFxRecord( const shaderStage_t *pStage, int colorFx, const staticFxUnit_t units[NUM_TEXTURE_BUNDLES], const float *constantColor,
+	qboolean *motion );
 void R_ClearFxTables( void );
 
 // tr_skin.c
@@ -2233,6 +2308,10 @@ void RB_TemporalBeginView( void );
 void RB_TemporalEndScene( void );
 void RB_TemporalAo( void );
 void RB_TemporalModelview( void );
+const float *RB_TemporalPrevVmProjection( void );
+void RB_TemporalDeformTime( float *seconds, int *msec );
+qboolean RB_TemporalReactive( qboolean override );
+qboolean RB_ShaderAnimated( shader_t *shader );
 void RB_TemporalSkin( int numBones, qboolean hasMorph, uint32_t *prevBones, uint32_t *prevMorphs );
 void RB_TemporalRecordSkin( int numBones, uint32_t bones, uint32_t morphs );
 // tr_pipelines.c
@@ -2440,7 +2519,7 @@ GHOST
 =============================================================
 */
 
-void R_UpdateGhostTextures();
+void R_UpdateGhostTextures(int refdefTime);
 void R_SetGhostImage(const char* name, image_t* image);
 void LoadGHOST(const char* name, byte** pic, int* width, int* height);
 
@@ -2488,6 +2567,7 @@ SUN FLARE
 =============================================================
 */
 void R_InitLensFlare();
+void R_FlareTraces();
 void R_DrawLensFlares();
 
 /*
@@ -2562,7 +2642,6 @@ void R_InfoWorldTris_f(void);
 void R_PrintInfoWorldtris(void);
 void R_DebugSkeleton(void);
 
-extern int g_nStaticSurfaces;
 extern qboolean g_bInfostaticmodels;
 extern qboolean g_bInfoworldtris;
 
@@ -2708,7 +2787,9 @@ typedef struct {
 } subImageCommand_t;
 
 typedef struct {
-	int		commandId;
+	int			commandId;
+	uint64_t	inputUs;		// r_vkLatency: when the frame's input was read after (vk_probe_input_time)
+	uint64_t	frameToken;		// the engine's name for the frame (ri.FrameToken), for its present gate
 } swapBuffersCommand_t;
 
 typedef struct {
@@ -2731,19 +2812,128 @@ typedef struct {
 	viewParms_t	viewParms;
 	drawSurf_t *drawSurfs;
 	int		numDrawSurfs;
+	// r_smp: the terrain slots this scene's tessellation changed (tr_terrain.c)
+	const struct terrainSlotChange_s *terrainChanges;
+	int		numTerrainChanges;
+	qboolean	terrainChangesAll;
 } drawSurfsCommand_t;
+
+// r_smp: the 2D exports as commands (tr_draw.c, tr_font.cpp, tr_init.c)
+typedef struct {
+	int		commandId;
+	float	rgba[4];
+	int		isNull;
+} set2DColorCommand_t;
+
+typedef struct {
+	int		commandId;
+	float	x, y, w, h, s1, t1, s2, t2, sx, sy;
+	qhandle_t	hShader;
+	int		offsetX, offsetY;
+} pic2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	vec2_t	points[3];
+	vec2_t	texCoords[3];
+	qhandle_t	hShader;
+} trianglePic2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	void	*font;
+	float	x, y;
+	int		maxlen;
+	int		hasVirtual;
+	float	virtualScreen[2];
+	int		length;			// the text follows, NUL-terminated, padded to a pointer
+} string2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	float	x, y, w, h;
+} box2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	int		count;			// float boxes[count][4] follow
+	float	color[4];
+} boxes2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	int		count;			// vec2_t points[count] follow
+	int		stippleFactor, stippleMask;
+} lineLoop2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	int		x, y, w, h;
+	float	left, right, bottom, top, n, f;
+} window2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	int		x, y, width, height;
+} scissor2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	float	startTime;
+} shaderTime2DCommand_t;
+
+typedef struct {
+	int		commandId;
+	int		t;
+	int		refdefTime;
+} renderTimeCommand_t;
+
+typedef struct {
+	int		commandId;
+} end2DBatchCommand_t;
+
+typedef struct {
+	int						commandId;
+	const struct r2dList_s	*list;
+} list2DCommand_t;
+
+typedef struct {
+	int			commandId;
+	int			count;			// float points[count][4] follow
+	qhandle_t	hShader;
+} polygon2DCommand_t;
+
+typedef struct {
+	int			commandId;
+	qhandle_t	hShader;		// the radar's picture (RE_RegisterRadar2D)
+	float		z;
+} radarHeight2DCommand_t;
+
+// r_smp: a terrain pool slot the front end's tessellation changed, for the
+// render thread's copy of the pool (tr_terrain.c, vk_sync_terrain_pool_smp)
+typedef struct terrainSlotChange_s {
+	int		slot;
+	float	xyz[3];
+	float	st[2][2];
+} terrainSlotChange_t;
+#define MAX_TERRAIN_CHANGES	4096
 
 typedef struct {
 	int commandId;
+	int type;				// shotType_t (tr_init.c)
 	int x;
 	int y;
-	int width;
+	int width;				// a resampled shot: the size of the file
 	int height;
-	char *fileName;
-	qboolean jpeg;
-	qboolean png;
-	const char *message;	// console command run once the file is written, or NULL
+	char fileName[MAX_OSPATH];
+	char message[MAX_OSPATH + 64];	// console command run once the file is written, or empty
 } screenshotCommand_t;
+
+// what a pixel readback of the back end is for (vk_read_pixels_async): the
+// main thread writes it once the GPU has done it (R_ProcessReadbacks)
+#define READBACK_SHOT		1		// a screenshot, levelshot or resampled shot
+#define READBACK_VIDEO		2		// a video frame (RE_TakeVideoFrame)
+#define READBACK_OVERDRAW	3		// r_measureOverdraw's stencil
 
 typedef struct {
 	int						commandId;
@@ -2777,7 +2967,28 @@ typedef enum {
 	RC_SCREENSHOT,
 	RC_VIDEOFRAME,
 	RC_COLORMASK,
-	RC_CLEARDEPTH
+	RC_CLEARDEPTH,
+	// r_smp: the 2D exports and what else the front end did directly, replayed
+	// by the render thread (tr_draw.c, RB_2DCommand)
+	RC_END_2D_BATCH,
+	RC_2D_SET_COLOR,
+	RC_2D_STRETCH_PIC,
+	RC_2D_STRETCH_PIC2,
+	RC_2D_TILE_PIC,
+	RC_2D_TILE_PIC_OFFSET,
+	RC_2D_TRIANGLE_PIC,
+	RC_2D_STRING,
+	RC_2D_ADD_BOX,
+	RC_2D_DRAW_BOX,
+	RC_2D_DRAW_BOXES,
+	RC_2D_LINE_LOOP,
+	RC_2D_WINDOW,
+	RC_2D_SCISSOR,
+	RC_2D_SHADER_TIME,
+	RC_2D_LIST,
+	RC_2D_POLYGON,
+	RC_SET_RENDER_TIME,
+	RC_2D_RADAR_HEIGHT
 } renderCommand_t;
 
 
@@ -2787,6 +2998,15 @@ typedef enum {
 #define	MAX_POLYS		4096
 #define	MAX_POLYVERTS	16384
 #define	MAX_TERMARKS	1024
+
+// a static model's surface as the frame adds it (tr_staticmodels.c): the
+// surface the draw surface points to, first, and the model's level of
+// detail at the time (RB_StaticMesh reads it through the surface pointer)
+#define MAX_STATIC_MODELS_SURFS		8192
+typedef struct {
+	staticSurface_t	surf;
+	float			lod;
+} staticSurfaceFrame_t;
 
 // all of the information needed by the back end must be
 // contained in a backEndData_t.  This entire structure is
@@ -2803,7 +3023,38 @@ typedef struct {
 	refSprite_t sprites[2048];
 	cStaticModelUnpacked_t* staticModels;
 	byte* staticModelData;
+	// after pointers only: the commands are read at pointer alignment
+	// (RB_ExecuteRenderCommands pads to it), so cmds has to start there
 	renderCommandList_t	commands;
+	// r_smp: the terrain slots changed in this frame, by scene (drawSurfsCommand_t)
+	terrainSlotChange_t	*terrainChanges;
+	int		numTerrainChanges;
+	int		firstTerrainChange;	// of the scene being built
+	qboolean	terrainChangesAll;	// every slot: the shadow was refreshed in full
+	// r_smp: the front end waits for this list (a screenshot, a video frame,
+	// the overdraw readback: the engine's temporary memory and files)
+	qboolean	syncAfterIssue;
+	// the static models' surfaces of the frame (R_AddStaticModelSurfaces),
+	// pointed to by its draw surfaces, and the level of detail each was
+	// added with: the frame's own, since the render thread reads them while
+	// the next frame fills its own
+	staticSurfaceFrame_t staticSurfaces[MAX_STATIC_MODELS_SURFS];
+	int			numStaticSurfaces;
+	// the terrain patches of the frame and the slots of their triangles
+	// (R_TerrainFrameSurface), the frame's own for the same reason
+	terrainPatchFrame_t	terrainSurfs[MAX_TERRAIN_FRAME_PATCHES];
+	int			numTerrainSurfs;
+	glIndex_t	*terrainIndexes;	// MAX_TERRAIN_FRAME_INDEXES
+	int			numTerrainIndexes;
+	// the bones and morph weights of the frame's skeletal models
+	// (R_AddSkelSurfaces), which RB_SkelMesh and the skin upload read: the
+	// frame's own instead of TIKI_Skel_Bones, which every scene reset
+	// (TIKI_Reset_Caches) while the render thread still read the frame
+	// before's
+	skelBoneCache_t	*skelBones;		// MAX_SKELBONES
+	int			numSkelBones;
+	int			*skelMorphs;		// MAX_SKELMORPH
+	int			numSkelMorphs;
 } backEndData_t;
 
 extern	int		max_polys;
@@ -2827,6 +3078,32 @@ void R_InitCommandBuffers( void );
 void R_ShutdownCommandBuffers( void );
 
 void R_SyncRenderThread( void );
+
+void *R_GetCommandBufferReserved( int bytes, int reservedBytes );
+
+// tr_smp.c: the render thread (r_smp)
+extern cvar_t	*r_smp;
+extern backEndData_t	*backEndDataArray[2];
+qboolean	R_OnRenderThread( void );
+void		R_FrontEndSync( void );
+void		R_IssueRenderCommandsThreaded( const void *cmds );
+int			R_RenderThreadBackEndMsec( void );
+qboolean	vk_present_waits( void );					// vk.c: the present waits for the display (vsync)
+void		vk_prepare_input_wait( void );				// vk.c: r_smp's wait before the input (R_IssueFrameThreaded)
+int			vk_input_wait( void );
+int			vk_last_gpu_frame_us( void );
+uint64_t	vk_back_end_wait_us( void );
+void		R_IssueFrameThreaded( const void *cmds );
+void		R_StartRenderThread( void );
+void		R_StopRenderThread( void );
+const void	*RB_2DCommand( const void *data );
+void		RB_SetRenderTime( int t, int refdefTime );
+void		RB_Draw_String( fontheader_t *font, const char *text, float x, float y, int maxlen, const float *pvVirtualScreen );
+void		R_TerrainSnapshotChanges( void );
+void		vk_terrain_shadow_all( const float *xyz, const float *st, int stride, int numSlots );
+const float	*vk_terrain_shadow_slots( void );					// r_smp: the render thread's copy of every slot (7 floats: xyz, 2 st), NULL without a pool; never written with r_smp 0
+void		vk_terrain_shadow_changes( const terrainSlotChange_t *changes, int count, qboolean all );
+qboolean	vk_sync_terrain_pool_smp( void );
 
 void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs );
 

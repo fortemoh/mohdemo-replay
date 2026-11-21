@@ -32,42 +32,12 @@ Event W_Button_Pressed
     "Signal that the button was pressed"
 );
 
-Event W_Button_HoverSound
-(
-    "hoversound",
-    EV_DEFAULT,
-    "s",
-    "soundName",
-    "Set the sound to play when this button is hovered over"
-);
-
-Event W_Button_HoverCommand
-(
-    "hovercommand",
-    EV_DEFAULT,
-    "s",
-    "string",
-    "Set the command to execute when this button is hovered over"
-);
-
-Event W_Button_MouseAwayCommand
-(
-    "mouseawaycommand",
-    EV_DEFAULT,
-    "s",
-    "string",
-    "Set the command to execute when the mouse exits this button"
-);
-
 CLASS_DECLARATION(UIWidget, UIButtonBase, NULL) {
     {&W_LeftMouseDown,           &UIButtonBase::Pressed              },
     {&W_LeftMouseUp,             &UIButtonBase::Released             },
     {&W_LeftMouseDragged,        &UIButtonBase::Dragged              },
     {&W_MouseEntered,            &UIButtonBase::MouseEntered         },
     {&W_MouseExited,             &UIButtonBase::MouseExited          },
-    {&W_Button_HoverSound,       &UIButtonBase::SetHoverSound        },
-    {&W_Button_HoverCommand,     &UIButtonBase::SetHoverCommand      },
-    {&W_Button_MouseAwayCommand, &UIButtonBase::SetMouseExitedCommand},
     {NULL,                       NULL                                }
 };
 
@@ -79,9 +49,8 @@ UIButtonBase::UIButtonBase()
 
 void UIButtonBase::Pressed(Event *ev)
 {
-    m_mouseState             = M_DRAGGING;
-    m_hovermaterial_active   = qtrue;
-    m_pressedmaterial_active = qtrue;
+    m_mouseState           = M_DRAGGING;
+    m_hovermaterial_active = qtrue;
     uWinMan.setFirstResponder(this);
 }
 
@@ -102,8 +71,7 @@ void UIButtonBase::Released(Event *ev)
     if (ev) {
         if (!getClientFrame().contains(MouseEventToClientPoint(ev))) {
             // not in the frame anymore
-            m_hovermaterial_active   = false;
-            m_pressedmaterial_active = false;
+            m_hovermaterial_active = false;
             return;
         }
     }
@@ -122,45 +90,16 @@ void UIButtonBase::MouseEntered(Event *ev)
 {
     m_hovermaterial_active = qtrue;
     uWinMan.ActivateControl(this);
-
-    if (m_hoverSound.length()) {
-        uii.Snd_PlaySound(m_hoverSound.c_str());
-    }
-
-    if (m_hoverCommand.length()) {
-        str stuff = m_hoverCommand + "\n";
-        uii.Cmd_Stuff(stuff.c_str());
-    }
 }
 
 void UIButtonBase::MouseExited(Event *ev)
 {
     SetHovermaterialActive(false);
-
-    if (m_mouseExitedCommand.length()) {
-        str stuff = m_mouseExitedCommand + "\n";
-        uii.Cmd_Stuff(stuff.c_str());
-    }
 }
 
 void UIButtonBase::Dragged(Event *ev)
 {
     SetHovermaterialActive(getClientFrame().contains(MouseEventToClientPoint(ev)));
-}
-
-void UIButtonBase::SetHoverSound(Event *ev)
-{
-    m_hoverSound = ev->GetString(1);
-}
-
-void UIButtonBase::SetHoverCommand(Event *ev)
-{
-    m_hoverCommand = ev->GetString(1);
-}
-
-void UIButtonBase::SetMouseExitedCommand(Event *ev)
-{
-    m_mouseExitedCommand = ev->GetString(1);
 }
 
 void UIButtonBase::Action(void)
@@ -239,88 +178,4 @@ qboolean UIButton::KeyEvent(int key, unsigned int time)
 
     UIButtonBase::Action();
     return true;
-}
-
-CLASS_DECLARATION(USignal, ToggleCVar, NULL) {
-    {NULL, NULL}
-};
-
-ToggleCVar::ToggleCVar()
-{
-    m_button = 0;
-}
-
-ToggleCVar::ToggleCVar(UIButton *button, const char *cvar)
-    : ToggleCVar()
-{
-    setButton(button);
-
-    if (cvar) {
-        setCVar(cvar);
-    }
-}
-
-void ToggleCVar::Press(Event *ev)
-{
-    if (m_cvarname.length()) {
-        UI_SetCvarInt(m_cvarname.c_str(), UI_GetCvarInt(m_cvarname.c_str(), 0));
-    }
-}
-
-void ToggleCVar::setCVar(const char *cvar)
-{
-    m_cvarname = cvar;
-}
-
-void ToggleCVar::setButton(UIButton *button)
-{
-    if (m_button) {
-        m_button->Disconnect(this, W_Button_Pressed);
-    }
-
-    m_button = button;
-    if (m_button) {
-        m_button->Connect(this, W_Button_Pressed, W_Button_Pressed);
-    }
-}
-
-CLASS_DECLARATION(USignal, ExecCmd, NULL) {
-    {NULL, NULL}
-};
-
-ExecCmd::ExecCmd()
-{
-    m_button = NULL;
-}
-
-ExecCmd::ExecCmd(UIButton *button, const char *cmd)
-    : ExecCmd()
-{
-    setButton(button);
-    setCommand(cmd);
-}
-
-void ExecCmd::Press(Event *ev)
-{
-    if (m_cmd.length()) {
-        str stuff = m_cmd + "\n";
-        uii.Cmd_Stuff(stuff.c_str());
-    }
-}
-
-void ExecCmd::setCommand(const char *cmd)
-{
-    m_cmd = cmd;
-}
-
-void ExecCmd::setButton(UIButton *button)
-{
-    if (m_button) {
-        m_button->Disconnect(this, W_Button_Pressed);
-    }
-
-    m_button = button;
-    if (m_button) {
-        m_button->Connect(this, W_Button_Pressed, W_Button_Pressed);
-    }
 }

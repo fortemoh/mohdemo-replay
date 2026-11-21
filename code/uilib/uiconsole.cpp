@@ -55,11 +55,26 @@ UIConsole::UIConsole()
 
 	m_scroll = new UIVertScroll();
 	AllowActivate(true);
+
+	m_maxitems = MAX_CONSOLE_ITEMS;
+	m_items    = new item[m_maxitems];
 }
 
-int UIConsole::getFirstItem(void)
+UIConsole::~UIConsole()
 {
-	return m_firstitem;
+	delete[] m_items;
+}
+
+void UIConsole::setMaxItems(int count)
+{
+	if (count < 1 || count == m_maxitems) {
+		return;
+	}
+
+	delete[] m_items;
+	m_maxitems = count;
+	m_items    = new item[m_maxitems];
+	Clear();
 }
 
 int UIConsole::getNextItem(int prev)
@@ -70,17 +85,17 @@ int UIConsole::getNextItem(int prev)
 
 	prev = prev + 1;
 
-	if (m_numitems < MAX_CONSOLE_ITEMS) {
+	if (m_numitems < m_maxitems) {
 		if (prev > m_firstitem) {
 			if (prev - m_firstitem >= m_numitems) {
 				return -1;
 			}
-		} else if (m_firstitem + m_numitems >= prev + MAX_CONSOLE_ITEMS) {
+		} else if (m_firstitem + m_numitems >= prev + m_maxitems) {
 			return -1;
 		}
 	}
 
-	if (prev >= MAX_CONSOLE_ITEMS) {
+	if (prev >= m_maxitems) {
 		prev = 0;
 	}
 
@@ -95,8 +110,8 @@ int UIConsole::getLastItem(void)
 {
 	int item = m_firstitem + m_numitems;
 
-	if (item - 1 >= MAX_CONSOLE_ITEMS) {
-		return item - (MAX_CONSOLE_ITEMS + 1);
+	if (item - 1 >= m_maxitems) {
+		return item - (m_maxitems + 1);
 	}
 
 	return item - 1;
@@ -106,20 +121,20 @@ int UIConsole::AddLine(void)
 {
 	int line = getLastItem() + 1;
 
-	if (line >= MAX_CONSOLE_ITEMS) {
+	if (line >= m_maxitems) {
 		line = 0;
 	}
 
-	if (m_numitems < MAX_CONSOLE_ITEMS) {
+	if (m_numitems < m_maxitems) {
 		m_numitems++;
 	} else {
 		m_firstitem++;
-		if (m_firstitem >= MAX_CONSOLE_ITEMS) {
+		if (m_firstitem >= m_maxitems) {
 			m_firstitem = 0;
 		}
 	}
 
-	assert(line < MAX_CONSOLE_ITEMS);
+	assert(line < m_maxitems);
 	return line;
 }
 
@@ -323,10 +338,6 @@ void UIConsole::AddText(const char *text, const UColor *pColor)
 	if (m_scroll->getTopItem() < 0) {
 		m_scroll->setTopItem(0);
 	}
-
-	if (curitem->lines == 9) {
-		AddText("\n", NULL);
-	}
 }
 
 void UIConsole::CalcLineBreaks(item& theItem)
@@ -340,6 +351,7 @@ void UIConsole::CalcLineBreaks(item& theItem)
 	lenchecking   = 0;
 	len_of_space  = m_font->getCharWidth(' ');
 	theItem.lines = 0;
+	theItem.breaks.clear();
 	remaining     = theItem.string.c_str();
 
 	for (i = 0; remaining[i]; i++) {
@@ -352,24 +364,20 @@ void UIConsole::CalcLineBreaks(item& theItem)
 			int charlen = m_font->getCharWidth(remaining[i]);
 			if (m_frame.size.width - m_scroll->getSize().width < (charlen + lenchecking + lensofar)) {
 				if (lensofar) {
-					lensofar                      = lenchecking;
-					theItem.breaks[theItem.lines] = sofar.length();
-					sofar                         = checking;
-					lenchecking                   = charlen;
-					checking                      = remaining[i];
+					lensofar    = lenchecking;
+					theItem.breaks.push_back(sofar.length());
+					sofar       = checking;
+					lenchecking = charlen;
+					checking    = remaining[i];
 				} else {
-					lensofar                      = charlen;
-					theItem.breaks[theItem.lines] = checking.length();
-					sofar                         = remaining[i];
-					lenchecking                   = 0;
-					checking                      = "";
+					lensofar    = charlen;
+					theItem.breaks.push_back(checking.length());
+					sofar       = remaining[i];
+					lenchecking = 0;
+					checking    = "";
 				}
 
 				theItem.lines++;
-
-				if (theItem.lines == ARRAY_LEN(theItem.breaks) - 1) {
-					break;
-				}
 			} else {
 				checking += remaining[i];
 				lenchecking += charlen;
@@ -377,10 +385,12 @@ void UIConsole::CalcLineBreaks(item& theItem)
 		}
 	}
 
-	if (remaining[i] || lenchecking || lensofar) {
-		theItem.breaks[theItem.lines++] = -1;
+	if (lenchecking || lensofar) {
+		theItem.breaks.push_back(-1);
+		theItem.lines++;
 	}
 
+	theItem.begins.resize(theItem.lines);
 	lensofar = 0;
 	for (i = 0; i < theItem.lines; i++) {
 		theItem.begins[i] = lensofar;
@@ -395,7 +405,7 @@ void UIConsole::Clear(void)
 	int i;
 
 	// clear items line
-	for (i = 0; i < MAX_CONSOLE_ITEMS; i++) {
+	for (i = 0; i < m_maxitems; i++) {
 		m_items[i].lines = 0;
 	}
 
@@ -509,6 +519,12 @@ void UIConsole::CharEvent(int ch)
 		return;
 	}
 
+	// Fixed: a letter past the fonts' 256 (€, ł, Russian) as '?'; char(ch) kept only its low byte, so ł came out
+	// as 'B', some as control characters, л as ';' (the typed line then ran a second command)
+	if (ch > 255) {
+		ch = '?';
+	}
+
 	m_refreshcompletionbuffer = true;
 
 	if (m_caret > m_currentline.length()) {
@@ -531,37 +547,86 @@ void UIConsole::CharEvent(int ch)
 	}
 }
 
+// Added: the clipboard's text put in at the caret, its line breaks and tabs as spaces, the characters
+// CharEvent would drop left out. Fixed: the clipboard is UTF-8 (SDL); its letters 160 to 255 (é ü ß) are put
+// in as typed, one byte each, the ones past 255 as '?' (all of them were dropped)
+void UIConsole::Paste(void)
+{
+	const unsigned char *clip = (const unsigned char *)uii.Sys_GetClipboard();
+	str                  text;
+
+	if (!clip) {
+		return;
+	}
+
+	while (*clip) {
+		int c = *clip++;
+
+		if (c >= 0xC0) {
+			// a sequence's lead byte (2, 3 or 4 bytes): its code point, '?' if cut short
+			int more = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : 1;
+
+			c &= 0x3F >> more;
+			for (; more && (*clip & 0xC0) == 0x80; more--) {
+				c = (c << 6) | (*clip++ & 0x3F);
+			}
+			if (more) {
+				c = '?';
+			}
+		} else if (c >= 0x80) {
+			// a stray continuation byte
+			c = '?';
+		}
+
+		if (c == '\n' || c == '\t') {
+			text += ' ';
+		} else if ((c > 31 && c < 128) || (c >= 160 && c <= 255)) {
+			text += char(c);
+		} else if (c > 255) {
+			text += '?';
+		}
+	}
+
+	if (!text.length()) {
+		return;
+	}
+
+	if (m_caret > m_currentline.length()) {
+		m_caret = m_currentline.length();
+	}
+
+	m_refreshcompletionbuffer = true;
+	m_currentline             = str(m_currentline, 0, m_caret) + text + (m_currentline.c_str() + m_caret);
+	m_caret += text.length();
+}
+
+// Added: Tab, the engine's completion of the whole line (cl_ui.cpp's UI_CompleteLine: the last word,
+// the matches listed, a cvar's value)
+void UIConsole::TabComplete(void)
+{
+	char line[MAX_STRING_CHARS];
+
+	m_refreshcompletionbuffer = true;
+
+	if (m_currentline.length() >= sizeof(line)) {
+		return;
+	}
+
+	Q_strncpyz(line, m_currentline.c_str(), sizeof(line));
+	uii.Cmd_CompleteLine(line, sizeof(line));
+	m_currentline = line;
+	m_caret       = m_currentline.length();
+}
+
 qboolean UIConsole::KeyEvent(int key, unsigned int time)
 {
-	const char *command;
-
 	if (key != K_TAB && key != K_BACKSPACE) {
 		m_refreshcompletionbuffer = true;
 	}
 
 	switch (key) {
 	case K_TAB:
-		if (m_refreshcompletionbuffer) {
-			m_completionbuffer        = m_currentline;
-			m_refreshcompletionbuffer = false;
-			m_cntcvarnumber           = 0;
-			m_cntcmdnumber            = 0;
-		}
-
-		command = uii.Cmd_CompleteCommandByNumber(m_completionbuffer.c_str(), m_cntcmdnumber++);
-		if (!command) {
-			command = uii.Cvar_CompleteCvarByNumber(m_completionbuffer.c_str(), m_cntcvarnumber++);
-			if (!command) {
-				m_currentline             = m_completionbuffer;
-				m_refreshcompletionbuffer = true;
-				m_caret                   = m_currentline.length();
-				break;
-			}
-		}
-
-		m_currentline = command;
-		m_currentline += ' ';
-		m_caret = m_currentline.length();
+		TabComplete();
 		break;
 
 	case K_ENTER:
@@ -684,7 +749,8 @@ qboolean UIConsole::KeyEvent(int key, unsigned int time)
 
 	case K_END:
 		if (uii.Sys_IsKeyDown(K_CTRL)) {
-			m_scroll->setTopItem(m_scroll->getNumItems());
+			// Fixed: the last page (the last line was put at the top, blank rows under it)
+			m_scroll->setTopItem(m_scroll->getNumItems() - m_scroll->getPageHeight());
 		} else {
 			m_caret = m_currentline.length();
 		}
@@ -692,6 +758,13 @@ qboolean UIConsole::KeyEvent(int key, unsigned int time)
 
 	case K_MWHEELDOWN:
 		m_scroll->AttemptScrollTo(m_scroll->getTopItem() + 2);
+		break;
+
+	case 'v':
+		// Added: Ctrl+V pastes
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			Paste();
+		}
 		break;
 
 	case K_MWHEELUP:
@@ -767,7 +840,11 @@ void UIConsole::OnSizeChanged(Event *ev)
 		}
 	}
 
-	m_scroll->setTopItem(m_scroll->getNumItems() - m_scroll->getPageHeight());
+	// Fixed: the bottom only for a console that was there (or has no lines); the place worked out above
+	// was always overridden
+	if (topitem == -1 || atbottom) {
+		m_scroll->setTopItem(m_scroll->getNumItems() - m_scroll->getPageHeight());
+	}
 	if (m_scroll->getTopItem() < 0) {
 		m_scroll->setTopItem(0);
 	}
@@ -852,6 +929,13 @@ void UIFloatingConsole::setConsoleHandler(consoleHandler_t handler)
 	}
 }
 
+void UIFloatingConsole::setScrollback(int lines)
+{
+	if (m_console) {
+		m_console->setMaxItems(lines);
+	}
+}
+
 void UIFloatingConsole::Clear(void)
 {
 	if (m_console) {
@@ -932,10 +1016,7 @@ void UIDMConsole::KeyEnter(void)
 			m_currentline = "";
 			m_caret       = 0;
 			return;
-		} else if (strstr(m_currentline, "wisper")
-				   || strstr(m_currentline, "private")
-				   // This one is opm-exclusive
-				   || strstr(m_currentline, "whisper")) {
+		} else if (strstr(m_currentline, "wisper") || strstr(m_currentline, "private")) {
 			char        szString[128];
 			const char *pszToken;
 
@@ -1005,178 +1086,45 @@ void UIDMConsole::Draw(void)
 	UIConsole::Draw();
 }
 
-qboolean UIDMConsole::KeyEvent(int key, unsigned int time)
+// Changed: the console's Tab as it was, the first word only, one match a press (commands, then cvars)
+void UIDMConsole::TabComplete(void)
 {
 	const char *command;
 
-	if (key != K_TAB && key != K_BACKSPACE) {
-		m_refreshcompletionbuffer = true;
+	if (m_refreshcompletionbuffer) {
+		m_completionbuffer        = m_currentline;
+		m_refreshcompletionbuffer = false;
+		m_cntcvarnumber           = 0;
+		m_cntcmdnumber            = 0;
 	}
 
-	switch (key) {
-	case K_TAB:
-		if (m_refreshcompletionbuffer) {
-			m_completionbuffer        = m_currentline;
-			m_refreshcompletionbuffer = false;
-			m_cntcvarnumber           = 0;
-			m_cntcmdnumber            = 0;
-		}
-
-		command = uii.Cmd_CompleteCommandByNumber(m_completionbuffer.c_str(), m_cntcmdnumber++);
+	command = uii.Cmd_CompleteCommandByNumber(m_completionbuffer.c_str(), m_cntcmdnumber++);
+	if (!command) {
+		command = uii.Cvar_CompleteCvarByNumber(m_completionbuffer.c_str(), m_cntcvarnumber++);
 		if (!command) {
-			command = uii.Cvar_CompleteCvarByNumber(m_completionbuffer.c_str(), m_cntcvarnumber++);
-			if (!command) {
-				m_currentline             = m_completionbuffer;
-				m_refreshcompletionbuffer = true;
-				m_caret                   = m_currentline.length();
-				break;
-			}
-		}
-
-		m_currentline = command;
-		m_currentline += ' ';
-		m_caret = m_currentline.length();
-		break;
-
-	case K_ENTER:
-	case K_KP_ENTER:
-		if (m_currentline.length()) {
-			KeyEnter();
-		} else {
-			// nothing, close the dm console
-			uii.UI_CloseDMConsole();
-		}
-		break;
-
-	case K_BACKSPACE:
-		if (!m_caret) {
-			break;
-		}
-
-		if (m_refreshcompletionbuffer) {
-			m_currentline = str(m_currentline, 0, m_caret - 1) + (m_currentline.c_str() + m_caret);
-			m_caret--;
-		} else {
 			m_currentline             = m_completionbuffer;
-			m_cntcvarnumber           = 0;
-			m_cntcmdnumber            = 0;
 			m_refreshcompletionbuffer = true;
-
-			m_caret = m_currentline.length();
+			m_caret                   = m_currentline.length();
+			return;
 		}
-		break;
-
-	case K_UPARROW:
-		if (uii.Sys_IsKeyDown(K_CTRL)) {
-			// scroll up using the arrow key
-			if (m_scroll->getTopItem() > 0) {
-				m_scroll->setTopItem(m_scroll->getTopItem() - 1);
-			}
-		} else {
-			if (m_history.getCount()) {
-				if (m_historyposition) {
-					m_history.setPosition(m_historyposition);
-
-					if (!m_history.IteratePrev()) {
-						break;
-					}
-				} else {
-					m_history.IterateFromTail();
-				}
-
-				m_historyposition = m_history.getPosition();
-				m_currentline     = m_history.getCurrent();
-				m_caret           = m_currentline.length();
-			}
-		}
-		break;
-
-	case K_DOWNARROW:
-		if (uii.Sys_IsKeyDown(K_CTRL)) {
-			// scroll down using the arrow key
-			if (m_scroll->getTopItem() + m_scroll->getPageHeight() < m_scroll->getNumItems()) {
-				m_scroll->setTopItem(m_scroll->getTopItem() + 1);
-			}
-		} else {
-			if (m_history.getCount() && m_historyposition) {
-				m_history.setPosition(m_historyposition);
-
-				if (!m_history.IterateNext()) {
-					m_currentline     = str();
-					m_caret           = 0;
-					m_historyposition = NULL;
-					break;
-				}
-
-				m_historyposition = m_history.getPosition();
-				m_currentline     = m_history.getCurrent();
-				m_caret           = m_currentline.length();
-			}
-		}
-		break;
-
-	case K_LEFTARROW:
-		if (m_caret > 0) {
-			m_caret--;
-		}
-		break;
-
-	case K_RIGHTARROW:
-		if (m_caret < m_currentline.length()) {
-			m_caret++;
-		}
-		break;
-
-	case K_DEL:
-		if (m_caret >= m_currentline.length()) {
-			break;
-		}
-
-		m_currentline = str(m_currentline, 0, m_caret) + (m_currentline.c_str() + m_caret + 1);
-		break;
-
-	case K_PGDN:
-		if (m_scroll->getNumItems() >= m_scroll->getPageHeight()) {
-			unsigned int top = m_scroll->getNumItems() - m_scroll->getPageHeight();
-			if (m_scroll->getPageHeight() + m_scroll->getTopItem() < top) {
-				top = m_scroll->getPageHeight() + m_scroll->getTopItem();
-			}
-			m_scroll->setTopItem(top);
-		}
-		break;
-
-	case K_PGUP:
-		if (m_scroll->getNumItems() >= m_scroll->getPageHeight()) {
-			m_scroll->setTopItem(m_scroll->getTopItem() - m_scroll->getPageHeight());
-		}
-		break;
-
-	case K_HOME:
-		if (uii.Sys_IsKeyDown(K_CTRL)) {
-			m_scroll->setTopItem(0);
-		} else {
-			m_caret = 0;
-		}
-		break;
-
-	case K_END:
-		if (uii.Sys_IsKeyDown(K_CTRL)) {
-			m_scroll->setTopItem(m_scroll->getNumItems());
-		} else {
-			m_caret = m_currentline.length();
-		}
-		break;
-
-	case K_MWHEELDOWN:
-		m_scroll->AttemptScrollTo(m_scroll->getTopItem() + 2);
-		break;
-
-	case K_MWHEELUP:
-		m_scroll->AttemptScrollTo(m_scroll->getTopItem() - 2);
-		break;
 	}
 
-	return true;
+	m_currentline = command;
+	m_currentline += ' ';
+	m_caret = m_currentline.length();
+}
+
+qboolean UIDMConsole::KeyEvent(int key, unsigned int time)
+{
+	// Changed: the console's keys, but for Enter on an empty line
+	if ((key == K_ENTER || key == K_KP_ENTER) && !m_currentline.length()) {
+		m_refreshcompletionbuffer = true;
+		// nothing, close the dm console
+		uii.UI_CloseDMConsole();
+		return true;
+	}
+
+	return UIConsole::KeyEvent(key, time);
 }
 
 qboolean UIDMConsole::GetQuickMessageMode(void)

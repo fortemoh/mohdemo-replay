@@ -623,7 +623,8 @@ void CG_CalcViewModelMovement(float fViewBobPhase, float fViewBobAmp, vec_t *vVe
                 fDelta = 250.0 - vm_offset_vel_base->value;
             }
 
-            fPhase = fDelta / (250.0 - vm_offset_vel_base->value);
+            // scaled by the player's cg_viewmodel_movedrop (1: the game's own)
+            fPhase = fDelta / (250.0 - vm_offset_vel_base->value) * CG_ViewModelMoveDrop();
             vTargOfs[0] += fPhase * vm_offset_vel_front->value;
             vTargOfs[1] += fPhase * vm_offset_vel_side->value;
             vTargOfs[2] += fPhase * vm_offset_vel_up->value;

@@ -534,6 +534,20 @@ int64_t Sys_Microseconds (void)
 }
 
 /*
+================
+Sys_Nanoseconds
+================
+*/
+int64_t Sys_Nanoseconds (void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+/*
 ==================
 Sys_RandomBytes
 ==================

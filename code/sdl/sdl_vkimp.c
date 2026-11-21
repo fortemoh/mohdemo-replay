@@ -47,7 +47,6 @@ SDL_Window *SDL_window = NULL;
 
 cvar_t *r_allowResize; // make window resizable
 cvar_t *r_centerWindow;
-cvar_t *r_sdlDriver;
 
 /*
 ===============
@@ -421,7 +420,7 @@ void VKimp_Init( void )
 {
 	ri.Printf( PRINT_DEVELOPER, "VKimp_Init( )\n" );
 
-	r_sdlDriver = ri.Cvar_Get( "r_sdlDriver", "", CVAR_ROM );
+	ri.Cvar_Get( "r_sdlDriver", "", CVAR_ROM );
 	r_allowResize = ri.Cvar_Get( "r_allowResize", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	r_centerWindow = ri.Cvar_Get( "r_centerWindow", "0", CVAR_ARCHIVE | CVAR_LATCH );
 

@@ -22,88 +22,33 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #pragma once
 
-typedef enum {
-    L_STATBAR_NONE,
-    L_STATBAR_HORIZONTAL,
-    L_STATBAR_VERTICAL,
-    L_STATBAR_VERTICAL_REVERSE,
-    L_STATBAR_VERTICAL_STAGGER_EVEN,
-    L_STATBAR_VERTICAL_STAGGER_ODD,
-    L_STATBAR_CIRCULAR,
-    L_STATBAR_NEEDLE,
-    L_STATBAR_ROTATOR,
-    L_STATBAR_COMPASS,
-    L_STATBAR_SPINNER,
-    L_STATBAR_HEADING_SPINNER
-} statbar_orientation_t;
-
-extern Event EV_ClearInvItemReference;
-
 class UIFakkLabel : public UILabel
 {
 protected:
-    SafePtr<inventory_item_t> m_lastitem;
-    int                       m_lastitemindex;
-    int                       m_stat;
-    int                       m_stat_alpha;
-    int                       m_stat_configstring;
-    int                       m_maxstat;
-    int                       m_itemindex;
-    int                       m_inventoryrendermodelindex;
-    str                       m_sDrawModelName;
-    qboolean                  m_rendermodel;
-    statbar_orientation_t     m_statbar_or;
-    float                     m_statbar_min;
-    float                     m_statbar_max;
-    float                     m_lastfrac;
-    float                     m_flashtime;
-    // Added in OPM
-    int                       m_lastservertime;
-    vec3_t                    m_offset;
-    vec3_t                    m_rotateoffset;
-    vec3_t                    m_angles;
-    float                     m_scale;
-    str                       m_anim;
-    UIReggedMaterial         *m_statbar_material;
-    UIReggedMaterial         *m_statbar_material_flash;
-    UIReggedMaterial         *m_statbar_material_marker;
+    qboolean m_rendermodel;
+    vec3_t   m_offset;
+    vec3_t   m_rotateoffset;
+    vec3_t   m_angles;
+    float    m_scale;
+    str      m_anim;
+    bool     m_modelaspect; // Added: the model's view as wide as the label (modelaspect)
+    bool     m_modelstudio; // Added: lit by a studio's light, not the map's (modelstudio)
 
 public:
     CLASS_PROTOTYPE(UIFakkLabel);
 
     UIFakkLabel();
 
-    void LayoutPlayerStat(Event *ev);
-    void LayoutPlayerStatAlpha(Event *ev); // Added in 2.0
-    void LayoutPlayerStatConfigstring(Event *ev);
-    void LayoutMaxPlayerStat(Event *ev);
-    void LayoutItemIndex(Event *ev);
-    void InventoryRenderModelIndex(Event *ev);
-    void LayoutModelName(Event *ev);
-    void ClearInvItemReference(Event *ev);
-    void LayoutStatbar(Event *ev);
-    void LayoutStatbarShader(Event *ev);
-    void LayoutStatbarTileShader(Event *ev);
-    void LayoutStatbarShader_Flash(Event *ev);
-    void LayoutStatbarShader_Marker(Event *ev); // Added in 2.0
-    void LayoutStatbarEndAngles(Event *ev);
-    void LayoutStatbarNeedleWidth(Event *ev);
-    void LayoutStatbarRotatorSize(Event *ev);
-    void LayoutStatbarTileShader_Flash(Event *ev);
     void LayoutRenderModel(Event *ev);
     void LayoutRenderModelOffset(Event *ev);
     void LayoutRenderModelRotateOffset(Event *ev);
     void LayoutRenderModelAngles(Event *ev);
     void LayoutRenderModelScale(Event *ev);
     void LayoutRenderModelAnim(Event *ev);
-
-    void DrawStatbar(float frac);
-    void DrawStatCircle(float frac);
-    void DrawStatNeedle(float frac);
-    void DrawStatRotator(float frac);
-    void DrawStatCompass(float frac);
-    void DrawStatSpinner(float frac);
-    void StatCircleTexCoord(float fAng, vec3_t vTexCoord);
+    void LayoutRenderModelAspect(Event *ev); // Added
+    void LayoutRenderModelStudio(Event *ev); // Added
 
     void Draw(void) override;
+    // Added: kept by the draw cache when drawn as a UILabel (no model)
+    bool CacheDraw(void) override { return !m_rendermodel; }
 };

@@ -1,0 +1,157 @@
+// The Competitive HUD as CS2's (cg_hudstyle 2): bottom center, along an 800 px strip:
+// the health over its bar, a thin line in to the team's badge in the middle,
+// a thin line out to the ammo (clip | reserve and a bullet)
+menu "hud_comp_strip" 800 104 NONE 0
+virtualres 1 1920 1080
+drawcache 1
+align centerx bottom
+bgcolor 0 0 0 0
+borderstyle NONE
+
+resource
+Label
+{
+name "health"
+rect 59 24 47 56
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-32s
+textalign centerx
+linkcvar ui_hud_health
+colorcvar ui_hud_health_col
+enabledcvar ui_hud_health_on
+}
+
+resource
+Label
+{
+name "healthbar"
+rect 59 72 47 5
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_health_on
+shape fill $ui_hud_acc 1
+}
+
+resource
+Label
+{
+name "linein"
+rect 194 52 172 1
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_badge_on
+shape hgradient 0 1 $ui_hud_acc_line 0 $ui_hud_acc_line 0.702
+}
+
+resource
+Label
+{
+name "lineout"
+rect 432 52 190 1
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_badge_on
+shape hgradient 0 1 $ui_hud_acc_line 0.702 $ui_hud_acc_line 0
+}
+
+// the badge: a disc, the team's icon filling it, the ring over it
+resource
+Label
+{
+name "badge"
+rect 372 24 56 56
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_badge_on
+shape circle 0.086 0.11 0.118 0.549
+}
+
+resource
+Label
+{
+name "badgeallies"
+rect 372 24 56 56
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_allies
+shape svg 1 1 1 1 ui/outlines/team/allies.svg center
+}
+
+resource
+Label
+{
+name "badgeaxis"
+rect 372 24 56 56
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_axis
+shape svg 1 1 1 1 ui/outlines/team/axis.svg center
+}
+
+resource
+Label
+{
+name "badgering"
+rect 372 24 56 56
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_badge_on
+shape ring 2 $ui_hud_acc_ring 1
+}
+
+// the ammo, each after the one before
+resource
+Label
+{
+name "clip"
+rect 655 24 80 56
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-36
+textalign left
+linkcvar ui_hud_clip
+colorcvar ui_hud_acc
+enabledcvar ui_hud_ammo_on
+}
+
+resource
+Label
+{
+name "ammosep"
+rect 700 42.5 2 19
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_ammo_on
+shape fill $ui_hud_acc_line 0.6
+flowafter clip 24
+}
+
+resource
+Label
+{
+name "reserve"
+rect 714 24 80 56
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-21
+textalign left
+linkcvar ui_hud_ammo
+colorcvar ui_hud_acc
+enabledcvar ui_hud_ammo_on
+flowafter ammosep 10
+}
+
+resource
+Label
+{
+name "bullet"
+rect 760 44 16 16
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_ammo_on
+shape roundbox 2 $ui_hud_acc 1 5 17 -45
+flowafter reserve 19.5
+}
+
+end.

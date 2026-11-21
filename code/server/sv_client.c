@@ -923,6 +923,11 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 	client->deltaMessage = -1;
 	client->lastSnapshotTime = 0;	// generate a snapshot immediately
 
+	// Added in Reloaded
+	//  the client starts out seeing through its own eyes
+	client->lastViewEntNum = clientNum;
+	Com_Memset(client->viewUsageSalt, 0, sizeof(client->viewUsageSalt));
+
 	if(cmd)
 		memcpy(&client->lastUsercmd, cmd, sizeof(client->lastUsercmd));
 	else

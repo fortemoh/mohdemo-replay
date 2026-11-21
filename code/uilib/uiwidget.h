@@ -22,6 +22,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #pragma once
 
+#include <vector>
+
 #include "usignal.h"
 #include "../qcommon/q_shared.h"
 #include "../corepp/str.h"
@@ -46,19 +48,13 @@ public:
     void       ReregisterMaterial(void);
     void       CleanupMaterial(void);
     void       SetMaterial(const str& name);
-    void       RefreshMaterial(void);
     str        GetName(void);
 };
 
 // widget flags
-#define WF_STRETCH_VERTICAL   (1 << 0)
-#define WF_STRETCH_HORIZONTAL (1 << 1)
 #define WF_DIRECTED           (1 << 2)
-#define WF_TILESHADER         (1 << 3)
 #define WF_ALWAYS_BOTTOM      (1 << 4)
-#define WF_ALWAYS_TOP         (1 << 5)
 #define WF_NOPARENTADJUST     (1 << 6)
-#define WF_DONTLOCALIZE       (1 << 7)
 
 // widget alignment flags
 #define WA_LEFT    (1 << 0)
@@ -79,14 +75,6 @@ typedef enum {
 } borderstyle_t;
 
 typedef enum {
-    D_NONE,
-    D_FROM_LEFT,
-    D_FROM_RIGHT,
-    D_FROM_BOTTOM,
-    D_FROM_TOP
-} direction_t;
-
-typedef enum {
     MOTION_IN,
     MOTION_OUT
 } motion_t;
@@ -99,6 +87,14 @@ typedef enum {
     SEQUENCE_FADEOUT
 } fadesequence_t;
 
+// Added: the draw cache (drawcache): a cvar a widget drew from, something
+// drawn that changes by itself (not to be kept)
+void UI_DrawDep(cvar_t *cvar);
+void UI_DrawLive(void);
+void UI_DrawReset(void);
+// ... a hash of what a widget draws from (DrawKey), h the hash so far
+int UI_DrawHash(int h, const void *data, size_t size);
+
 class UIWidget : public USignal
 {
     friend class Menu;
@@ -108,7 +104,6 @@ class UIWidget : public USignal
 protected:
     UIRect2D              m_frame;
     vec2_t                m_vVirtualScale;
-    UIPoint2D             m_startingpos;
     UIPoint2D             m_origin;
     UIRect2D              m_screenframe;
     UIPoint2D             m_screenorigin;
@@ -120,6 +115,9 @@ protected:
     borderstyle_t         m_borderStyle;
     bool                  m_visible;
     bool                  m_enabled;
+    // Added: drawcache (the draw cache, below): beside what every frame's
+    // Display reads of every widget, shown or not
+    bool                  m_drawCache;
     UIFont               *m_font;
     class UIWidget       *m_parent;
     Container<UIWidget *> m_children;
@@ -128,18 +126,12 @@ protected:
     str                   m_cvarname;
     str                   m_cvarvalue;
     str                   m_command;
-    Container<str *>      m_showcommands;
-    Container<str *>      m_hidecommands;
     str                   m_title;
     float                 m_indent;
     float                 m_bottomindent;
     UIReggedMaterial     *m_material;
     UIReggedMaterial     *m_hovermaterial;
-    UIReggedMaterial     *m_pressedmaterial;
     bool                  m_hovermaterial_active;
-    bool                  m_pressedmaterial_active;
-    direction_t           m_direction;
-    direction_t           m_direction_orig;
     motion_t              m_motiontype;
     float                 m_starttime;
     float                 m_fadetime;
@@ -153,31 +145,72 @@ protected:
     float                 m_fadeSequenceRemainingTime;
     float                 m_fadeSequenceLastTime;
     int                   m_fadeSequenceState;
-    str                   m_stopsound;
     str                   m_clicksound;
     int                   m_align;
     int                   m_flags;
     bool                  m_dying;
     int                   m_ordernum;
-    int                   m_configstring_index;
     fonthorzjustify_t     m_iFontAlignmentHorizontal;
     fontvertjustify_t     m_iFontAlignmentVertical;
     qboolean              m_bVirtual;
     str                   m_enabledCvar;
-    //
-    // Added in 2.0
-    //
-    cvar_t *m_scaleCvar;
-
+    // Added: enabledcvar's terms (a&b&!c), their cvars found once
+    str                   m_enabledNames[8];
+    cvar_t               *m_enabledVars[8];
+    int                   m_numEnabled; // -1: not split yet
     //
     // Added in OPM
     //
     float lastShowTime;
 
+    //
+    // Added: a design-size menu's widgets (virtualres 1 W H) and baked shapes
+    //
+    vec2_t         m_designSize; // 0 0: none
+    UIRect2D       m_designRect; // the rect as the URC gave it
+    bool           m_designSet;
+    Container<str> m_shapes;     // the "shape" lines, a $cvar in one its value
+    str            m_rotateCvar; // the shapes turned by its degrees, clockwise
+    str            m_alphaCvar;  // the widget faded by its value
+    str            m_colorCvar;  // the text's and shape's color: the cvar's "r g b a"
+    cvar_t        *m_cvars[4];   // colorcvar's, alphacvar's, rotatecvar's, widthcvar's, found once
+    int            m_colorCount; // colorcvar's modificationCount read
+    float          m_color[4];
+    str            m_widthCvar;  // the shape drawn this fraction wide
+    bool           m_widthLeft;  // ... from its left, else about its middle
+    vec2_t         m_anchor;     // a menu's middle at these fractions of the screen (-1: its align)
+    // the layout rules (flowafter flowbefore flowbelow fitbelow moveif):
+    // applied in order to the URC's rect each frame, from
+    // the siblings' boxes as they are then (Flow)
+    struct uiRule_t {
+        int       kind;
+        str       name;
+        UIWidget *sibling;
+        float     a, b;
+    };
+    std::vector<uiRule_t> m_rules;
+    UIRect2D       m_designBase; // the URC's rect
+    bool           m_baseSet;
+    bool           m_flowing;    // in its Flow (its own text measured: as it is)
+    float          m_fitWidth;   // a longer text drawn smaller to fit (fitwidth), 0 none
+    bool           m_shapeDynamic; // a $cvar in its lines
+    str            m_shapeText;  // the lines as last baked
+    int            m_shapeStamp;
+    int            m_shapeW, m_shapeH;
+    qhandle_t      m_shapeHandle;
+    // the draw cache (drawcache): what it and its children drew, a 2D list,
+    // drawn again while what it was drawn from stays: the cvars read
+    // (UI_DrawDep), its frames, the alpha given, DrawKey
+    int                                  m_drawList;
+    bool                                 m_drawValid, m_drawLive;
+    int                                  m_drawStamp, m_drawKey;
+    float                                m_drawAlpha;
+    UIRect2D                             m_drawRects[3];
+    std::vector<std::pair<cvar_t *, int>> m_drawDeps;
+    std::vector<std::pair<UIWidget *, int>> m_drawKeys; // its children drawing from more (DrawKey), their states
+
 public:
     CLASS_PROTOTYPE(UIWidget);
-
-    void (*m_commandhandler)(const char *, void *);
 
 protected:
     bool         addChild(UIWidget *widget);
@@ -192,18 +225,6 @@ protected:
     void         Hide(Event *ev);
     void         Activate(Event *ev);
     void         BringToFront(void);
-    static void  SplitWidgets(
-         Container<UIWidget *>& src,
-         Container<UIWidget *>& bottom,
-         Container<UIWidget *>& normal,
-         Container<UIWidget *>& top
-     );
-    static void CombineWidgets(
-        Container<UIWidget *>& dst,
-        Container<UIWidget *>& bottom,
-        Container<UIWidget *>& normal,
-        Container<UIWidget *>& top
-    );
     static void ArrangeWidgetList(Container<UIWidget *>& list);
 
 public:
@@ -221,7 +242,6 @@ public:
         const char *fontname = "verdana-12"
     );
     void InitFrame(UIWidget *parentview, const UIRect2D& r, int border, const char *fontname = "verdana-12");
-    void LayoutSize(Event *ev);
     void LayoutRect(Event *ev);
     void LayoutName(Event *ev);
     void LayoutTitle(Event *ev);
@@ -229,51 +249,62 @@ public:
     void LayoutBgColor(Event *ev);
     void LayoutFgColor(Event *ev);
     void LayoutBorderStyle(Event *ev);
-    void LayoutBorderColor(Event *ev);
     void LayoutShader(Event *ev);
-    void LayoutTileShader(Event *ev);
     void LayoutHoverShader(Event *ev);
-    void LayoutPressedShader(Event *ev);
     void LayoutFadeIn(Event *ev);
-    void LayoutStopSound(Event *ev);
     void LayoutClickSound(Event *ev);
-    void LayoutStretch(Event *ev);
     void LayoutVirtualRes(Event *ev);
-    void LayoutInitData(Event *ev);
-    void LayoutDirection(Event *ev);
     void LayoutAlign(Event *ev);
     void LayoutStuffCommand(Event *ev);
     void LayoutLinkCvar(Event *ev);
-    void LayoutNoParentClipping(Event *ev);
-    void LayoutNoParentAdjustment(Event *ev);
     void LayoutOrderNumber(Event *ev);
     void TextAlignment(Event *ev);
-    void LayoutAliasCache(Event *ev);
     void SetEnabledCvar(Event *ev);
-    void SetScaleCvar(Event *ev);
+    // Added
+    void LayoutShape(Event *ev);
+    void LayoutRotateCvar(Event *ev);
+    void LayoutAlphaCvar(Event *ev);
+    void LayoutColorCvar(Event *ev);
+    void LayoutWidthCvar(Event *ev);
+    void LayoutFlowAfter(Event *ev);
+    void LayoutAnchor(Event *ev);
+    void Flow(void);
+    virtual UIRect2D ContentBox(void); // its text's box (a label's), else its rect: design units
+    bool             Shown(void);      // enabled and visible
+    void             AddRule(int kind, Event *ev, int floats);
+    void             LayoutFlowBefore(Event *ev);
+    void             LayoutFlowBelow(Event *ev);
+    void             LayoutFitBelow(Event *ev);
+    void             LayoutMoveIf(Event *ev);
+    void             LayoutFitWidth(Event *ev);
+    cvar_t *CvarOf(int i, const str& name);
+    bool DesignFrame(void);
+    // a design-size menu's widget: its rect in design units (the URC's, or as set), and set anew while the game runs
+    // (its menu drawn again)
+    UIRect2D DesignRect(void);
+    void     SetDesignRect(const UIRect2D& r);
+    void DrawShapes(void);
+    void BakeShapes(void); // its shape baked at its size now (a load), not at its first draw
+    Container<str>& getShapes(void) { return m_shapes; }
 
     // Added in 2.0
     //====
-    void SetDontLocalize(Event *ev);
     void EventFadeSequence(Event *ev);
     //====
 
     void            SetVirtualScale(vec2_t out);
-    void            SetDontLocalize();
     void            setParent(UIWidget *parent);
     class UIWidget *getParent(void);
     class UIWidget *getFirstChild(void);
-    class UIWidget *getNextSibling(void);
     class UIWidget *getNextChild(UIWidget *child);
     class UIWidget *getPrevChild(UIWidget *child);
     class UIWidget *getPrevSibling(void);
-    class UIWidget *getPrevSibling(UIWidget *curr);
     class UIWidget *getLastSibling(void);
-    class UIWidget *findSibling(str name);
 
     void               Enable(void);
     void               Disable(void);
     bool               isEnabled(void);
+    bool               EnabledByCvars(void); // Added: isEnabled's enabledcvar terms
     bool               IsDying(void);
     class UIWidget    *FindResponder(const UIPoint2D& pos);
     void               setFont(const char *name);
@@ -283,53 +314,43 @@ public:
     bool               getShow(void);
     class UColor       getBackgroundColor(void);
     virtual void       setBackgroundColor(const UColor& color, bool setbordercolor);
-    class UBorderColor getBorderColor(void);
     void               setBorderColor(const UBorderColor& color);
     class UColor       getForegroundColor(void);
     virtual void       setForegroundColor(const UColor& color);
-    borderstyle_t      getBorderStyle(void);
     void               setBorderStyle(borderstyle_t style);
     class UISize2D     getSize(void);
     void               setSize(const UISize2D& newsize);
     class UIRect2D     getFrame(void);
     void               setFrame(const UIRect2D& newframe);
-    class UIPoint2D    getOrigin(void);
-    void               setOrigin(const UIPoint2D& neworigin);
     void               setName(str name);
     const char        *getName(void);
     void               setTitle(str title);
     const char        *getTitle(void);
-    void               setDirection(direction_t dir);
-    direction_t        getDirection(void);
-    void               setMotionType(motion_t type);
     motion_t           getMotionType(void);
     void               setMotionTime(float time);
     float              getMotionTime(void);
-    void               setAlign(int align);
-    int                getAlign(void);
     void               setMaterial(UIReggedMaterial *mat);
+    UIReggedMaterial  *getMaterial(void);
     void               setHoverMaterial(UIReggedMaterial *mat);
-    void               setPressedMaterial(UIReggedMaterial *mat);
-    class UIPoint2D    getLocalPoint(const UIPoint2D& pos);
-    class UIPoint2D    getGlobalPoint(const UIPoint2D& pos);
     virtual void       setBackgroundAlpha(float f);
-    float              getBackgroundAlpha(void);
     void               Display(const UIRect2D& drawframe, float parent_alpha);
+    void               DisplayNow(const UIRect2D& drawframe, float parent_alpha);
+    // Added: the draw cache: whether it draws only from its rect, colors,
+    // shapes and the cvars it reads (UI_DrawDep), and what else it draws from
+    virtual bool       CacheDraw(void);
+    virtual int        DrawKey(void) { return 0; }
+    virtual bool       DrawKeyed(void) { return false; } // DrawKey or CacheDraw change with more than cvars
+    int                DrawState(void);
+    void               AddDrawDep(cvar_t *cvar);
+    void               LayoutDrawCache(Event *ev);
     virtual qboolean   KeyEvent(int key, unsigned int time);
     virtual void       CharEvent(int ch);
-    virtual void       UpdateData(void);
-    virtual void       UpdateUIElement(void);
-    float              getTitleWidth(void);
-    float              getTitleHeight(void);
     bool               CanActivate(void);
     void               AllowActivate(bool canactivate);
     bool               IsActive(void);
     bool               IsVisible(void);
     virtual void       LinkCvar(str cvarname);
     void               LinkCommand(str cmd);
-    void               ExecuteShowCommands(void);
-    void               ExecuteHideCommands(void);
-    void               InitializeCommandHandler(void (*fcn)(const char *, void *));
     class UIWidget    *FindWidget(str name);
     void               ResetMotion(motion_t type);
     virtual void       Realign(void);
@@ -338,27 +359,17 @@ public:
     class UIPoint2D    MouseEventToClientPoint(Event *ev);
     class UIRect2D     getClientFrame(void);
     void               setAlwaysOnBottom(bool b);
-    void               setAlwaysOnTop(bool b);
     bool               getAlwaysOnBottom(void);
-    bool               getAlwaysOnTop(void);
     bool               SendSignal(Event& event);
-    void               ShowCommand(Event *ev);
-    void               HideCommand(Event *ev);
-    void               AddFlag(int flag);
     void               SetHovermaterialActive(bool a);
-    void               SetPressedmaterialActive(bool a);
     int                getOrderNum(void);
-    class str          getCommand(void);
     void               ActivateOrder(void);
     void               EnableEvent(Event *ev);
     void               DisableEvent(Event *ev);
-    void               setConfigstringIndex(int cs);
-    int                getConfigstringIndex(void);
     bool               PassEventToWidget(str name, Event *ev);
 
     // Added in OPM
     UIFont       *getFont() const;
-    bool          isVirtual() const;
     const vec2_t& getVirtualScale() const;
     const vec2_t& getHighResScale() const;
 };
@@ -367,9 +378,7 @@ class UIWidgetContainer : public UIWidget
 {
     UColor   m_bgfill;
     qboolean m_fullscreen;
-    int      m_vidmode;
     int      m_currentwidnum;
-    int      m_maxordernum;
 
 public:
     class UILayout *m_layout;
@@ -386,11 +395,7 @@ public:
     void      Realign(void) override;
     void      SetBGFill(Event *ev);
     void      SetFullscreen(Event *ev);
-    void      SetVidMode(Event *ev);
-    int       getVidMode(void);
     qboolean  isFullscreen(void);
-    UIWidget *GetNextWidgetInOrder(void);
-    UIWidget *GetPrevWidgetInOrder(void);
     void      SetActiveWidgetOrderNum(UIWidget *wid);
     void      SetActiveWidgetOrderNum(int num);
     void      SetLastActiveWidgetOrderNum(void);
@@ -408,7 +413,6 @@ extern Event EV_Widget_Enable;
 extern Event EV_Widget_Disable;
 extern Event W_RealignWidget;
 extern Event W_Draw;
-extern Event EV_Layout_Size;
 extern Event EV_Layout_Rect;
 extern Event EV_Layout_Name;
 extern Event EV_Layout_Title;
@@ -416,32 +420,20 @@ extern Event EV_Layout_Font;
 extern Event EV_Layout_BGColor;
 extern Event EV_Layout_FGColor;
 extern Event EV_Layout_Borderstyle;
-extern Event EV_Layout_BorderColor;
+extern Event EV_Layout_AlphaCvar; // Added
 extern Event EV_Layout_Shader;
-extern Event EV_Layout_TileShader;
 extern Event EV_Layout_HoverShader;
-extern Event EV_Layout_PressedShader;
 extern Event EV_Layout_FadeIn;
-extern Event EV_Layout_StopSound;
 extern Event EV_Layout_ClickSound;
-extern Event EV_Layout_Stretch;
 extern Event EV_Layout_VirtualRes;
-extern Event EV_Layout_InitData;
-extern Event EV_Layout_Direction;
 extern Event EV_Layout_Align;
 extern Event EV_Layout_StuffCommand;
 extern Event EV_Layout_LinkCvar;
-extern Event EV_Layout_NoParentClipping;
-extern Event EV_Layout_NoParentAdjustment;
-extern Event EV_Widget_HideCommand;
-extern Event EV_Widget_ShowCommand;
 extern Event EV_Widget_OrderNumber;
 extern Event EV_Widget_TextAlignment;
 extern Event EV_Widget_EnabledCvar;
-extern Event EV_Layout_AliasCache;
 extern Event EV_Layout_BGFill;
 extern Event EV_Layout_Fullscreen;
-extern Event EV_Layout_VidMode;
 
 void SetColor(const UColor& color, float alpha);
 void DrawBox(const UIRect2D& rect, const UColor& color, float alpha);

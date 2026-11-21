@@ -1045,6 +1045,7 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	svEntity_t					*svEnt;
 	gentity_t					*clent;
 	int							clientNum;
+	int							viewEntNum;
 	playerState_t				*ps;
 
 	// bump the counter used to prevent double adding
@@ -1071,6 +1072,29 @@ static void SV_BuildClientSnapshot( client_t *client ) {
     frame->ps.net_pm_flags = CPT_DenormalizePlayerStateFlags(ps->pm_flags);
     frame->ps.iNetViewModelAnim = CPT_DenormalizeViewModelAnim(ps->iViewModelAnim);
 
+	// Added in Reloaded
+	//  First-person spectating: the game asks for this snapshot to be seen
+	//  through another client's eyes. Presenting that client's number in the
+	//  playerstate is enough for any cgame (including stock ones) to draw that
+	//  client's entity as its own first-person model, the same way follow mode
+	//  works in Quake III. Single-client visibility below is resolved for that
+	//  client too, so the followed body is hidden and their view-only entities are sent.
+	viewEntNum = client - svs.clients;
+	if (clent->r.svFlags & SVF_VIEWCLIENT) {
+		int viewClient = clent->r.viewClient;
+
+		// bots have no server client, they use game client slots after sv_maxclients,
+		// so check the game entity rather than svs.clients
+		if (viewClient >= 0 && viewClient < MAX_CLIENTS && viewClient != viewEntNum) {
+			gentity_t *viewEnt = SV_GentityNum(viewClient);
+
+			if (viewEnt->inuse && viewEnt->s.eType == ET_PLAYER) {
+				frame->ps.clientNum = viewClient;
+				viewEntNum = viewClient;
+			}
+		}
+	}
+
 	//SV_SvEntityForGentity
 	// never send client's own entity, because it can
 	// be regenerated from the playerstate
@@ -1095,7 +1119,24 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 		VectorCopy(ps->viewangles, ang);
 	}
 
-	SV_AddEntToSnapshot(svEnt, SV_GentityNum(client - svs.clients), &entityNumbers, NULL, qfalse);
+	// Added in Reloaded
+	//  When the client whose entity is drawn as the first-person model changes,
+	//  the old one goes back to its world model and the new one switches to its
+	//  first-person model, each keeping the animations of the model it had. The
+	//  cgame runs the exit commands of those animations against the other model,
+	//  which the original engine doesn't bound-check: the stock client crashes.
+	//  The cgame only does that while an entity's usageIndex stays the same, so
+	//  both get a new one in this client's snapshots (see the copy below), the
+	//  same as when a player's model changes.
+	if (viewEntNum != client->lastViewEntNum) {
+		if (client->lastViewEntNum >= 0 && client->lastViewEntNum < MAX_CLIENTS) {
+			client->viewUsageSalt[client->lastViewEntNum] = client->viewUsageSalt[client->lastViewEntNum] % 65534 + 1;
+		}
+		client->viewUsageSalt[viewEntNum] = client->viewUsageSalt[viewEntNum] % 65534 + 1;
+		client->lastViewEntNum = viewEntNum;
+	}
+
+	SV_AddEntToSnapshot(svEnt, SV_GentityNum(viewEntNum), &entityNumbers, NULL, qfalse);
 
 	// add all the entities directly visible to the eye, which
 	// may include portal entities that merge other viewpoints
@@ -1127,6 +1168,12 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 
 		state = &svs.snapshotEntities[svs.nextSnapshotEntities % svs.numSnapshotEntities];
 		*state = ent->s;
+		// Added in Reloaded
+		//  a usageIndex of this client's own after a first-person view change (see above),
+		//  in [1, 65535] like the server's (0 is what the cgame resets entities to)
+		if (ent->s.number < MAX_CLIENTS && client->viewUsageSalt[ent->s.number] && state->usageIndex > 0) {
+			state->usageIndex = (state->usageIndex - 1 + client->viewUsageSalt[ent->s.number]) % 65535 + 1;
+		}
 		svs.nextSnapshotEntities++;
 		// this should never hit, map should always be restarted first in SV_Frame
 		if ( svs.nextSnapshotEntities >= 0x7FFFFFFE ) {

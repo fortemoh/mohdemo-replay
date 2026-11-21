@@ -226,6 +226,15 @@ typedef struct client_s {
     int lastRadarTime[MAX_CLIENTS];
     int lastVisCheckTime[MAX_CLIENTS];
 
+    // Added in Reloaded
+    //  First-person spectating (SVF_VIEWCLIENT): the client whose entity the cgame
+    //  draws as its own first-person model in the last snapshot, and for each
+    //  player, what is added to their usageIndex in this client's snapshots,
+    //  changed each time they start or stop being drawn that way
+    //  (see SV_BuildClientSnapshot)
+    int lastViewEntNum;
+    int viewUsageSalt[MAX_CLIENTS];
+
 #ifdef LEGACY_PROTOCOL
 	qboolean		compat;
 #endif

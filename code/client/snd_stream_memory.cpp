@@ -184,7 +184,7 @@ void S_StreamMemory_Prefetch(const char *filename)
     }
     FS_FreeFile(data);
 
-    scan = file->data ? S_MP3_OpenMemoryStream(file->data, file->length, NULL) : NULL;
+    scan = S_MP3_OpenMemoryStream(file->data, file->length, NULL);
     if (!scan) {
         free(file->data);
         delete file;
@@ -227,10 +227,6 @@ snd_stream_t *S_StreamMemory_Open(const char *filename)
 {
     smFile_t   *file;
     smReader_t *r;
-
-    if (!sm_files) {
-        return NULL;
-    }
 
     file = SM_FindFile(filename);
     if (!file) {

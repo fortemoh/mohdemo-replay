@@ -389,8 +389,6 @@ public:
     CLASS_PROTOTYPE(TriggerExit);
 
     TriggerExit();
-    void DisplayExitSign(Event *ev);
-    void TurnExitSignOff(Event *ev);
 };
 
 class TriggerUse : public Trigger

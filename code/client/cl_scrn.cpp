@@ -435,7 +435,7 @@ This will be called twice if rendering in stereo mode
 void SCR_DrawScreenField( void ) {
 	// wide aspect ratio screens need to have the sides cleared
 	// unless they are displaying game renderings
-	if ( clc.state != CA_ACTIVE && clc.state != CA_CINEMATIC ) {
+	if ( clc.state != CA_ACTIVE ) {
 		if ( cls.glconfig.vidWidth * 480 > cls.glconfig.vidHeight * 640 ) {
 			re.SetColor( g_color_table[0] );
 			//re.DrawStretchPic( 0, 0, cls.glconfig.vidWidth, cls.glconfig.vidHeight, 0, 0, 0, 0, cls.whiteShader );
@@ -463,9 +463,6 @@ void SCR_DrawScreenField( void ) {
 		// refresh to update the time
 		UI_DrawConnect();
 		break;
-	case CA_CINEMATIC:
-		SCR_DrawCinematic();
-		break;
 	case CA_ACTIVE:
 		CL_CGameRendering(s_scr_stereoFrame);
 		break;
@@ -482,9 +479,6 @@ UpdateStereoSide
 void UpdateStereoSide( stereoFrame_t s ) {
 	s_scr_stereoFrame = s;
 	re.BeginFrame( s );
-	if( clc.state == CA_CINEMATIC ) {
-		SCR_DrawCinematic();
-	}
 	UI_Update();
 	// Added in OPM
 	UI_DrawClipNumber();
@@ -521,9 +515,22 @@ This is called every frame, and can also be called explicitly to flush
 text to the screen.
 ==================
 */
-void SCR_UpdateScreen( void ) {
-	static qboolean screen_recursive;
+// Changed: out of SCR_UpdateScreen, for SCR_AbortUpdate
+static qboolean screen_recursive;
 
+/*
+==================
+SCR_AbortUpdate
+
+Added: an error (Com_Error's longjmp) ended the frame, perhaps in the middle of
+SCR_UpdateScreen: its guard put down, or the screen was never drawn again
+==================
+*/
+void SCR_AbortUpdate( void ) {
+	screen_recursive = qfalse;
+}
+
+void SCR_UpdateScreen( void ) {
 	if ( !scr_initialized ) {
 		return;				// not initialized yet
 	}

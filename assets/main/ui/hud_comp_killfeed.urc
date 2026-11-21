@@ -1,0 +1,61 @@
+// The Competitive HUD (cg_hudstyle 1): top right, the kill feed; under the
+// players' cards where the screen has no room for both in a row
+// (ui_hud_feed_under). Classic's (cg_hudstyle 3, its top bar in this
+// corner: the timer and the scores, 92 by 64, 25 from the top and the
+// right) as cg_hud_classic_kills has it: none (the kills in the chat), its
+// rows from the bar's top 4 left of it (ui_hud_kf_beside), or 6 under it
+// at its right edge (ui_hud_kf_low); the menu wide enough for the feed
+// moved left
+menu "hud_comp_killfeed" 560 233 NONE 0
+virtualres 1 1920 1080
+drawcache 1
+align right top
+bgcolor 0 0 0 0
+borderstyle NONE
+
+resource
+Label
+{
+name "under"
+rect 0 0 1 1
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_feed_under
+}
+
+resource
+Label
+{
+name "low"
+rect 0 0 1 1
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_kf_low
+}
+
+resource
+Label
+{
+name "beside"
+rect 0 0 1 1
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_kf_beside
+}
+
+resource
+HudFeed
+{
+name "kills"
+rect 115 22 429 153
+moveif under 0 48
+moveif beside -105 3
+moveif low -9 73
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-semibold-15
+enabledcvar cg_hud_killfeed&ui_hud_kf_cs
+feed kills
+}
+
+end.

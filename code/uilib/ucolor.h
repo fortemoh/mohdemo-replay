@@ -39,7 +39,6 @@ public:
     operator float *() const;
 
     void ScaleColor(float scale);
-    void ScaleAlpha(float scale);
     void set(float r, float g, float b, float a);
 };
 
@@ -53,9 +52,7 @@ public:
 
     UColorHSV();
     UColorHSV(UColor rgb);
-    UColorHSV(float h, float s, float v, float a);
 
-    void set(float h, float s, float v, float a);
 };
 
 typedef enum {
@@ -74,7 +71,6 @@ public:
     UColor original;
 
     UBorderColor();
-    UBorderColor(const UColor& dark, const UColor& reallydark, const UColor& light);
     UBorderColor(const UColor& color);
 
     void CreateSolidBorder(const UColor& color, colorType_t type);
@@ -84,8 +80,6 @@ extern const UColor UClear;
 extern const UColor UWhite;
 extern const UColor UBlack;
 extern const UColor ULightGrey;
-extern const UColor UGrey;
-extern const UColor UDarkGrey;
 extern const UColor ULightRed;
 extern const UColor URed;
 extern const UColor UGreen;

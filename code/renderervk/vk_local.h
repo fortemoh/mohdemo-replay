@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //  - vk.c: frames, command buffers, render state, drawing, clears, readback
 //  - vk_image.c: textures, samplers, uploads
 //  - vk_pipeline.c: pipeline cache, pipelines created before their first draw
+//  - vk_radar.c: the Competitive HUD radar's picture made on the GPU
 //  - vk_shaders.c: SPIR-V generated from shaders/ by shaders/compile_shaders.sh
 //
 // Vulkan is loaded through SDL (SDL_Vulkan_GetVkGetInstanceProcAddr), so the
@@ -43,6 +44,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 
 #define VK_MAX_FRAMES				2		// frames in flight, with or without the submit thread
+
+// the layer's own objects: the render thread (r_smp) makes some of them too
+// (the ghost textures' textures, a grown destroy list or pipeline table),
+// and the engine's allocator (ri.Malloc, Z_TagMalloc) is the main thread's
+#define VK_Alloc( size )			calloc( 1, ( size ) )
+#define VK_Free( ptr )				free( ptr )
 #define VK_ACQUIRE_SEMAPHORES		( VK_MAX_FRAMES + 1 )	// see VK_AcquireNextImage in vk.c
 #define VK_MAX_SWAPCHAIN_IMAGES		16
 #define VK_PRESENT_FENCES			16		// presents whose fence may be pending (swapchain_maintenance1)
@@ -87,6 +94,7 @@ FUNCTION POINTERS
 #define VK_INSTANCE_FUNCTIONS_OPTIONAL( X ) \
 	X( vkCreateDebugUtilsMessengerEXT ) \
 	X( vkDestroyDebugUtilsMessengerEXT ) \
+	X( vkGetPhysicalDeviceCalibrateableTimeDomainsKHR ) \
 	X( vkGetPhysicalDeviceFeatures2 ) \
 	X( vkGetPhysicalDeviceProperties2 )
 
@@ -190,8 +198,13 @@ FUNCTION POINTERS
 #define VK_DEVICE_FUNCTIONS_OPTIONAL( X ) \
 	X( vkCmdSetLineStippleEXT ) \
 	X( vkCreateRenderPass2KHR ) \
+	X( vkGetCalibratedTimestampsKHR ) \
+	X( vkGetSemaphoreCounterValueKHR ) \
 	X( vkReleaseSwapchainImagesEXT ) \
-	X( vkSetHdrMetadataEXT )
+	X( vkSetHdrMetadataEXT ) \
+	X( vkSignalSemaphoreKHR ) \
+	X( vkWaitForPresentKHR ) \
+	X( vkWaitSemaphoresKHR )
 
 #define VK_DECLARE_FUNCTION( name ) extern PFN_##name q##name;
 VK_GLOBAL_FUNCTIONS( VK_DECLARE_FUNCTION )
@@ -226,6 +239,7 @@ typedef struct {
 	VkImageView		view;
 	VkDescriptorSet	descriptorSet;	// combined image sampler, set 0 or 1
 	VkDescriptorPool descriptorPool;	// the pool descriptorSet came from
+	int				slot;			// of the texture table, its index in the bindless sets
 	VkFormat		format;
 	int				width, height;
 	int				mipLevels;
@@ -305,6 +319,8 @@ typedef struct {
 	VkCommandBuffer	uploadCmd;		// texture uploads that need no ordering with draws, submitted first
 	VkCommandBuffer	mainCmd;		// everything else, in the order the renderer issued it
 	VkCommandBuffer	presentCmd;		// copy to the swapchain image (recorded by the submit thread with r_vkSubmitThread)
+	uint64_t		probeInputUs;	// r_vkLatency: when its input was read (VK_Microseconds), 0 unknown
+	uint64_t		token;			// the engine's name for the frame (ri.FrameToken), given back to its present gate
 	VkFence			fence;			// signaled when every submission of the frame has completed
 	VkQueryPool		queryPool;		// VK_NUM_TIMESTAMPS timestamps, when the queue has them
 	uint32_t		timestampsWritten;	// bits of the VK_TS_* recorded in this frame
@@ -315,6 +331,7 @@ typedef struct {
 	VkDeviceSize	stagingOffset;
 	vkBuffer_t		dlightBuffer;	// lights of vk_add_dlights (vkDlightGPU_t), set 2 of the shaders
 	VkDescriptorSet	dlightSet;		// set 2: the dlight buffer, the skin data and this frame's skin data
+	VkDescriptorSet	textureArraySet;	// bindless textures: set 0, every texture slot as of this frame's begin
 	int				numDlights;
 	// the lists of more than 32 lights, at their place in the dlight buffer
 	// (which is write-combined memory): the draws whose lights span more
@@ -353,6 +370,10 @@ typedef struct {
 	uint64_t	skinDraws;			// skinned draws (drawGeometry_t::isSkinned)
 	uint64_t	pipelineBinds;
 	uint64_t	descriptorBinds;	// descriptor sets bound
+	uint64_t	vertexBinds;		// vkCmdBindVertexBuffers calls (the streams, the normals)
+	uint64_t	indexBinds;			// vkCmdBindIndexBuffer calls
+	uint64_t	pushConstants;		// vkCmdPushConstants calls
+	uint64_t	dynamicStates;		// vkCmdSet* calls (viewport, scissor, depth bias, line width, stencil, stipple)
 	uint64_t	vertexBytes;		// copied into the vertex buffers
 	uint64_t	stagingBytes;		// texture data copied into staging buffers
 	uint64_t	mainUploads;		// uploads recorded in order with the draws (they end the render pass)
@@ -373,6 +394,9 @@ typedef struct {
 	uint64_t	acquireAheadUs;		// vkAcquireNextImageKHR right after a present, for the next frame
 	uint64_t	frameToPresentUs;	// from the start of a frame's recording to its present
 	uint64_t	presentUs;			// vkQueuePresentKHR
+	uint64_t	presentWaitUs;		// vkWaitForPresentKHR (FIFO), on the main or render thread
+	uint64_t	inputWaits;			// r_smp: the main thread's waits for the GPU before the input (vk_input_wait)
+	uint64_t	inputWaitUs;
 	uint64_t	pipelineUs;			// vkCreateGraphicsPipelines
 	uint64_t	prebuiltUs;			// vkCreateGraphicsPipelines of those
 	uint64_t	allocationUs;		// vkAllocateMemory
@@ -394,6 +418,7 @@ typedef struct {
 	uint64_t	threadAcquireUs;	// vkAcquireNextImageKHR on the thread
 	uint64_t	threadPresents;		// vkQueuePresentKHR calls of the thread
 	uint64_t	threadPresentUs;
+	uint64_t	threadPresentWaitUs;	// vkWaitForPresentKHR on the thread
 	uint64_t	threadCopies;		// frames drawn offscreen and copied by the thread (no image was acquired at the first render pass)
 } vkStats_t;
 
@@ -438,6 +463,32 @@ typedef struct {
 	qboolean			depthStencilResolve;	// VK_KHR_depth_stencil_resolve (and create_renderpass2), for multisampling
 	// VK_KHR/EXT_swapchain_maintenance1: presents signal fences (vk.presentFences)
 	qboolean			presentFences;
+	// VK_KHR_present_id and VK_KHR_present_wait: every present has an id,
+	// and with FIFO the thread that presents waits until the present is
+	// shown before the next frame reads its input (vk.c, VK_WaitForPresent)
+	qboolean			presentWait;
+	uint64_t			lastPresentId;		// of the last present (its thread's)
+	// how many presented frames the wait leaves queued (1 or 2), learned
+	// from when they are shown (vk.c, VK_WaitForPresentShown); reset with
+	// each swapchain, whose first id is firstPresentId
+	struct {
+		uint64_t		firstPresentId;
+		int				depth;
+		uint64_t		lastShownUs;
+		float			periodUs;		// between frames shown, with two queued
+		int				frames;			// waits with two queued since the last change
+		int				window, misses;	// with one queued: waits, and frames that took more than a refresh
+		int				tries;			// of one queued, on this swapchain (one at most)
+	} pacing;
+	// r_smp: the GPU time of the last frame whose timestamps were read, and
+	// the fence the main thread waits for before the next input (vk.c,
+	// vk_prepare_input_wait); both read while the render thread is idle
+	uint32_t			lastGpuFrameUs;
+	VkFence				inputWaitFence;
+	// VK_KHR/EXT_calibrated_timestamps: the GPU's timestamps on the CPU's
+	// clock (VK_Microseconds), for the latency probe (r_vkLatency, vk.c);
+	// VK_TIME_DOMAIN_MAX_ENUM_KHR: none
+	VkTimeDomainKHR		calibrationDomain;
 	// imageViewFormatSwizzle (always outside of the portability subset): RGB
 	// textures sample alpha 1 from an A = ONE view swizzle, otherwise the
 	// fragment shader sets it (VK_PIPE_TEX*_RGB with every texture env)
@@ -454,10 +505,19 @@ typedef struct {
 	uint32_t			timestampValidBits;	// 0: the queue has no timestamps
 	VkQueue				queue;
 
+	// a queue of a compute-only family beside the graphics one, with
+	// timeline semaphores: the ambient occlusion's passes run on it beside
+	// the next frame's rendering (r_aoAsync, vk_temporal.c). Only the main
+	// thread submits to it
+	qboolean			asyncCompute;		// the family and the semaphores are there
+	uint32_t			computeFamily;		// VK_QUEUE_FAMILY_IGNORED: none
+	VkQueue				computeQueue;
+
 	// r_vkSubmitThread: a thread submits and presents the frames and
 	// acquires the swapchain images, and copies a frame drawn offscreen when
 	// no image was acquired by its first render pass (vk_submit.c)
 	qboolean			submitThread;
+	qboolean			submitWhole;		// r_vkSubmitThread 3: the render thread's frames handed over whole, as before Plan 53 (tests)
 
 	// swapchain
 	VkSwapchainKHR		swapchain;
@@ -531,11 +591,24 @@ typedef struct {
 	VkFramebuffer		framebuffer;
 	VkRenderPass		depthResolvePass;	// multisampling: resolves the depth/stencil buffer for readbacks
 	VkFramebuffer		depthResolveFramebuffer;
+	// the frame blurred (vk_frame_blur): the color target halved down its mip
+	// levels; made at its first use, its contents only the blur's
+	VkImage				blurImage;
+	VkDeviceMemory		blurMemory;
+	VkImageView			blurView;
+	uint64_t			blurSerial;		// the frame it was last blurred in
 
 	// shared objects
 	VkDescriptorSetLayout textureSetLayout;
 	VkDescriptorSetLayout dlightSetLayout;	// set 2: the frame's dlight buffer, the skin data and the frame's skin data
 	VkDescriptorPool	dlightPool;
+	// bindless textures (r_vkBindless): set 0 holds every texture slot, bound
+	// once a frame, and a draw names its units' slots in firstInstance (the
+	// effects and skinned draws in their records); set 1 is then empty. See
+	// vk_image.c and vk_draw
+	qboolean			bindless;
+	VkDescriptorSetLayout textureArrayLayout;	// set 0: VK_MAX_TEXTURES combined image samplers
+	VkDescriptorSetLayout emptySetLayout;		// set 1
 	VkPipelineLayout	pipelineLayout;
 	VkShaderModule		vertexShader;
 	VkShaderModule		vertexShaderClip;	// writes gl_ClipDistance (shaderClipDistance only)
@@ -627,8 +700,11 @@ void		VK_DeferDestroyRange( int block, VkDeviceSize offset, VkDeviceSize size );
 void		VK_BeginFrameIfNeeded( void );
 void		VK_EndRenderPass( void );
 void		VK_FlushAndWait( void );
+void		VK_ForgetBindings( void );
 VkCommandBuffer VK_GetUploadCommandBuffer( void );
 qboolean	VK_FormatHasFeatures( VkFormat format, VkFormatFeatureFlags features );
+void		VK_CreateImageShared( VkFormat format, VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageAspectFlags aspect,
+				int width, int height, int mipLevels, qboolean computeShared, VkImage *image, VkDeviceMemory *memory, VkImageView *view );
 void		VK_CreateImage( VkFormat format, VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageAspectFlags aspect,
 				int width, int height, int mipLevels, VkImage *image, VkDeviceMemory *memory, VkImageView *view );
 void		VK_DestroyTargetImage( VkImage *image, VkDeviceMemory *memory, VkImageView *view );
@@ -709,6 +785,13 @@ float		VK_HalfToFloat( uint16_t h );
 qboolean	VK_StartSubmitThread( void );
 void		VK_StopSubmitThread( void );
 void		VK_QueueSubmitJob( vkFrame_t *frame, const VkCommandBuffer *cmds, uint32_t numCmds, qboolean present, int image, VkSemaphore acquired );
+void		VK_QueuePresentJob( vkFrame_t *frame, int image );
+void		VK_ChainPresentId( VkPresentInfoKHR *presentInfo, VkPresentIdKHR *presentId, uint64_t *id );
+void		VK_ProbePresent( uint64_t inputUs, uint64_t presentAt, uint64_t id );
+VkResult	VK_WaitForPresentShown( uint64_t id, uint64_t *us );
+void		VK_JoinSubmittingJobs( void );
+void		VK_LockSubmitQueue( void );
+void		VK_UnlockSubmitQueue( void );
 void		VK_JoinSubmitJob( int slot );
 void		VK_CollectSubmitJobs( void );
 void		VK_DrainSubmitThread( void );
@@ -722,10 +805,24 @@ void		VK_ShutdownTextures( void );
 void		VK_ShutdownTextureObjects( void );
 vkTexture_t	*VK_GetTexture( unsigned int handle );
 vkTexture_t	*VK_DefaultTexture( void );
+
+// bindless textures (vk.bindless, see vk_image.c): the frame slots' sets of
+// every texture slot, the slots of a draw's units packed for firstInstance
+void		VK_TextureArrayInit( void );
+void		VK_TextureArrayShutdown( void );
+void		VK_TextureArrayUpdate( vkFrame_t *frame );
+uint32_t	VK_TextureArraySlots( const vkTexture_t *tex0, const vkTexture_t *tex1 );
 void		VK_FinishUploads( VkCommandBuffer cmd, qboolean upload );
 void		VK_FreeMemoryRange( int block, VkDeviceSize offset, VkDeviceSize size );
 void		VK_MemoryBlockInfo( int *numBlocks, VkDeviceSize *size, VkDeviceSize *used );
 void		*VK_StagingAlloc( VkDeviceSize size, VkDeviceSize alignment, VkBuffer *buffer, VkDeviceSize *offset );
+void		VK_UploadTextureGPU( image_t *image, int x, int y, int width, int height, VkBuffer buffer, VkDeviceSize offset,
+				void ( *make )( VkCommandBuffer cmd, const void *data ), const void *data );
+
+// vk_radar.c
+void		VK_RadarInit( void );
+void		VK_RadarShutdown( void );
+void		VK_RadarShutdownObjects( void );
 
 // vk_framelog.c
 extern qboolean	vk_frameLog;	// r_vkFrameLog: the frame log records
@@ -749,6 +846,7 @@ void		VK_PipelineCounts( int *total, int *prebuilt, int *prebuiltUsed );
 // pipeline key fields
 #define VK_PIPE_SRCBLEND_SHIFT		0		// GLS_SRCBLEND_* value, 4 bits
 #define VK_PIPE_DSTBLEND_SHIFT		4		// GLS_DSTBLEND_* value >> 4, 4 bits
+#define VK_PIPE_BLEND_BITS			0xffull	// both blend fields: not 0 when the draw blends
 #define VK_PIPE_DEPTHTEST			( 1ull << 8 )
 #define VK_PIPE_DEPTHWRITE			( 1ull << 9 )
 #define VK_PIPE_DEPTHFUNC_SHIFT		10		// vkDepthFunc_t, 2 bits
@@ -777,6 +875,7 @@ void		VK_PipelineCounts( int *total, int *prebuilt, int *prebuiltUsed );
 #define VK_PIPE_TEMPORAL			( 1ull << 48 )	// the temporal path's scene (vk_temporal.c): its render pass, layout and shaders
 #define VK_PIPE_NORMALS				( 1ull << 49 )	// temporal, writes the normals buffer, not skinned or effects: normals per vertex in binding 4 (else a constant 0)
 #define VK_PIPE_MOTION				( 1ull << 50 )	// temporal, writes the normals buffer, and the motion vectors: draws what moves
+#define VK_PIPE_REACTIVE			( 1ull << 51 )	// temporal, blended, draws what the motion vectors don't follow (effects): adds its share to the scene's alpha (r_taaReactive)
 
 typedef enum {
 	VK_DEPTHFUNC_LEQUAL,
@@ -813,7 +912,7 @@ typedef struct {
 	float	prevMvp[16];		// the last frame's projection (unjittered) * modelview
 	float	mvRow0[4];			// rows 0 and 1 of the modelview (row 2 is eyeZ)
 	float	mvRow1[4];
-	float	jitter[4];			// xy: the projection's jitter in NDC, z: VK_TEMPORAL_CLASS_*, w: 0
+	float	jitter[4];			// xy: the projection's jitter in NDC, z: VK_TEMPORAL_CLASS_*, w: the texture LOD bias (r_taaLodBias)
 } vkTemporalPush_t;
 
 #define VK_TEMPORAL_PUSH_OFFSET	( (uint32_t)sizeof( vkPushConstants_t ) )
@@ -832,6 +931,8 @@ extern const size_t		vk_spirv_generic_vert_size;
 extern const uint32_t	vk_spirv_generic_clip_vert[];
 extern const size_t		vk_spirv_generic_clip_vert_size;
 extern const uint32_t	vk_spirv_generic_frag[];
+extern const uint32_t	vk_spirv_generic_bindless_frag[];
+extern const size_t		vk_spirv_generic_bindless_frag_size;
 extern const size_t		vk_spirv_generic_frag_size;
 extern const uint32_t	vk_spirv_skinned_vert[];
 extern const size_t		vk_spirv_skinned_vert_size;
@@ -846,12 +947,20 @@ extern const size_t		vk_spirv_effects_clip_vert_size;
 extern const uint32_t	vk_spirv_output_frag[];
 extern const size_t		vk_spirv_output_frag_size;
 
+// vk_shaders_radar.c
+extern const uint32_t	vk_spirv_radar_comp[];
+extern const size_t		vk_spirv_radar_comp_size;
+extern const uint32_t	vk_spirv_radar_changing_comp[];
+extern const size_t		vk_spirv_radar_changing_comp_size;
+
 // vk_shaders_temporal.c
 extern const uint32_t	vk_spirv_generic_temporal_vert[];
 extern const size_t		vk_spirv_generic_temporal_vert_size;
 extern const uint32_t	vk_spirv_generic_temporal_clip_vert[];
 extern const size_t		vk_spirv_generic_temporal_clip_vert_size;
 extern const uint32_t	vk_spirv_generic_temporal_frag[];
+extern const uint32_t	vk_spirv_generic_temporal_bindless_frag[];
+extern const size_t		vk_spirv_generic_temporal_bindless_frag_size;
 extern const size_t		vk_spirv_generic_temporal_frag_size;
 extern const uint32_t	vk_spirv_skinned_temporal_vert[];
 extern const size_t		vk_spirv_skinned_temporal_vert_size;
@@ -881,12 +990,24 @@ extern const uint32_t	vk_spirv_ao_temporal_comp[];
 extern const size_t		vk_spirv_ao_temporal_comp_size;
 extern const uint32_t	vk_spirv_ao_denoise_comp[];
 extern const size_t		vk_spirv_ao_denoise_comp_size;
+extern const uint32_t	vk_spirv_ao_upsample_comp[];
+extern const size_t		vk_spirv_ao_upsample_comp_size;
 extern const uint32_t	vk_spirv_ao_apply_frag[];
 extern const size_t		vk_spirv_ao_apply_frag_size;
 extern const uint32_t	vk_spirv_motion_blur_tiles_comp[];
 extern const size_t		vk_spirv_motion_blur_tiles_comp_size;
 extern const uint32_t	vk_spirv_motion_blur_neighbor_comp[];
 extern const size_t		vk_spirv_motion_blur_neighbor_comp_size;
+extern const uint32_t	vk_spirv_dof_focus_comp[];
+extern const size_t		vk_spirv_dof_focus_comp_size;
+extern const uint32_t	vk_spirv_dof_setup_comp[];
+extern const size_t		vk_spirv_dof_setup_comp_size;
+extern const uint32_t	vk_spirv_dof_neighbor_comp[];
+extern const size_t		vk_spirv_dof_neighbor_comp_size;
+extern const uint32_t	vk_spirv_dof_gather_comp[];
+extern const size_t		vk_spirv_dof_gather_comp_size;
+extern const uint32_t	vk_spirv_dof_apply_comp[];
+extern const size_t		vk_spirv_dof_apply_comp_size;
 
 /*
 ====================================================================
@@ -903,7 +1024,8 @@ target. The color and the pyramid of the last frame are kept: two of each,
 the frames alternate. What the buffers don't hold (the camera's motion of
 what doesn't move, the normals the draws didn't give) their readers work out
 with shaders/temporal_common.glsl. Its readers: temporal anti-aliasing
-(r_taa), ambient occlusion (r_ao) and motion blur (r_motionBlur).
+(r_taa), ambient occlusion (r_ao), depth of field (r_dof) and motion blur
+(r_motionBlur).
 
 ====================================================================
 */
@@ -913,7 +1035,8 @@ with shaders/temporal_common.glsl. Its readers: temporal anti-aliasing
 #define VK_TEMPORAL_MAX_PASSES	12		// dispatches of the pyramid after its levels 0 and 1
 #define VK_TEMPORAL_TAIL_SIZE	128		// a level no larger: the rest in one dispatch (hiz_build.comp, TAIL); 256 was slower: one workgroup
 #define VK_TEMPORAL_TAIL_IMAGES	8		// bindings of that dispatch: that level and up to 7 more
-#define VK_TEMPORAL_MAX_BINDINGS	18	// of a pass's descriptor set (the ambient occlusion's)
+#define VK_TEMPORAL_MAX_BINDINGS	23	// of a pass's descriptor set (the ambient occlusion's)
+#define VK_TEMPORAL_AO_GRID_RING	3	// aoGrid images (see the field)
 #define VK_TEMPORAL_AO_LEVELS	5		// of the ambient occlusion's view distances (ao_common.glsl, AO_LEVELS)
 #define VK_SKIN_RING			( VK_MAX_FRAMES + 1 )	// frame data of the skinned draws with the temporal path: see vk_alloc_skin_frame
 
@@ -928,8 +1051,9 @@ with shaders/temporal_common.glsl. Its readers: temporal anti-aliasing
 #define VK_TEMPORAL_GROUP_PYRAMID	2	// hiz[2]: the anti-aliasing, r_temporalShow's views 1, 2, 4, 6, 7
 #define VK_TEMPORAL_GROUP_AO		4	// the ambient occlusion's (r_ao)
 #define VK_TEMPORAL_GROUP_PREVCOLOR	8	// color[1], the last scene's color: r_temporalShow 5
-#define VK_TEMPORAL_GROUP_MOTIONBLUR	16	// mbVelocity, mbTile, mbNeighbor: the motion blur (r_motionBlur), r_temporalShow 11, 12
-#define VK_TEMPORAL_GROUP_LAST		VK_TEMPORAL_GROUP_MOTIONBLUR
+#define VK_TEMPORAL_GROUP_MOTIONBLUR	16	// mbVelocity, mbSample, mbTile, mbNeighbor: the motion blur (r_motionBlur), r_temporalShow 11, 12
+#define VK_TEMPORAL_GROUP_DOF		32	// dofFocus, dofHalf, dofTile, dofNeighbor, dofFar, dofNear, dofResult: the depth of field (r_dof), r_temporalShow 13
+#define VK_TEMPORAL_GROUP_LAST		VK_TEMPORAL_GROUP_DOF
 
 // a dispatch of the depth pyramid after the prepare pass (hiz_build.comp)
 typedef struct {
@@ -1013,6 +1137,7 @@ typedef struct {
 	VkShaderModule	prepareShader, hizShader, hizTailShader, compositeVertexShader, compositeFragmentShader;
 	VkPipeline		preparePipeline, hizPipeline, hizTailPipeline, compositePipeline;
 	VkPipeline		compositeBlurPipeline;	// the same with the motion blur's gather (MOTION_BLUR)
+	VkPipeline		compositeDofPipeline, compositeDofBlurPipeline;	// both showing the depth of field's result (DEPTH_OF_FIELD)
 	VkDescriptorPool	pool;
 	VkDescriptorSet	prepareSets[VK_MAX_FRAMES];
 	VkDescriptorSet	hizSets[VK_TEMPORAL_HISTORY][VK_TEMPORAL_MAX_PASSES];
@@ -1023,6 +1148,8 @@ typedef struct {
 	// frame's and the last frame's (the history), alternating with current;
 	// GENERAL between frames
 	qboolean		taaOn;			// r_taa for this frame's scene (vk_begin_scene): it is jittered
+	float			lodBias;		// r_taaLodBias for this frame's scene with taaOn, else 0
+	qboolean		reactiveOn;		// effects draw their reactive share (VK_PIPE_REACTIVE): r_taaReactive with taaOn, or r_temporalShow 14
 	qboolean		taaRan;			// the resolve wrote taa[current]: the composite shows it
 	vkTemporalImage_t	taa[VK_TEMPORAL_HISTORY];	// RGBA16F (taaFormat)
 	uint64_t		taaSerial[VK_TEMPORAL_HISTORY];	// the frame each was written in, 0 for none
@@ -1037,6 +1164,10 @@ typedef struct {
 	// opaque surfaces and its blended ones; its images are GENERAL always
 	qboolean		aoRan;			// this frame's scene has it
 	vkTemporalImage_t	aoDepth[VK_TEMPORAL_HISTORY];	// R32F view distances (the weapon's negative), VK_TEMPORAL_AO_LEVELS levels; the other one the last frame's
+	vkTemporalImage_t	aoGrid[VK_TEMPORAL_AO_GRID_RING];	// R32F, a texel a 2 x 2 pixels: the top-left one's view distance; a ring of 3: with r_aoAsync a frame writes one while the compute queue still reads the two before
+	int				aoGridIndex;	// the ring entry this scene writes (VK_TemporalAo turns it)
+	vkTemporalImage_t	aoGridMotion[VK_TEMPORAL_HISTORY];	// RGBA16F, a texel a 2 x 2 pixels: its motion, its last view distance, its class (ao_prefilter.comp)
+	vkTemporalImage_t	aoBlur2[VK_TEMPORAL_HISTORY];	// RG16F, the last blur, which the apply pass upsamples; two with r_aoAsync: the one being written and the one applied
 	VkImageView		aoDepthLevel[VK_TEMPORAL_HISTORY][VK_TEMPORAL_AO_LEVELS];
 	uint64_t		aoDepthSerial[VK_TEMPORAL_HISTORY];	// the frame each was made in, 0 for none
 	vkTemporalImage_t	aoRaw;			// R8: one frame's visibility
@@ -1046,11 +1177,32 @@ typedef struct {
 	vkTemporalImage_t	aoResult;		// RGBA8: what the apply pass blends (the fog's part, the factor)
 	VkDescriptorSetLayout aoSetLayout, aoApplySetLayout;
 	VkPipelineLayout	aoLayout, aoApplyLayout;
-	VkShaderModule	aoPrefilterShader, aoMainShader, aoTemporalShader, aoDenoiseShader, aoApplyShader;
+	VkShaderModule	aoPrefilterShader, aoMainShader, aoTemporalShader, aoDenoiseShader, aoApplyShader, aoUpsampleShader;
 	VkPipeline		aoPrefilterPipeline, aoTemporalPipeline, aoDenoisePipeline, aoApplyPipeline;
 	VkPipeline		aoMainPipelines[4];	// r_aoQuality: slices and steps as specialization constants
+	VkPipeline		aoUpsamplePipeline;	// every pass at half resolution (AO_HALF)
 	VkDescriptorSet	aoSets[VK_MAX_FRAMES];	// written in each frame
-	VkDescriptorSet	aoApplySet;
+	VkDescriptorSet	aoApplySets[VK_MAX_FRAMES];	// written in each frame (the grid ring turns)
+
+	// r_aoAsync (vk.asyncCompute): the occlusion, the blend and the blur
+	// of a frame run on vk.computeQueue once the frame's graphics is done
+	// (they read only the prefilter's images), beside the next frame's
+	// rendering; the apply pass reads the result two frames later. The
+	// timeline semaphores order it: a frame's submission signals
+	// gfxTimeline with its serial (once: aoGfxSignalPending), the compute
+	// submission waits for it and signals aoTimeline with the same serial,
+	// and the frame two later waits for that before its compute and
+	// fragment stages (aoWaitPending)
+	VkSemaphore		gfxTimeline, aoTimeline;
+	VkCommandPool	aoCmdPool;
+	VkCommandBuffer	aoCmds[VK_MAX_FRAMES];
+	uint64_t		aoCmdSerial[VK_MAX_FRAMES];	// the frame that last recorded each, 0 none
+	uint64_t		aoComputeSerial;	// the last frame submitted to the compute queue, 0 none
+	uint64_t		aoComputeWait;		// the one before that
+	uint64_t		aoGfxSignalPending;	// the frame's next graphics submission signals gfxTimeline with it, 0 none
+	uint64_t		aoWaitPending;		// and waits for aoTimeline to reach this first, 0 none
+	uint64_t		aoBlurReadable[VK_TEMPORAL_HISTORY];	// the frame from which each aoBlur2 can be applied, 0 none
+	qboolean		aoApplyRun;			// this scene's apply pass draws (a result is there)
 
 	// motion blur (r_motionBlur, VK_TemporalMotionBlur: motion_blur.comp,
 	// the gather in temporal_composite.frag): each pixel's blur, its half
@@ -1063,7 +1215,8 @@ typedef struct {
 	float			frameMsec;		// the primary view's game time since its last frame, smoothed (vkSceneView_t)
 	int				mbTileSize;		// the longest half streak in pixels: max( 16, height / 40 )
 	int				mbTilesX, mbTilesY;
-	vkTemporalImage_t	mbVelocity;		// RGBA16F: the half vector (xy), the view distance (z; the weapon's scaled down, in front of all)
+	vkTemporalImage_t	mbVelocity;		// RG16F: the half vector
+	vkTemporalImage_t	mbSample;		// RG16F: its length, the view distance (the weapon's scaled down, in front of all): what the gather's samples read
 	vkTemporalImage_t	mbTile;			// RG16F, a texel a tile
 	vkTemporalImage_t	mbNeighbor;		// RG16F, a texel a tile
 	VkDescriptorSetLayout mbSetLayout;
@@ -1071,6 +1224,30 @@ typedef struct {
 	VkShaderModule	mbTilesShader, mbNeighborShader;
 	VkPipeline		mbTilesPipeline, mbNeighborPipeline;
 	VkDescriptorSet	mbSets[VK_MAX_FRAMES];	// written in each frame (the depth image's view can change)
+
+	// depth of field (r_dof, VK_TemporalDof: dof.comp): the focus, the half
+	// resolution's color and blur, the largest blur of each tile of
+	// dofTileSize x dofTileSize pixels and of the 3 x 3 tiles around it, the
+	// gathered background and foreground, the result the composite shows;
+	// its images are GENERAL always
+	qboolean		dofOn;			// for this frame's scene (VK_TemporalUpdateFeatures): its passes run (r_dof, r_temporalShow 13)
+	qboolean		dofShow;		// r_temporalShow 13: the result shows the blur instead
+	qboolean		dofRan;			// the passes ran in this scene: the composite shows dofResult where they blur
+	int				dofTileSize;	// the largest blur's radius in pixels, even: max( 16, height / 20 )
+	int				dofTilesX, dofTilesY;
+	int				dofHalfWidth, dofHalfHeight;
+	vkTemporalImage_t	dofFocus;		// R32F, 1 x 1: 1 / the focus distance, eased over frames; 0: none yet
+	vkTemporalImage_t	dofHalf;		// RGBA16F, half resolution: color in linear light, the blur
+	vkTemporalImage_t	dofTile;		// RG16F, a texel a tile
+	vkTemporalImage_t	dofNeighbor;	// RG16F, a texel a tile
+	vkTemporalImage_t	dofFar;			// RGBA16F, half resolution
+	vkTemporalImage_t	dofNear;		// RGBA16F, half resolution
+	vkTemporalImage_t	dofResult;		// RGBA16F (gamma-encoded, as the scene)
+	VkDescriptorSetLayout dofSetLayout;
+	VkPipelineLayout	dofLayout;
+	VkShaderModule	dofFocusShader, dofSetupShader, dofNeighborShader, dofGatherShader, dofApplyShader;
+	VkPipeline		dofFocusPipeline, dofSetupPipeline, dofNeighborPipeline, dofGatherPipeline, dofApplyPipeline;
+	VkDescriptorSet	dofSets[VK_MAX_FRAMES];	// written in each frame (the depth image's and the color's views change)
 
 	// the frame data of the skinned draws: a ring of VK_SKIN_RING buffers
 	// instead of one per frame slot (the frame slots' and one more), so the
@@ -1098,6 +1275,10 @@ typedef struct {
 	float			prevModelview[16];
 	float			prevModelviewFor[16];	// the modelview it was given with
 	qboolean		objectMotion;	// it applies: the draws move (VK_PIPE_MOTION)
+	// the explicit last frame's projection of the perspective draws
+	// (vk_set_prev_projection: the first-person weapon's own)
+	qboolean		prevProjectionSet;
+	float			drawPrevProjection[16];
 } vkTemporal_t;
 
 extern vkTemporal_t	vkt;
@@ -1118,8 +1299,24 @@ void		VK_TemporalAo( VkCommandBuffer cmd, const float *fog );
 void		VK_TemporalAoApply( VkCommandBuffer cmd );
 qboolean	VK_TemporalWritesBuffers( uint64_t bits );
 
+// r_aoAsync (vk.asyncCompute): what a graphics submission carries for the
+// compute queue, and the waits for it (vk_temporal.c)
+typedef struct {
+	VkSemaphore		waitSems[2];
+	VkPipelineStageFlags waitStages[2];
+	uint64_t		waitValues[2];
+	VkSemaphore		signalSems[2];
+	uint64_t		signalValues[2];
+	VkTimelineSemaphoreSubmitInfoKHR timeline;
+} vkAoSubmitChain_t;
+void		VK_TemporalTakeAoSubmitInfo( uint64_t *signalValue, uint64_t *waitValue );
+void		VK_TemporalAoChainSubmit( vkAoSubmitChain_t *c, VkSubmitInfo *submit, uint64_t signalValue, uint64_t waitValue );
+void		VK_TemporalFinishAoCompute( void );
+void		VK_TemporalAbortAoCompute( void );
+
 // cvars
 extern cvar_t	*r_vkValidation;
+extern cvar_t	*r_vkBindless;
 extern cvar_t	*r_vkFallbacks;
 extern cvar_t	*r_vkSubmitThread;
 extern cvar_t	*r_fastSync;
@@ -1133,6 +1330,9 @@ extern cvar_t	*r_temporalShowScale;
 extern cvar_t	*r_taa;
 extern cvar_t	*r_taaFeedback;
 extern cvar_t	*r_taaSharpen;
+extern cvar_t	*r_taaReactive;
+extern cvar_t	*r_taaLodBias;
 extern cvar_t	*r_saturation;
 extern cvar_t	*r_ao;
 extern cvar_t	*r_motionBlur;
+extern cvar_t	*r_dof;

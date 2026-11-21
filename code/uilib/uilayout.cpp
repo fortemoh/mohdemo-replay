@@ -29,7 +29,7 @@ Event EV_Layout_Menu
     EV_DEFAULT,
     "sffsF",
     "name width height direction motion_time",
-    "Sets up the layout of the menu."
+    "Sets up the layout of the menu (Changed: the direction it slid in from is read and ignored, every menu says NONE)"
 );
 
 CLASS_DECLARATION(Listener, UILayout, NULL) {
@@ -55,21 +55,11 @@ UILayout::UILayout(const char *filename)
     }
 }
 
-UILayout::UILayout(const char *name, const char *buffer, int length)
-{
-    BogusFunction();
-    m_script   = NULL;
-    m_filename = name;
-
-    LoadBuffer(name, buffer, length);
-}
-
 void UILayout::BogusFunction(void) {}
 
 void UILayout::CreateWidgetContainer(Event *ev)
 {
     str   name;
-    str   direction;
     float w, h;
 
     name = ev->GetString(1);
@@ -78,24 +68,11 @@ void UILayout::CreateWidgetContainer(Event *ev)
         return;
     }
 
-    w         = ev->GetFloat(2);
-    h         = ev->GetFloat(3);
-    direction = ev->GetString(4);
+    w = ev->GetFloat(2);
+    h = ev->GetFloat(3);
 
     m_currentcontainer = new UIWidgetContainer;
     m_currentcontainer->setName(name);
-
-    if (!stricmp(direction, "from_bottom")) {
-        m_currentcontainer->setDirection(D_FROM_BOTTOM);
-    } else if (!stricmp(direction, "from_top")) {
-        m_currentcontainer->setDirection(D_FROM_TOP);
-    } else if (!stricmp(direction, "from_left")) {
-        m_currentcontainer->setDirection(D_FROM_LEFT);
-    } else if (!stricmp(direction, "from_right")) {
-        m_currentcontainer->setDirection(D_FROM_RIGHT);
-    } else {
-        m_currentcontainer->setDirection(D_NONE);
-    }
 
     if (ev->NumArgs() > 4) {
         m_currentcontainer->setMotionTime(ev->GetFloat(5));
@@ -161,6 +138,11 @@ void UILayout::ProcessCommands(bool bFullLoad)
                     if (m_currentcontainer->m_bVirtual) {
                         ev = new Event(EV_Layout_VirtualRes);
                         ev->AddInteger(1);
+                        // Added: the menu's design size
+                        if (m_currentcontainer->m_designSize[0] > 0) {
+                            ev->AddFloat(m_currentcontainer->m_designSize[0]);
+                            ev->AddFloat(m_currentcontainer->m_designSize[1]);
+                        }
                         widget->ProcessEvent(ev);
                     }
 
@@ -232,19 +214,6 @@ void UILayout::Load(const char *filename, bool bFullLoad)
     ProcessCommands(bFullLoad);
 
     m_bLoaded = bFullLoad;
-
-    delete m_script;
-    m_script = NULL;
-}
-
-void UILayout::LoadBuffer(const char *name, const char *buffer, int length)
-{
-    m_bLoaded = true;
-
-    m_script = new Script;
-    m_script->LoadFile(name, length, buffer);
-
-    ProcessCommands(true);
 
     delete m_script;
     m_script = NULL;

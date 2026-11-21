@@ -32,11 +32,9 @@ class UConnection
     Container<Event *>           m_events;
 
 public:
-    UConnection();
     UConnection(const Event& inevent, const Event& outevent);
     bool TypeIs(Event& ev);
     bool AddListener(Listener *object, Event& ev);
-    bool RemoveListener(Listener *object);
     bool SendEvent(Listener *object, Event& ev);
 };
 
@@ -49,6 +47,4 @@ public:
 
     bool SendSignal(Event& ev);
     bool Connect(Listener *object, Event& inevent, Event& outevent);
-    bool Disconnect(Listener *object, Event& ev);
-    bool Disconnect(Listener *object);
 };

@@ -43,7 +43,7 @@ static PFN_vkGetInstanceProcAddr qvkGetInstanceProcAddr;
 // when present
 static qboolean vk_khrSurfaceMaintenance1, vk_extSurfaceMaintenance1;
 
-#define VK_MAX_EXTENSIONS 16
+#define VK_MAX_EXTENSIONS 24
 
 /*
 ====================================================================
@@ -485,15 +485,25 @@ static void VK_SelectPhysicalDevice( void ) {
 	qvkGetPhysicalDeviceProperties( vk.physicalDevice, &vk.deviceProperties );
 	qvkGetPhysicalDeviceMemoryProperties( vk.physicalDevice, &vk.memoryProperties );
 
-	// GPU timestamps (vkinfo)
+	// GPU timestamps (vkinfo), and a compute-only family for the ambient
+	// occlusion's passes (vk_temporal.c): one without graphics, so its queue
+	// runs beside the graphics one
 	{
 		VkQueueFamilyProperties *families;
-		uint32_t numFamilies;
+		uint32_t numFamilies, i;
 
 		qvkGetPhysicalDeviceQueueFamilyProperties( vk.physicalDevice, &numFamilies, NULL );
 		families = ri.Hunk_AllocateTempMemory( sizeof( *families ) * ( numFamilies + 1 ) );
 		qvkGetPhysicalDeviceQueueFamilyProperties( vk.physicalDevice, &numFamilies, families );
 		vk.timestampValidBits = vk.deviceProperties.limits.timestampPeriod > 0 ? families[vk.queueFamily].timestampValidBits : 0;
+		vk.computeFamily = VK_QUEUE_FAMILY_IGNORED;
+		for ( i = 0; i < numFamilies; i++ ) {
+			if ( ( families[i].queueFlags & VK_QUEUE_COMPUTE_BIT ) && !( families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT )
+				&& families[i].queueCount && i != vk.queueFamily ) {
+				vk.computeFamily = i;
+				break;
+			}
+		}
 		ri.Hunk_FreeTempMemory( families );
 	}
 }
@@ -515,9 +525,12 @@ static void VK_CreateLogicalDevice( void ) {
 	VkPhysicalDeviceLineRasterizationFeaturesEXT lineFeatures;
 	VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchainFeatures;
 	VkPhysicalDevicePortabilitySubsetFeaturesKHR portabilityFeatures;
+	VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeatures;
+	VkPhysicalDevicePresentIdFeaturesKHR presentIdFeatures;
+	VkPhysicalDevicePresentWaitFeaturesKHR presentWaitFeatures;
 	qboolean portability;
 	const char *lineExtension, *swapchainExtension;
-	VkDeviceQueueCreateInfo queueInfo;
+	VkDeviceQueueCreateInfo queueInfos[2];
 	VkDeviceCreateInfo createInfo;
 	VkExtensionProperties *available;
 	const char *extensions[VK_MAX_EXTENSIONS];
@@ -536,6 +549,9 @@ static void VK_CreateLogicalDevice( void ) {
 	vk.enabledFeatures.textureCompressionBC = supported.textureCompressionBC;	// DDS textures
 	vk.enabledFeatures.shaderClipDistance = supported.shaderClipDistance;	// portal clip plane
 	vk.enabledFeatures.depthClamp = supported.depthClamp;					// solid surfaces nearer than r_znear (VK_PIPE_DEPTHCLAMP)
+	// bindless textures index the array of every texture slot by a value
+	// uniform within the draw (vk.bindless)
+	vk.enabledFeatures.shaderSampledImageArrayDynamicIndexing = supported.shaderSampledImageArrayDynamicIndexing;
 	// the temporal path's storage images (RG32F, RG16F, A2B10G10R10) and the
 	// blend states of its three color attachments (vk_temporal.c)
 	vk.enabledFeatures.shaderStorageImageExtendedFormats = supported.shaderStorageImageExtendedFormats;
@@ -676,18 +692,82 @@ static void VK_CreateLogicalDevice( void ) {
 		VK_AddExtension( extensions, &numExtensions, VK_EXT_HDR_METADATA_EXTENSION_NAME );
 		vko.metadata = qtrue;
 	}
+
+	// a compute queue and timeline semaphores for the ambient occlusion's
+	// passes beside the next frame's rendering (r_aoAsync, vk_temporal.c)
+	Com_Memset( &timelineFeatures, 0, sizeof( timelineFeatures ) );
+	timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+	vk.asyncCompute = qfalse;
+	if ( vk.computeFamily != VK_QUEUE_FAMILY_IGNORED && qvkGetPhysicalDeviceFeatures2
+		&& VK_HasExtension( available, numAvailable, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME ) ) {
+		VK_GetExtensionFeatures( &timelineFeatures );
+		if ( timelineFeatures.timelineSemaphore ) {
+			VK_AddExtension( extensions, &numExtensions, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME );
+			vk.asyncCompute = qtrue;
+		}
+	}
+	// present ids and waits: with FIFO a frame reads its input once the one
+	// before is shown (vk.c, VK_WaitForPresent)
+	Com_Memset( &presentIdFeatures, 0, sizeof( presentIdFeatures ) );
+	presentIdFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR;
+	Com_Memset( &presentWaitFeatures, 0, sizeof( presentWaitFeatures ) );
+	presentWaitFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR;
+	vk.presentWait = qfalse;
+	if ( qvkGetPhysicalDeviceFeatures2 && VK_HasExtension( available, numAvailable, VK_KHR_PRESENT_ID_EXTENSION_NAME )
+		&& VK_HasExtension( available, numAvailable, VK_KHR_PRESENT_WAIT_EXTENSION_NAME ) ) {
+		VK_GetExtensionFeatures( &presentIdFeatures );
+		VK_GetExtensionFeatures( &presentWaitFeatures );
+		if ( presentIdFeatures.presentId && presentWaitFeatures.presentWait ) {
+			VK_AddExtension( extensions, &numExtensions, VK_KHR_PRESENT_ID_EXTENSION_NAME );
+			VK_AddExtension( extensions, &numExtensions, VK_KHR_PRESENT_WAIT_EXTENSION_NAME );
+			vk.presentWait = qtrue;
+		}
+	}
+	// the GPU's timestamps on the CPU's clock, for the latency probe
+	// (r_vkLatency): the device's and the clock SDL's performance counter
+	// reads (CLOCK_MONOTONIC_RAW on Linux, QueryPerformanceCounter on Windows)
+	vk.calibrationDomain = VK_TIME_DOMAIN_MAX_ENUM_KHR;
+	if ( qvkGetPhysicalDeviceCalibrateableTimeDomainsKHR && vk.timestampValidBits ) {
+		const char *name = VK_HasExtension( available, numAvailable, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME ) ? VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME
+			: VK_HasExtension( available, numAvailable, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME ) ? VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME : NULL;
+		VkTimeDomainKHR domains[8];
+		uint32_t numDomains = ARRAY_LEN( domains ), d;
+		qboolean device = qfalse;
+#ifdef _WIN32
+		VkTimeDomainKHR wanted = VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR;
+#else
+		VkTimeDomainKHR wanted = VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR;
+#endif
+		if ( name && qvkGetPhysicalDeviceCalibrateableTimeDomainsKHR( vk.physicalDevice, &numDomains, domains ) >= VK_SUCCESS ) {
+			for ( d = 0; d < numDomains; d++ ) {
+				if ( domains[d] == VK_TIME_DOMAIN_DEVICE_KHR ) {
+					device = qtrue;
+				}
+			}
+			for ( d = 0; d < numDomains && device; d++ ) {
+				if ( domains[d] == wanted ) {
+					VK_AddExtension( extensions, &numExtensions, name );
+					vk.calibrationDomain = wanted;
+				}
+			}
+		}
+	}
 	ri.Hunk_FreeTempMemory( available );
 
-	Com_Memset( &queueInfo, 0, sizeof( queueInfo ) );
-	queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-	queueInfo.queueFamilyIndex = vk.queueFamily;
-	queueInfo.queueCount = 1;
-	queueInfo.pQueuePriorities = &priority;
+	Com_Memset( queueInfos, 0, sizeof( queueInfos ) );
+	queueInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+	queueInfos[0].queueFamilyIndex = vk.queueFamily;
+	queueInfos[0].queueCount = 1;
+	queueInfos[0].pQueuePriorities = &priority;
+	queueInfos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+	queueInfos[1].queueFamilyIndex = vk.computeFamily;
+	queueInfos[1].queueCount = 1;
+	queueInfos[1].pQueuePriorities = &priority;
 
 	Com_Memset( &createInfo, 0, sizeof( createInfo ) );
 	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-	createInfo.queueCreateInfoCount = 1;
-	createInfo.pQueueCreateInfos = &queueInfo;
+	createInfo.queueCreateInfoCount = vk.asyncCompute ? 2 : 1;
+	createInfo.pQueueCreateInfos = queueInfos;
 	createInfo.enabledExtensionCount = numExtensions;
 	createInfo.ppEnabledExtensionNames = extensions;
 	createInfo.pEnabledFeatures = &vk.enabledFeatures;
@@ -702,6 +782,19 @@ static void VK_CreateLogicalDevice( void ) {
 	if ( vk.presentFences ) {
 		swapchainFeatures.pNext = (void *)createInfo.pNext;
 		createInfo.pNext = &swapchainFeatures;
+	}
+	if ( vk.asyncCompute ) {
+		timelineFeatures.timelineSemaphore = VK_TRUE;
+		timelineFeatures.pNext = (void *)createInfo.pNext;
+		createInfo.pNext = &timelineFeatures;
+	}
+	if ( vk.presentWait ) {
+		presentIdFeatures.presentId = VK_TRUE;
+		presentIdFeatures.pNext = (void *)createInfo.pNext;
+		createInfo.pNext = &presentIdFeatures;
+		presentWaitFeatures.presentWait = VK_TRUE;
+		presentWaitFeatures.pNext = (void *)createInfo.pNext;
+		createInfo.pNext = &presentWaitFeatures;
 	}
 	if ( portability ) {
 		portabilityFeatures.pNext = (void *)createInfo.pNext;
@@ -740,6 +833,40 @@ static void VK_CreateLogicalDevice( void ) {
 	}
 
 	qvkGetDeviceQueue( vk.device, vk.queueFamily, 0, &vk.queue );
+
+	qvkGetCalibratedTimestampsKHR = NULL;
+	if ( vk.calibrationDomain != VK_TIME_DOMAIN_MAX_ENUM_KHR ) {
+		qvkGetCalibratedTimestampsKHR = (PFN_vkGetCalibratedTimestampsKHR)qvkGetDeviceProcAddr( vk.device, "vkGetCalibratedTimestampsKHR" );
+		if ( !qvkGetCalibratedTimestampsKHR ) {
+			qvkGetCalibratedTimestampsKHR = (PFN_vkGetCalibratedTimestampsKHR)qvkGetDeviceProcAddr( vk.device, "vkGetCalibratedTimestampsEXT" );
+		}
+		if ( !qvkGetCalibratedTimestampsKHR ) {
+			vk.calibrationDomain = VK_TIME_DOMAIN_MAX_ENUM_KHR;
+		}
+	}
+
+	qvkWaitForPresentKHR = NULL;
+	if ( vk.presentWait ) {
+		qvkWaitForPresentKHR = (PFN_vkWaitForPresentKHR)qvkGetDeviceProcAddr( vk.device, "vkWaitForPresentKHR" );
+		if ( !qvkWaitForPresentKHR ) {
+			vk.presentWait = qfalse;
+		}
+	}
+
+	qvkWaitSemaphoresKHR = NULL;
+	qvkSignalSemaphoreKHR = NULL;
+	qvkGetSemaphoreCounterValueKHR = NULL;
+	vk.computeQueue = VK_NULL_HANDLE;
+	if ( vk.asyncCompute ) {
+		qvkWaitSemaphoresKHR = (PFN_vkWaitSemaphoresKHR)qvkGetDeviceProcAddr( vk.device, "vkWaitSemaphoresKHR" );
+		qvkSignalSemaphoreKHR = (PFN_vkSignalSemaphoreKHR)qvkGetDeviceProcAddr( vk.device, "vkSignalSemaphoreKHR" );
+		qvkGetSemaphoreCounterValueKHR = (PFN_vkGetSemaphoreCounterValueKHR)qvkGetDeviceProcAddr( vk.device, "vkGetSemaphoreCounterValueKHR" );
+		if ( qvkWaitSemaphoresKHR && qvkSignalSemaphoreKHR && qvkGetSemaphoreCounterValueKHR ) {
+			qvkGetDeviceQueue( vk.device, vk.computeFamily, 0, &vk.computeQueue );
+		} else {
+			vk.asyncCompute = qfalse;
+		}
+	}
 
 	// reported by gfxinfo
 	s = glConfig.extensions_string;
@@ -913,10 +1040,10 @@ semaphore; the fences of the presents to one swapchain signal in present
 order, so a retired swapchain and its semaphores are destroyed once the
 fence of its last present has signaled (checked after every frame's present,
 waited for at shutdown). Without the extension they are destroyed when they
-are retired: that always follows a vkDeviceWaitIdle after their last
-present, and vkQueueWaitIdle waits for the queue operations of presents too
-(the semaphore waits; Vulkan specification, vkQueueWaitIdle and
-vkQueuePresentKHR).
+are retired: that always follows a vkQueueWaitIdle of vk.queue after their
+last present (VK_WaitForSwapchainUse), which waits for the queue operations
+of presents too (the semaphore waits; Vulkan specification, vkQueueWaitIdle
+and vkQueuePresentKHR).
 
 Nothing here waits between a frame's input and its present: the fence of
 the next present is chosen and reset right after a present
@@ -1036,7 +1163,7 @@ static qboolean VK_RetiredSwapchainDone( const vkRetiredSwapchain_t *retired, qb
 	vkPresentFence_t *slot;
 	VkResult result;
 
-	// without present fences a vkDeviceWaitIdle came after its last present
+	// without present fences vk.queue was waited for after its last present
 	if ( !vk.presentFences || retired->lastFence < 0 ) {
 		return qtrue;
 	}
@@ -1093,8 +1220,8 @@ void VK_DestroyRetiredSwapchains( qboolean wait ) {
 VK_RetireSwapchain
 
 The swapchain is replaced or destroyed, and nothing will be presented to
-it; the caller waited for the device after its last present and released
-its held image
+it; the caller waited for vk.queue after its last present
+(VK_WaitForSwapchainUse) and released its held image
 ===============
 */
 static void VK_RetireSwapchain( VkSwapchainKHR swapchain ) {
@@ -1116,7 +1243,7 @@ static void VK_RetireSwapchain( VkSwapchainKHR swapchain ) {
 	vk.numPresentSemaphores = 0;
 	vk.lastPresentFence = -1;
 
-	// usually done already: the device was waited for
+	// usually done already: the queue was waited for
 	VK_DestroyRetiredSwapchains( qfalse );
 }
 
@@ -1151,6 +1278,28 @@ void VK_DestroyPresentFences( void ) {
 	vk.numPresentFences = 0;
 	vk.nextPresentFence = -1;
 	vk.presentFenceScan = 0;
+}
+
+/*
+===============
+VK_WaitForSwapchainUse
+
+Before the swapchain is replaced or destroyed. Only vk.queue draws into,
+copies to and presents its images, so only that queue is waited for, not
+the device: in the middle of a frame (VK_SubmitPresentCopy) the compute
+queue's ambient occlusion of that frame (r_aoAsync, vk_temporal.c) waits for
+the frame's graphics submission, which comes after this, and a wait for the
+device would never return. The queue is locked: the submit thread may use
+it (no lock without the thread).
+===============
+*/
+static VkResult VK_WaitForSwapchainUse( void ) {
+	VkResult result;
+
+	VK_LockSubmitQueue();
+	result = qvkQueueWaitIdle( vk.queue );
+	VK_UnlockSubmitQueue();
+	return result;
 }
 
 /*
@@ -1267,12 +1416,18 @@ void VK_CreateSwapchain( void ) {
 	// nothing may use the old swapchain while it's replaced
 	if ( oldSwapchain ) {
 		VK_ReleaseHeldImage();
-		VK_CHECK( qvkDeviceWaitIdle( vk.device ) );
+		VK_CHECK( VK_WaitForSwapchainUse() );
 		VK_DestroySwapchainTargets();
 	}
 
 	VK_CHECK( qvkCreateSwapchainKHR( vk.device, &createInfo, NULL, &vk.swapchain ) );
 	vk.stats.swapchains++;
+
+	// vsync's pacing starts again with two frames queued (vk.c,
+	// VK_WaitForPresentShown); the ids of this swapchain's presents start here
+	Com_Memset( &vk.pacing, 0, sizeof( vk.pacing ) );
+	vk.pacing.firstPresentId = vk.lastPresentId + 1;
+	vk.pacing.depth = 2;
 
 	// the old swapchain and its present semaphores go once its presents
 	// are done
@@ -1314,7 +1469,7 @@ void VK_DestroySwapchain( void ) {
 		VK_ReleaseHeldImage();
 		// no VK_CHECK: also called by vk_shutdown, which can follow a lost
 		// device, and a second fatal error would skip the window shutdown
-		qvkDeviceWaitIdle( vk.device );
+		VK_WaitForSwapchainUse();
 		VK_DestroySwapchainTargets();
 		VK_RetireSwapchain( vk.swapchain );
 		vk.swapchain = VK_NULL_HANDLE;

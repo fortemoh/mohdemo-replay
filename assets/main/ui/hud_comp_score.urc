@@ -1,0 +1,212 @@
+// The Competitive HUD (both styles): top center, CS:GO's box, see-through
+// dark, the timer over the scores in two rows as high, Allies | Axis (self |
+// the leader in free-for-all), lines right across between the three; either
+// side in round modes, the players' cards or each team's count of the alive
+// (cg_hud_alivecount); in Liberation, the jail. Classic's (cg_hudstyle 3)
+// the timer and the scores alone, in the top right corner, 25 down
+// (cl_uicomp.cpp, Comp_ClassicPlace, moves every widget there: the menu tall
+// enough)
+menu "hud_comp_score" 1920 112 NONE 0
+virtualres 1 1920 1080
+drawcache 1
+align centerx top
+bgcolor 0 0 0 0
+borderstyle NONE
+
+resource
+Label
+{
+name "box"
+rect 914 0 92 64
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_score_on
+shape fill 0 0 0 0.5
+shape in 0 32px 1 33px fill 1 1 1 0.2
+shape in 46px 33px 47px 1 fill 1 1 1 0.2
+}
+
+resource
+Label
+{
+name "timer"
+rect 914 0 92 32
+fgcolor 0.922 0.933 0.949 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-semibold-28
+textalign centerx
+linkcvar ui_hud_timer
+enabledcvar cg_hud_timer
+}
+
+resource
+Label
+{
+name "scoreleft"
+rect 914 33 46 31
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-semibold-28
+textalign centerx
+linkcvar ui_hud_score_l
+colorcvar ui_hud_score_lc
+enabledcvar ui_hud_score_on
+}
+
+resource
+Label
+{
+name "scoreright"
+rect 960 33 46 31
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-semibold-28
+textalign centerx
+linkcvar ui_hud_score_r
+colorcvar ui_hud_score_rc
+enabledcvar ui_hud_score_on
+}
+
+resource
+HudCards
+{
+name "cardsallies"
+rect 484 0 426 72
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-15s
+enabledcvar ui_hud_cards_on
+team allies
+icons iconallies iconaxis
+}
+
+resource
+HudCards
+{
+name "cardsaxis"
+rect 1010 0 426 72
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-15s
+enabledcvar ui_hud_cards_on
+team axis
+icons iconallies iconaxis
+}
+
+// or how many of each team are alive (cg_hud_alivecount, CS2's): the number
+// on the team's colour, the team's icon faint behind it
+
+resource
+Label
+{
+name "countallies"
+rect 838 0 72 64
+fgcolor 0.988 0.988 0.988 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-32s
+textalign centerx
+linkcvar ui_hud_count_allies
+enabledcvar ui_hud_cards_on&ui_hud_count_on
+shape fill 0.294 0.435 0.549 0.851
+shape in 8px 2px -8px -2px svg 1 1 1 0.22 ui/outlines/team/allies.svg center grey
+}
+
+resource
+Label
+{
+name "countaxis"
+rect 1010 0 72 64
+fgcolor 0.988 0.988 0.988 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-32s
+textalign centerx
+linkcvar ui_hud_count_axis
+enabledcvar ui_hud_cards_on&ui_hud_count_on
+shape fill 0.549 0.333 0.294 0.851
+shape in 8px 2px -8px -2px svg 1 1 1 0.22 ui/outlines/team/axis.svg center grey
+}
+
+// or Liberation's jail: how many of each team are locked up (or dead) of
+// how many, on the team's colour, the lock before it
+
+resource
+Label
+{
+name "jailallies"
+rect 818 0 92 64
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_jail_on&ui_hud_score_on
+shape fill 0.294 0.435 0.549 0.851
+shape in 12px 21px 34px 43px svg 1 1 1 0.75 ui/outlines/glyphs/lock.svg center
+}
+
+resource
+Label
+{
+name "jailalliesn"
+rect 852 0 50 64
+fgcolor 0.988 0.988 0.988 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-26s
+textalign centerx
+linkcvar ui_hud_jail_allies
+enabledcvar ui_hud_jail_on&ui_hud_score_on
+}
+
+resource
+Label
+{
+name "jailaxis"
+rect 1010 0 92 64
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_jail_on&ui_hud_score_on
+shape fill 0.549 0.333 0.294 0.851
+shape in 12px 21px 34px 43px svg 1 1 1 0.75 ui/outlines/glyphs/lock.svg center
+}
+
+resource
+Label
+{
+name "jailaxisn"
+rect 1044 0 50 64
+fgcolor 0.988 0.988 0.988 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-26s
+textalign centerx
+linkcvar ui_hud_jail_axis
+enabledcvar ui_hud_jail_on&ui_hud_score_on
+}
+
+// the teams' icons (moh-icons team/allies.svg and team/axis.svg) the cards
+// draw, in hidden widgets
+
+resource
+Label
+{
+name "iconallies"
+rect 0 0 38 38
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_never
+shape svg 1 1 1 1 ui/outlines/team/allies.svg center
+}
+
+resource
+Label
+{
+name "iconaxis"
+rect 0 0 38 38
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_never
+shape svg 1 1 1 1 ui/outlines/team/axis.svg center
+}
+
+end.

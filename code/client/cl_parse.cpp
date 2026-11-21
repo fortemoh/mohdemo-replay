@@ -22,6 +22,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_parse.c  -- parse a message received from the server
 
 #include "client.h"
+#include "cl_lagometer.h"
+#include "cl_uicomp.h"
+#include "cl_uimenus.h"
 #include "cl_ui.h"
 #include "cl_demohits.h"
 #include "cl_demohud.h"
@@ -745,6 +748,8 @@ void CL_ParseSnapshot( msg_t *msg ) {
 	// if not valid, dump the entire thing now that it has
 	// been properly read
 	if ( !newSnap.valid ) {
+		// Added: the lagometer counts it as lost (Project: Omaha's netgraph)
+		CL_Lagometer_Snapshot( newSnap.serverTime, newSnap.messageNum, 0, newSnap.snapFlags, qfalse );
 		return;
 	}
 
@@ -800,6 +805,9 @@ void CL_ParseSnapshot( msg_t *msg ) {
 	//  as shown (the HUD), the one kept as it came
 	CL_DemoShowFollowed( &cl.snap.ps, cl.snap.messageNum );
 	CL_DemoSpectatorHud();
+
+	// Added: the lagometer, as it arrives (Project: Omaha's netgraph)
+	CL_Lagometer_Snapshot( cl.snap.serverTime, cl.snap.messageNum, cl.snap.ping, cl.snap.snapFlags, qtrue );
 
 	if (cl_shownet->integer == 3) {
 		Com_Printf( "   snapshot:%i  delta:%i  ping:%i\n", cl.snap.messageNum,
@@ -921,25 +929,6 @@ void CL_SystemInfoChanged( void ) {
 
 /*
 ==================
-CL_ParseServerInfo
-==================
-*/
-static void CL_ParseServerInfo(void)
-{
-	const char *serverInfo;
-
-	serverInfo = cl.gameState.stringData
-		+ cl.gameState.stringOffsets[ CS_SERVERINFO ];
-
-	clc.sv_allowDownload = atoi(Info_ValueForKey(serverInfo,
-		"sv_allowDownload"));
-	Q_strncpyz(clc.sv_dlURL,
-		Info_ValueForKey(serverInfo, "sv_dlURL"),
-		sizeof(clc.sv_dlURL));
-}
-
-/*
-==================
 CL_ClearStateKeepingFrames
 
 Added in OPM
@@ -1051,6 +1040,8 @@ void CL_ParseGamestate( msg_t *msg ) {
 		}
 	}
 
+	UI_CompHud_ConfigString();
+	UI_Menus_ConfigString();
 	clc.clientNum = MSG_ReadLong(msg);
 	// read the checksum feed
 	clc.checksumFeed = MSG_ReadLong( msg );

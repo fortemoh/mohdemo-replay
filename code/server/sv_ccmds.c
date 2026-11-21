@@ -1594,9 +1594,10 @@ static void SV_KillServer_f( void ) {
 SV_CompleteMapName
 ==================
 */
-static void SV_CompleteMapName( char *args, int argNum ) {
+static void SV_CompleteMapName( const char *args, int argNum ) {
 	if( argNum == 2 ) {
-		Field_CompleteFilename( "maps", "bsp", qtrue, qfalse );
+		// Changed: the maps in maps/'s folders too (dm/, obj/)
+		Field_CompleteFilename( "maps", "bsp", qtrue, qfalse, qtrue );
 	}
 }
 
@@ -1934,6 +1935,12 @@ void SV_AddOperatorCommands(void) {
 	Cmd_AddCommand("map", SV_Map_f);
 	Cmd_AddCommand("devmap", SV_Map_f);
 	Cmd_AddCommand("gamemap", SV_GameMap_f);
+	// Added: Tab completes their map names
+	Cmd_SetCommandCompletionFunc("spmap", SV_CompleteMapName);
+	Cmd_SetCommandCompletionFunc("spdevmap", SV_CompleteMapName);
+	Cmd_SetCommandCompletionFunc("map", SV_CompleteMapName);
+	Cmd_SetCommandCompletionFunc("devmap", SV_CompleteMapName);
+	Cmd_SetCommandCompletionFunc("gamemap", SV_CompleteMapName);
 
 	Cmd_AddCommand("killserver", SV_KillServer_f);
 #ifndef DEDICATED
@@ -2666,7 +2673,6 @@ void SV_CheckSaveGame(void)
 	if (cl.serverTime >= svs.time) {
 		bSavegame = qfalse;
 		SV_SaveGame(savegame_name[0] ? savegame_name : NULL, qfalse);
-		UI_SetupFiles();
 	}
 #endif
 }

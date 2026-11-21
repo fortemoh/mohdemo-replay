@@ -296,6 +296,7 @@ cvar_t *g_bot_manualmove;
 
 cvar_t *g_rankedserver;
 cvar_t *g_spectatefollow_firstperson;
+cvar_t *g_spectatefollow_stockbob;
 
 cvar_t *g_playeranim_legs_continous;
 
@@ -355,7 +356,8 @@ void CVAR_Init(void)
     flood_waitdelay = gi.Cvar_Get("flood_waitdelay", "10", 0);
 
     detail     = gi.Cvar_Get("detail", "1", CVAR_ARCHIVE);
-    com_blood  = gi.Cvar_Get("com_blood", "1", CVAR_ARCHIVE);
+    // Changed: off by default (it only spawns gore the retail data has none of; Options has no row for it)
+    com_blood  = gi.Cvar_Get("com_blood", "0", CVAR_ARCHIVE);
     whereami   = gi.Cvar_Get("whereami", "0", 0);
     bosshealth = gi.Cvar_Get("bosshealth", "0", 0);
 
@@ -701,6 +703,7 @@ void CVAR_Init(void)
 
     g_rankedserver               = gi.Cvar_Get("g_rankedserver", "0", 0);
     g_spectatefollow_firstperson = gi.Cvar_Get("g_spectatefollow_firstperson", "0", 0);
+    g_spectatefollow_stockbob    = gi.Cvar_Get("g_spectatefollow_stockbob", "0", 0);
 
     g_playeranim_legs_continous = gi.Cvar_Get("g_playeranim_legs_continous", "1", 0);
     g_playerStacking            = gi.Cvar_Get("g_playerStacking", "0", 0);

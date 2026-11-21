@@ -88,25 +88,6 @@ struct snd_codec_mp3_info
     mp3_dither_t own;
 };
 
-/*
-=================
-S_MP3_Alloc, S_MP3_Free
-
-The streams are decoded on the sound system's threads (snd_stream_async.cpp,
-snd_stream_thread.cpp): the memory a decode grows comes from the C library,
-not the zone.
-=================
-*/
-static void* S_MP3_Alloc(snd_stream_t* stream, size_t size)
-{
-    return calloc(1, size);
-}
-
-static void S_MP3_Free(snd_stream_t* stream, void* ptr)
-{
-    free(ptr);
-}
-
 /*************** MP3 utility functions ***************/
 
 /*
@@ -536,8 +517,10 @@ int S_MP3_Decode(snd_stream_t* stream)
 
         if (samplecount < pcm->length)
         {
-            // The pcm buffer was not large enough. Make it bigger.
-            byte* newbuf = S_MP3_Alloc(stream, cursize);
+            // The pcm buffer was not large enough. Make it bigger (from the C
+            // library, not the zone: the streams are decoded on the sound system's
+            // thread, snd_stream_async.cpp).
+            byte* newbuf = calloc(1, cursize);
 
             if (!newbuf)
             {
@@ -547,7 +530,7 @@ int S_MP3_Decode(snd_stream_t* stream)
             if (mp3info->pcmbuf)
             {
                 memcpy(newbuf, mp3info->pcmbuf, mp3info->buflen);
-                S_MP3_Free(stream, mp3info->pcmbuf);
+                free(mp3info->pcmbuf);
             }
 
             mp3info->pcmbuf = newbuf;
@@ -644,7 +627,7 @@ void S_MP3_CodecCloseStream(snd_stream_t* stream)
         mp3info = stream->ptr;
 
         if (mp3info->pcmbuf)
-            S_MP3_Free(stream, mp3info->pcmbuf);
+            free(mp3info->pcmbuf);
 
         mad_synth_finish(&mp3info->madsynth);
         mad_frame_finish(&mp3info->madframe);

@@ -213,6 +213,7 @@ void RB_BeginSurface( shader_t *shader ) {
 	tess.lightmapDlights = 0;
 	tess.lightmapDlightFaces = qfalse;
 	tess.vertexColorValid = r_vertexLight->integer != 0;
+	tess.colors2D = qfalse;
 	tess.xstages = shader->unfoggedStages;
 	tess.numPasses = shader->numUnfoggedPasses;
 	tess.currentStageIteratorFunc = shader->optimalStageIteratorFunc;
@@ -602,7 +603,17 @@ static void ComputeColors( shaderStage_t *pStage )
 				}
 				break;
 			}
-			if (tr.identityLight == 1)
+			if (tess.colors2D && pStage->alphaGen == AGEN_ONE_MINUS_VERTEX)
+			{
+				// the game's 2D vertex colors (see AGEN_ONE_MINUS_VERTEX)
+				for (i = 0; i < tess.numVertexes; i++)
+				{
+					tess.svars.colors[i][0] = (byte)(tess.vertexColors[i][0] * tr.identityLightByte) * tr.identityLight;
+					tess.svars.colors[i][1] = (byte)(tess.vertexColors[i][1] * tr.identityLightByte) * tr.identityLight;
+					tess.svars.colors[i][2] = (byte)(tess.vertexColors[i][2] * tr.identityLightByte) * tr.identityLight;
+				}
+			}
+			else if (tr.identityLight == 1)
 			{
 				Com_Memcpy(tess.svars.colors, tess.vertexColors, tess.numVertexes * sizeof(tess.vertexColors[0]));
 			}
@@ -748,6 +759,10 @@ static void ComputeColors( shaderStage_t *pStage )
 			RB_CalcColorFromConstant((unsigned char*)tess.svars.colors, pStage->colorConst);
 			break;
 		case CGEN_GLOBAL_COLOR:
+			if (tess.colors2D) {
+				Com_Memcpy(tess.svars.colors, tess.vertexColors, tess.numVertexes * sizeof(tess.vertexColors[0]));
+				break;
+			}
 			RB_CalcColorFromConstant((unsigned char*)tess.svars.colors, backEnd.color2D);
 			break;
 		case CGEN_SCOORD:
@@ -815,9 +830,14 @@ static void ComputeColors( shaderStage_t *pStage )
 		}
 		break;
 	case AGEN_ONE_MINUS_VERTEX:
+		// A 2D draw's vertexes carry the 2D color (tr_draw.c). The game's 2D draws gave them the 2D
+		// color's bytes times 255 again (RB_Color4f), modulo 256: 256 - c, 0 for 0. The stock shaders
+		// with alphaGen oneMinusVertex (the zoom overlays, gfx/2d/blank, the HUD's compass, health
+		// meter, clips, weapon icons) were made for that: they get the 2D alpha less one, and rgbGen
+		// vertex of white nearly black
 		for (i = 0; i < tess.numVertexes; i++)
 		{
-			tess.svars.colors[i][3] = 255 - tess.vertexColors[i][3];
+			tess.svars.colors[i][3] = 255 - ( tess.colors2D ? (byte)( tess.vertexColors[i][3] * 255 ) : tess.vertexColors[i][3] );
 		}
 		break;
 	case AGEN_LIGHTING_SPECULAR:
@@ -867,13 +887,19 @@ static void ComputeColors( shaderStage_t *pStage )
 		RB_CalcAlphaFromConstant((unsigned char*)tess.svars.colors, pStage->colorConst[3]);
 		break;
 	case AGEN_GLOBAL_ALPHA:
+		if (tess.colors2D) {
+			for (i = 0; i < tess.numVertexes; i++) {
+				tess.svars.colors[i][3] = tess.vertexColors[i][3];
+			}
+			break;
+		}
 		RB_CalcAlphaFromConstant((unsigned char*)tess.svars.colors, backEnd.color2D[3]);
 		break;
 	case AGEN_SKYALPHA:
-		RB_CalcAlphaFromConstant((unsigned char*)tess.svars.colors, tr.refdef.sky_alpha * 255.0);
+		RB_CalcAlphaFromConstant((unsigned char*)tess.svars.colors, backEnd.refdef.sky_alpha * 255.0);
 		break;
 	case AGEN_ONE_MINUS_SKYALPHA:
-		RB_CalcAlphaFromConstant((unsigned char*)tess.svars.colors, (1.0 - tr.refdef.sky_alpha) * 255.0);
+		RB_CalcAlphaFromConstant((unsigned char*)tess.svars.colors, (1.0 - backEnd.refdef.sky_alpha) * 255.0);
 		break;
 	case AGEN_SCOORD:
 		RB_CalcAlphaFromTexCoords(
@@ -1581,10 +1607,10 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
 			break;
 		}
 
-		if (pStage->alphaGen == AGEN_SKYALPHA && tr.refdef.sky_alpha < 0.01) {
+		if (pStage->alphaGen == AGEN_SKYALPHA && backEnd.refdef.sky_alpha < 0.01) {
 			continue;
 		}
-		else if (pStage->alphaGen == AGEN_ONE_MINUS_SKYALPHA && tr.refdef.sky_alpha > 0.99) {
+		else if (pStage->alphaGen == AGEN_ONE_MINUS_SKYALPHA && backEnd.refdef.sky_alpha > 0.99) {
 			continue;
 		}
 
@@ -1948,7 +1974,7 @@ void RB_EndSurface( void ) {
 	//
 	tess.currentStageIteratorFunc();
 
-	if (!(tr.refdef.rdflags & RDF_NOWORLDMODEL) && !backEnd.in2D)
+	if (!(backEnd.refdef.rdflags & RDF_NOWORLDMODEL) && !backEnd.in2D)
 	{
 		//
 		// draw debugging stuff

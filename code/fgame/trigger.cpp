@@ -2283,46 +2283,22 @@ void TriggerCameraUse::TriggerCamera(Event *ev)
 /*****************************************************************************/
 /*QUAKED trigger_exit (1 0 0) ?
 
-When the player touches this, an exit icon will be displayed in his hud.
-This is to inform him that he is near an exit.
+A plain trigger now. It showed an exit sign in the HUD (Heavy Metal
+F.A.K.K.2's; none of the three games' maps has one): kept so that a map with
+one still loads.
 
 "triggerable" turn trigger on
 "nottriggerable" turn trigger off
 
 ******************************************************************************/
 
-Event EV_TriggerExit_TurnExitOff
-(
-    "_turnexitoff",
-    EV_DEFAULT,
-    NULL,
-    NULL,
-    "Internal event that turns the exit sign off.",
-    EV_NORMAL
-);
-
 CLASS_DECLARATION(Trigger, TriggerExit, "trigger_exit") {
-    {&EV_Trigger_Effect,          &TriggerExit::DisplayExitSign},
-    {&EV_TriggerExit_TurnExitOff, &TriggerExit::TurnExitSignOff},
-    {NULL,                        NULL                         }
+    {NULL, NULL}
 };
 
 TriggerExit::TriggerExit()
 {
     wait = 1;
-}
-
-void TriggerExit::TurnExitSignOff(Event *ev)
-{
-    level.near_exit = false;
-}
-
-void TriggerExit::DisplayExitSign(Event *ev)
-{
-    level.near_exit = qtrue;
-
-    CancelEventsOfType(EV_TriggerExit_TurnExitOff);
-    PostEvent(EV_TriggerExit_TurnExitOff, 1.1f);
 }
 
 /*****************************************************************************/

@@ -108,6 +108,9 @@ extern "C" {
 
         // exact interpolated position of entity on this frame
         vec3_t lerpOrigin;
+        // Added: the stock position, before remote prediction moved where another
+        // player is drawn (CG_RP_UpdateEntity); collision uses this one
+        vec3_t netLerpOrigin;
         vec3_t lerpAngles;
 
         sfxHandle_t tikiLoopSound;
@@ -173,11 +176,6 @@ extern "C" {
         char name[64];
     } clientInfo_t;
 
-    typedef struct cobjective_s {
-        char text[MAX_STRING_CHARS];
-        int  flags;
-    } cobjective_t;
-
 #define MAX_RAIN_SHADERS 16
 
     typedef struct crain_s {
@@ -201,6 +199,28 @@ extern "C" {
         trace_t  trace;
     } shadowTrace_t;
 
+    // the precise shadows of a player (CG_EntityShadow, cg_shadows 2): the
+    // lights gathered at its origin, and each foot's trace to each light,
+    // the same while the foot stays within a unit of where it was, for the
+    // server frame
+#define FOOT_SHADOW_LIGHTS 8
+    typedef struct {
+        qboolean valid;
+        vec3_t   pos; // the foot
+        vec3_t   lightPos;
+        trace_t  trace;
+    } footShadowTrace_t;
+
+    typedef struct {
+        int               serverTime; // the snapshot these are from
+        int               maxLights;  // cg_shadowscount then
+        int               numLights;  // -1: not gathered yet
+        vec3_t            origin;     // where the lights were gathered
+        vec3_t            lightPos[FOOT_SHADOW_LIGHTS];
+        vec3_t            lightIntensity[FOOT_SHADOW_LIGHTS];
+        footShadowTrace_t feet[FOOT_SHADOW_LIGHTS][2]; // per light: the left and the right foot
+    } footShadow_t;
+
     //======================================================================
 
     // all cg.stepTime, cg.duckTime, cg.landTime, etc are set to cg.time when the action
@@ -215,7 +235,6 @@ extern "C" {
 
         // there are only one or two snapshot_t that are relevent at a time
         int         latestSnapshotNum;  // the number of snapshots the client system has received
-        int         latestSnapshotTime; // the time from latestSnapshotNum, so we don't need to read the snapshot yet
         snapshot_t *snap;               // cg.snap->serverTime <= cg.time
         snapshot_t *nextSnap;           // cg.nextSnap->serverTime > cg.time, or NULL
         snapshot_t  activeSnapshots[2];
@@ -349,42 +368,26 @@ extern "C" {
         float viewkickMinDecay;
         float viewkickMaxDecay;
 
-        // objectives
-        cobjective_t Objectives[20];
-        float        ObjectivesAlphaTime;
-        float        ObjectivesBaseAlpha;
-        float        ObjectivesDesiredAlpha;
-        float        ObjectivesCurrentAlpha;
-        int          ObjectivesCurrentIndex;
+        // objectives (TAB held: shown)
+        float ObjectivesDesiredAlpha;
 
         // the last shadow trace of each entity
         shadowTrace_t shadowTraces[MAX_GENTITIES];
+        // the precise shadows' lights and traces of each player
+        footShadow_t footShadows[MAX_CLIENTS];
 
         // misc
         crain_t      rain;
 		clientInfo_t clientinfo[MAX_CLIENTS];
 		radarClient_t radars[MAX_CLIENTS];
-		qhandle_t radarShaders[2];
     } cg_t;
 
     typedef struct {
         qhandle_t     backTileShader;
-        qhandle_t     lagometerShader;
         qhandle_t     shadowMarkShader;
         qhandle_t     footShadowMarkShader;
         qhandle_t     wakeMarkShader;
-        qhandle_t     pausedShader;
-        qhandle_t     levelExitShader;
-        qhandle_t     zoomOverlayShader;
-        qhandle_t     kar98TopOverlayShader;
-        qhandle_t     kar98BottomOverlayShader;
-        qhandle_t     binocularsOverlayShader;
         fontheader_t *hudDrawFont;
-        fontheader_t *attackerFont;
-        fontheader_t *objectiveFont;
-        qhandle_t     objectivesBackShader;
-        qhandle_t     checkedBoxShader;
-        qhandle_t     uncheckedBoxShader;
     } media_t;
 
     // The client game static (cgs) structure hold everything
@@ -499,6 +502,12 @@ extern "C" {
     extern cvar_t *cg_crosshair_gap;
     extern cvar_t *cg_crosshair_thickness;
     extern cvar_t *cg_crosshair_color;
+    extern cvar_t *cg_crosshair_alpha;
+    extern cvar_t *cg_crosshair_outline;
+    extern cvar_t *cg_crosshair_outline_color;
+    extern cvar_t *cg_crosshair_outline_alpha;
+    extern cvar_t *cg_crosshair_dot;
+    extern cvar_t *cg_crosshair_t;
     extern cvar_t *vm_offset_max;
     extern cvar_t *vm_offset_speed;
     extern cvar_t *vm_sway_front;
@@ -522,10 +531,11 @@ extern "C" {
     extern cvar_t *vm_offset_vel_up;
     extern cvar_t *vm_offset_upvel;
     extern cvar_t *vm_lean_lower;
+    extern cvar_t *cg_viewmodel_movedrop;
+    extern cvar_t *cg_righthand;
     extern cvar_t *voiceChat;
     extern cvar_t *cg_shadowscount;
     extern cvar_t *cg_shadowdebug;
-    extern cvar_t *ui_timemessage;
 
     //
     // Added in OPM
@@ -578,6 +588,9 @@ extern "C" {
     void CG_ServerModelLoaded(const char* name, qhandle_t handle);
     void CG_ServerModelUnloaded(qhandle_t handle);
     void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime);
+    // Added in Reloaded: the player aimed at's tag: who, each frame before the entities; drawn
+    void CG_TeamTagFrame(void);
+    void CG_DrawTeamTag(void);
     void CG_AttachEntity(
         refEntity_t *entity, refEntity_t *parent, dtiki_t *tiki, int tagnum, qboolean use_angles, vec3_t attach_offset
     );
@@ -702,30 +715,36 @@ extern "C" {
     int  CG_GetVMAnimPrefixIndex();
     void CG_ViewModelAnimation(refEntity_t *pModel);
     void CG_CalcViewModelMovement(float fViewBobPhase, float fViewBobAmp, vec_t *vVelocity, vec_t *vMovement);
+    void CG_ViewModelSettings(void);
+    float CG_ViewModelMoveDrop(void);
+    void CG_MirrorViewModel(refEntity_t *pREnt);
 
     //
     // cg_drawtools.c
     //
     void CG_AdjustFrom640(float *x, float *y, float *w, float *h);
     void CG_TileClear(void);
-    void CG_DrawOverlayTopBottom(qhandle_t handleTop, qhandle_t handleBottom, float fAlpha);
-    void CG_DrawOverlayMiddle(qhandle_t handle, float fAlpha);
-    void CG_DrawOverlayFullScreen(qhandle_t handle, float fAlpha);
     void CG_DrawZoomOverlay();
     void CG_HudDrawShader(int iInfo);
     void CG_HudDrawFont(int iInfo);
     void CG_RefreshHudDrawElements();
     void CG_HudDrawElements();
     void CG_InitializeObjectives();
-    void CG_DrawObjectives();
     void CG_UpdateCrosshair(void);
+    void CG_CrosshairMiddle(float *x, float *y);
     void CG_Draw2D(void);
+
+    //
+    // cg_hitmarker.c (Added; Project: Omaha's)
+    //
+    void     CG_Hitmarker_RegisterCvars(void);
+    void     CG_Hitmarker_RegisterSound(void);
+    qboolean CG_Hitmarker_Hit(void);
+    void     CG_Hitmarker_Draw(void);
 
     //
     // cg_draw.c
     //
-    void CG_AddLagometerFrameInfo(void);
-    void CG_AddLagometerSnapshotInfo(snapshot_t *snap);
     void CG_CenterPrint(const char *str, int y, int charWidth);
     void CG_DrawHead(float x, float y, float w, float h, int clientNum, vec3_t headAngles);
     void CG_DrawActive(stereoFrame_t stereoView);
@@ -884,6 +903,7 @@ extern "C" {
     void     CG_PushMenuTeamSelect_f(void);
     void     CG_PushMenuWeaponSelect_f(void);
     void     CG_UseWeaponClass_f(void);
+    void     CG_UsePrimaryWeapon_f(void);
     void     CG_NextWeapon_f(void);
     void     CG_PrevWeapon_f(void);
     void     CG_UseLastWeapon_f(void);
@@ -1037,6 +1057,7 @@ qboolean CG_LightStyleColor(int style, int realtime, vec4_t color, qboolean clam
     void CG_InstaMessageGroupE_f(void);
     void CG_HudPrint_f(void);
 
+    int      CG_InstaMessageGroups(void);
     qboolean CG_CheckCaptureKey(int key, qboolean down, unsigned int time);
 
     //

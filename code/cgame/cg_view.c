@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "cg_local.h"
+#include "cg_remotepredict.h"
 #include "cg_parsemsg.h"
 
 //============================================================================
@@ -287,6 +288,50 @@ static void CG_ApplyViewBob(vec3_t origin, const vec3_t vVelocity, const vec3_t 
 
 /*
 ===============
+CG_ViewModelSettings
+
+cg_viewmodel_movedrop (Options' Weapon Dip) scales how far the first-person
+weapon dips and pulls back while moving (CG_CalcViewModelMovement), from 0
+(not at all, like CS2) to 1 (the game's own). Called once a frame: it only
+compares the modification count until the setting changes
+===============
+*/
+static float vmMoveDrop = 1;
+static int   vmMoveDropModCount = -1;
+
+void CG_ViewModelSettings(void)
+{
+    float v;
+
+    if (cg_viewmodel_movedrop->modificationCount == vmMoveDropModCount) {
+        return;
+    }
+
+    v = cg_viewmodel_movedrop->value;
+    if (!(v >= 0.0f && v <= 1.0f)) {
+        // out of range (or not a number): the nearest limit
+        v = v > 1.0f ? 1.0f : v < 0.0f ? 0.0f : 0;
+        cgi.Cvar_Set(cg_viewmodel_movedrop->name, va("%g", v));
+    }
+
+    vmMoveDrop         = v;
+    vmMoveDropModCount = cg_viewmodel_movedrop->modificationCount;
+}
+
+/*
+===============
+CG_ViewModelMoveDrop
+
+cg_viewmodel_movedrop as CG_ViewModelSettings took it: 0 to 1
+===============
+*/
+float CG_ViewModelMoveDrop(void)
+{
+    return vmMoveDrop;
+}
+
+/*
+===============
 CG_DemoLeanedEye
 
 Added in OPM
@@ -340,6 +385,36 @@ static void CG_DemoLeanedEye(const vec3_t eye, vec3_t leaned)
 
     VectorSubtract(leaned, eye, vEnd);
     VectorMA(eye, fLeaned, vEnd, leaned);
+}
+
+/*
+===============
+CG_MirrorViewModel
+
+With cg_righthand 0, the first-person model (and what is attached to it, the
+weapon) is mirrored across the plane of the view's forward and up axes: the
+same picture, flipped left to right. The renderer turns the culling of a
+first-person model with a mirrored axis around
+===============
+*/
+void CG_MirrorViewModel(refEntity_t *pREnt)
+{
+    const float *vLeft = cg.refdef.viewaxis[1];
+    vec3_t       vDelta;
+    int          i;
+
+    VectorSubtract(pREnt->origin, cg.refdef.vieworg, vDelta);
+    VectorMA(pREnt->origin, -2.0f * DotProduct(vDelta, vLeft), vLeft, pREnt->origin);
+    VectorSubtract(pREnt->lightingOrigin, cg.refdef.vieworg, vDelta);
+    VectorMA(pREnt->lightingOrigin, -2.0f * DotProduct(vDelta, vLeft), vLeft, pREnt->lightingOrigin);
+
+    for (i = 0; i < 3; i++) {
+        // VectorMA evaluates its scale once per component, after writing the
+        // earlier ones into this same axis: take the distance first
+        const float fDist = DotProduct(pREnt->axis[i], vLeft);
+
+        VectorMA(pREnt->axis[i], -2.0f * fDist, vLeft, pREnt->axis[i]);
+    }
 }
 
 /*
@@ -555,6 +630,7 @@ void CG_OffsetFirstPersonView(refEntity_t *pREnt, qboolean bUseWorldPosition)
         VectorMA(pREnt->origin, vDelta[0], mat[0], pREnt->origin);
         VectorMA(pREnt->origin, vDelta[1], mat[1], pREnt->origin);
         VectorMA(pREnt->origin, vDelta[2], mat[2], pREnt->origin);
+
     }
 
     VectorCopy(origin, cg.playerHeadPos);
@@ -567,6 +643,9 @@ CG_CalcFov
 Fixed fov at intermissions, otherwise account for fov variable and zooms.
 ====================
 */
+// the field of view of the first-person weapon (cg_fov's default)
+#define CG_VIEWMODEL_FOV 80.0f
+
 #define WAVE_AMPLITUDE 1
 #define WAVE_FREQUENCY 0.4
 
@@ -606,6 +685,30 @@ static int CG_CalcFov(void)
     // set it
     cg.refdef.fov_x    = fov_x;
     cg.refdef.fov_y    = fov_y;
+
+    if (cg.camera_fov != CG_VIEWMODEL_FOV && !cg.predicted_player_state.stats[STAT_INZOOM]
+        && !(cg.snap->ps.pm_flags & PMF_CAMERA_VIEW)) {
+        // the first-person weapon keeps cg_fov's default whatever cg_fov is (like CS2's,
+        // which has its own): its field of view made the way the scene's is. Zoomed or
+        // through a camera, the scene's
+        float vm_fov_x, vm_fov_y;
+
+        if (fov_ratio == 1) {
+            vm_fov_x = CG_VIEWMODEL_FOV;
+        } else {
+            vm_fov_x = RAD2DEG(atan(tan(DEG2RAD(CG_VIEWMODEL_FOV / 2.0)) * fov_ratio)) * 2.0;
+        }
+        x        = cg.refdef.width / tan(vm_fov_x / 360 * M_PI);
+        vm_fov_y = atan2(cg.refdef.height, x);
+        vm_fov_y = vm_fov_y * 360 / M_PI;
+        if (inwater) {
+            vm_fov_x += v;
+            vm_fov_y -= v;
+        }
+
+        cg.refdef.viewmodel_fov_x = vm_fov_x;
+        cg.refdef.viewmodel_fov_y = vm_fov_y;
+    }
     cg.fRefFovXCos     = cos(fov_x / 114.0f);
     cg.fRefFovXSin     = sin(fov_x / 114.0f);
     cg.fRefFovYCos     = cos(fov_y / 114.0f);
@@ -1478,6 +1581,9 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
         return;
     }
 
+    // Added: remote prediction reads every new snapshot as it arrives
+    CG_RP_BeginFrame();
+
     // this counter will be bumped for every valid scene we generate
     cg.clientFrame++;
 
@@ -1504,6 +1610,9 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
     } else if (cg_fov->value > 120) {
         cgi.Cvar_Set("cg_fov", "120");
     }
+
+    // the first-person weapon's dip while moving (Weapon Dip)
+    CG_ViewModelSettings();
 
     // update cg.predicted_player_state
     CG_PredictPlayerState();
@@ -1629,6 +1738,9 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
     // Added in OPM
     CG_ProcessPlayerModel();
 
+    // Added in Reloaded: the player aimed at, tagged in place of their head icon
+    CG_TeamTagFrame();
+
     // build the render lists
     if (!cg.hyperspace) {
         CG_AddPacketEntities(); // after calcViewValues, so predicted player state is correct
@@ -1667,11 +1779,6 @@ void CG_DrawActiveFrame(int serverTime, int frameTime, stereoFrame_t stereoView,
         cgi.S_Respatialize(ENTITYNUM_NONE, cg.SoundOrg, cg.SoundAxis);
     } else {
         cgi.S_Respatialize(cg.snap->ps.clientNum, cg.SoundOrg, cg.SoundAxis);
-    }
-
-    // make sure the lagometerSample and frame timing isn't done twice when in stereo
-    if (stereoView != STEREO_RIGHT) {
-        CG_AddLagometerFrameInfo();
     }
 
     CG_UpdateTestEmitter();

@@ -52,7 +52,7 @@ layout(push_constant) uniform PushConstants {
 	layout(offset = 128) mat4	prevMvp;	// last frame's projection (unjittered) * modelview
 	vec4	mvRow0;			// rows 0 and 1 of the modelview (row 2 is eyeZ)
 	vec4	mvRow1;
-	vec4	jitter;			// xy: the projection's jitter in NDC, z: the surface class
+	vec4	jitter;			// xy: the projection's jitter in NDC, z: the surface class, w: the texture LOD bias
 #endif
 } pc;
 
@@ -74,6 +74,9 @@ layout(location = 3) out vec2 v_fogClip;
 // object space position, for the dynamic lights (only pipelines with them
 // read it; the others link it away)
 layout(location = 4) out vec3 v_position;
+// bindless textures: the draw's units' slots, unit 0 | unit 1 << 12 in
+// firstInstance (vk_draw); unused without them
+layout(location = 11) flat out uvec2 v_tex;
 #ifdef TEMPORAL
 // the temporal path's outputs (generic.frag): clip positions of this frame
 // without the jitter and of the last frame, the view space normal and
@@ -83,6 +86,8 @@ layout(location = 6) out vec4 v_prevClip;
 layout(location = 7) out vec3 v_viewNormal;
 layout(location = 8) out vec3 v_viewPos;
 layout(location = 9) flat out float v_class;
+// the anti-aliasing's texture LOD bias (r_taaLodBias), for every pipeline
+layout(location = 10) flat out float v_lodBias;
 #endif
 
 #ifdef CLIP_DISTANCE
@@ -102,6 +107,8 @@ layout(constant_id = 12) const bool TEMPORAL_MOTION = true;
 invariant gl_Position;
 
 void main() {
+	v_tex = uvec2( uint( gl_InstanceIndex ) & 0xFFFu, uint( gl_InstanceIndex ) >> 12 );
+
 	// the operations of Mesa's fixed-function vertex program (a multiply,
 	// then fused multiply-adds, column by column), so clip coordinates are
 	// bit-identical to GL1's on Mesa drivers
@@ -129,6 +136,7 @@ void main() {
 	v_position = in_position;
 
 #ifdef TEMPORAL
+	v_lodBias = pc.jitter.w;
 	if ( !TEMPORAL_NORMALS ) {
 		return;
 	}

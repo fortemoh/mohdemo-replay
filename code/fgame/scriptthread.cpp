@@ -3947,7 +3947,7 @@ void ScriptThread::EventHidemenu(Event *ev)
 
 void ScriptThread::EventPlayMovie(Event *ev)
 {
-    gi.SendConsoleCommand(va("cinematic %s", ev->GetString(1).c_str()));
+    // Changed: nothing, the client plays no videos (a briefing's script goes on to its next map)
 }
 
 void ScriptThread::EventPushmenu(Event *ev)

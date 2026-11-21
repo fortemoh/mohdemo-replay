@@ -1,0 +1,25 @@
+// The HDR calibration's first screen (r_hdrOutputTest 1; cl_ui.cpp opens it): the black level, r_hdrBlack; NEXT shows
+// the peak's over it. Black where the renderer draws its pattern (cl_uimain.cpp)
+menu "hdr_calibrate_black" 640 480 NONE 0
+align left top
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 1.00
+borderstyle NONE
+bgfill 0.00 0.00 0.00 1.00
+fullscreen 1
+virtualres 1
+drawcache 1
+
+resource
+ReloadedMenu
+{
+name "front"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen hdrblack
+stuffcommand "pushmenu hdr_calibrate_peak"
+}
+
+end.

@@ -521,7 +521,8 @@ void R_LoadFontShader(fontheader_sgl_t* font)
     save = r_sequencenumber;
     r_sequencenumber = -1;
     Com_sprintf(filename, sizeof(filename), "gfx/fonts/%s", font->name);
-    font->shader = R_FindShader(filename, -1, qfalse, qfalse, qfalse, qfalse);
+    // Added: a face the UI baked (RegisterImage2D) has no shader script: its image's 2D shader
+    font->shader = R_FindShader(filename, R_ShaderTextExists(filename) ? -1 : LIGHTMAP_2D, qfalse, qfalse, qfalse, qfalse);
     r_sequencenumber = save;
 
     if (!font->shader) {
@@ -548,27 +549,29 @@ void R_LoadFontShader(fontheader_sgl_t* font)
     }
 }
 
+// Scales from the 640x480 virtual screen to the real one. Glyphs are scaled
+// across no more than down, so they keep their shape on a wide screen (where
+// text is narrower than its 640x480 layout width, see UIFont::setVirtualScale).
+static void R_VirtualScreenScale(const float *pvVirtualScreen, float *pfWidthScale, float *pfHeightScale, float *pfGlyphScale) {
+    *pfWidthScale = pvVirtualScreen[0] ? pvVirtualScreen[0] : (double)glConfig.vidWidth / 640.0;
+    *pfHeightScale = pvVirtualScreen[1] ? pvVirtualScreen[1] : (double)glConfig.vidHeight / 480.0;
+    *pfGlyphScale = Q_min(*pfWidthScale, *pfHeightScale);
+}
+
 void R_DrawString_sgl(fontheader_sgl_t* font, const char* text, float x, float y, int maxlen, const float *pvVirtualScreen) {
     float charHeight;
     float startx, starty;
-    int i;
-    float fWidthScale, fHeightScale;
+    int i, v;
+    float fWidthScale, fHeightScale, fGlyphScale;
 
     i = 0;
     startx = x;
     starty = y;
     if (pvVirtualScreen) {
-        if (pvVirtualScreen[0]) {
-            fWidthScale = pvVirtualScreen[0];
-        } else {
-            fWidthScale = (double)glConfig.vidWidth / 640.0;
-        }
-
-        if (pvVirtualScreen[1]) {
-            fHeightScale = pvVirtualScreen[1];
-        } else {
-            fHeightScale = (double)glConfig.vidHeight / 480.0;
-        }
+        R_VirtualScreenScale(pvVirtualScreen, &fWidthScale, &fHeightScale, &fGlyphScale);
+        // Added: the string starts on a whole pixel, so glyphs a texel each stay sharp
+        startx = x = floorf(x * fWidthScale + 0.5f) / fWidthScale;
+        starty = y = floorf(y * fHeightScale + 0.5f) / fHeightScale;
     }
 
     if (!font) {
@@ -588,7 +591,7 @@ void R_DrawString_sgl(fontheader_sgl_t* font, const char* text, float x, float y
     }
 
     charHeight = s_fontHeightScale * font->height * s_fontGeneralScale;
-    R_Begin2D((shader_t*)font->shader, R2D_GLYPHS, 0, 0);
+    R_Begin2D((shader_t*)font->shader, 0, 0);
 
     for (i = 0; text[i]; i++) {
         unsigned char c;
@@ -636,7 +639,7 @@ void R_DrawString_sgl(fontheader_sgl_t* font, const char* text, float x, float y
 				font->indirection[c] = indirected;
             }
 
-            RB_CHECKOVERFLOW(4, 6);
+            R_2DReserve(4, 6);
 
             loc = &font->locations[indirected];
 
@@ -664,6 +667,11 @@ void R_DrawString_sgl(fontheader_sgl_t* font, const char* text, float x, float y
             tess.xyz[tess.numVertexes + 3][1] = y + charHeight;
             tess.xyz[tess.numVertexes + 3][2] = s_fontZ;
 
+            // the 2D color (a global color's stage reads it there)
+            for (v = 0; v < 4; v++) {
+                Com_Memcpy(tess.vertexColors[tess.numVertexes + v], backEnd.color2D, 4);
+            }
+
             // indices
             tess.indexes[tess.numIndexes] = tess.numVertexes;
             tess.indexes[tess.numIndexes + 1] = tess.numVertexes + 1;
@@ -674,15 +682,12 @@ void R_DrawString_sgl(fontheader_sgl_t* font, const char* text, float x, float y
 
             if (pvVirtualScreen)
             {
-                // scale the string properly if virtual screen
-                tess.xyz[tess.numVertexes][0] *= fWidthScale;
-                tess.xyz[tess.numVertexes][1] *= fHeightScale;
-                tess.xyz[tess.numVertexes + 1][0] *= fWidthScale;
-                tess.xyz[tess.numVertexes + 1][1] *= fHeightScale;
-                tess.xyz[tess.numVertexes + 2][0] *= fWidthScale;
-                tess.xyz[tess.numVertexes + 2][1] *= fHeightScale;
-                tess.xyz[tess.numVertexes + 3][0] *= fWidthScale;
-                tess.xyz[tess.numVertexes + 3][1] *= fHeightScale;
+                // scale the string properly if virtual screen: its start
+                // like the screen, its glyphs keeping their shape
+                for (v = 0; v < 4; v++) {
+                    tess.xyz[tess.numVertexes + v][0] = startx * fWidthScale + (tess.xyz[tess.numVertexes + v][0] - startx) * fGlyphScale;
+                    tess.xyz[tess.numVertexes + v][1] *= fHeightScale;
+                }
             }
 
             x += s_fontGeneralScale * loc->size[0] * 256.0;
@@ -695,7 +700,7 @@ void R_DrawString_sgl(fontheader_sgl_t* font, const char* text, float x, float y
     R_End2D();
 }
 
-void R_DrawString(fontheader_t* font, const char* text, float x, float y, int maxlen, const float *pvVirtualScreen) {
+void RB_Draw_String(fontheader_t* font, const char* text, float x, float y, int maxlen, const float *pvVirtualScreen) {
     int i;
     int code;
     unsigned short uch;
@@ -704,7 +709,8 @@ void R_DrawString(fontheader_t* font, const char* text, float x, float y, int ma
     int cursgl;
     float curX, curY;
     float curHeight;
-    
+    float fWidthScale, fHeightScale, fGlyphScale;
+
     if (!font->numPages) {
         if (font->sgl[0]) {
             R_DrawString_sgl(font->sgl[0], text, x, y, maxlen, pvVirtualScreen);
@@ -716,6 +722,13 @@ void R_DrawString(fontheader_t* font, const char* text, float x, float y, int ma
         maxlen = strlen(text);
     }
     
+    // a page's glyphs are drawn narrower than their layout width when they
+    // keep their shape on a wide virtual screen: so is the next page's start
+    fWidthScale = fGlyphScale = 1.f;
+    if (pvVirtualScreen) {
+        R_VirtualScreenScale(pvVirtualScreen, &fWidthScale, &fHeightScale, &fGlyphScale);
+    }
+
     curX = x;
     curY = y;
     curHeight = 0.f;
@@ -766,7 +779,7 @@ void R_DrawString(fontheader_t* font, const char* text, float x, float y, int ma
             buffer[buflen] = 0;
             R_DrawString_sgl(font->sgl[cursgl], buffer, curX, curY, maxlen, pvVirtualScreen);
 
-            curX += curHeight;
+            curX += curHeight * fGlyphScale / fWidthScale;
             curHeight = 0.f;
             buflen = 0;
             ct = &font->charTable[code];
@@ -888,8 +901,77 @@ void R_DrawFloatingString_sgl(fontheader_sgl_t* font, const char* text, const ve
 }
 
 void R_DrawFloatingString(fontheader_t* font, const char* text, const vec3_t org, const vec4_t color, float scale, int maxlen) {
+    // polys of the scene (RE_AddPolyToScene): the front end's, also with
+    // the render thread
     return R_DrawFloatingString_sgl(font->sgl[0], text, org, color, scale, maxlen);
 }
+
+/*
+====================================================================
+
+THE EXPORT: with the render thread (r_smp) the strings are recorded as
+commands the thread replays with the body above, the text copied; the
+fonts' shaders are loaded here first (files, the hunk: the front end's,
+with the thread idle), as the body would have. The floating strings add
+polys to the scene, the front end's work (above)
+
+====================================================================
+*/
+
+static void R_LoadFontShaders(fontheader_t* font) {
+    int i, pages;
+
+    pages = font->numPages ? font->numPages : 1;
+    for (i = 0; i < pages && i < (int)(sizeof(font->sgl) / sizeof(font->sgl[0])); i++) {
+        fontheader_sgl_t* sgl = font->sgl[i];
+
+        if (!sgl) {
+            continue;
+        }
+        if (sgl->trhandle != r_sequencenumber) {
+            sgl->shader = NULL;
+        }
+        if (!sgl->shader) {
+            // it sets the colors of the shader's stage: the open 2D batch
+            // keeps the ones it was made with (R_DrawString_sgl)
+            R_FrontEndSync();
+            R_End2DBatch();
+            R_LoadFontShader(sgl);
+        }
+    }
+}
+
+void R_DrawString(fontheader_t* font, const char* text, float x, float y, int maxlen, const float *pvVirtualScreen) {
+    if (R_2DQueued()) {
+        string2DCommand_t *cmd;
+        size_t len = strlen(text);
+
+        R_LoadFontShaders(font);
+        if (len > 8191) {
+            len = 8191;
+        }
+        cmd = (string2DCommand_t *)R_2DCommandBuffer((int)(sizeof(*cmd) + PAD(len + 1, sizeof(void *))));
+        if (!cmd) {
+            return;
+        }
+        cmd->commandId = RC_2D_STRING;
+        cmd->font = font;
+        cmd->x = x;
+        cmd->y = y;
+        cmd->maxlen = maxlen;
+        cmd->hasVirtual = pvVirtualScreen != NULL;
+        if (pvVirtualScreen) {
+            cmd->virtualScreen[0] = pvVirtualScreen[0];
+            cmd->virtualScreen[1] = pvVirtualScreen[1];
+        }
+        cmd->length = (int)len;
+        Com_Memcpy(cmd + 1, text, len);
+        ((char *)(cmd + 1))[len] = 0;
+        return;
+    }
+    RB_Draw_String(font, text, x, y, maxlen, pvVirtualScreen);
+}
+
 
 float R_GetFontHeight(const fontheader_t* font)
 {

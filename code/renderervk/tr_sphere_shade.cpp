@@ -801,6 +801,56 @@ static qboolean RB_Sphere_CalculateSphereOrigin()
     return qtrue;
 }
 
+/*
+=================
+RB_Sphere_Studio
+
+A HUD scene with RDF_STUDIOLIGHT (the Reloaded weapon menu's figure): its
+model stands at the player's eyes, where the world's light would change with
+the map behind the menu; it is lit instead as in a studio, by lights fixed
+to the view: a soft ambient, a warm key from the upper left in front, a cool
+fill from the right and a rim from above behind. In the units of the game's
+own entity lighting (overbright, r_entlight_scale), so it is as bright in a
+window as fullscreen
+=================
+*/
+static void RB_Sphere_Studio()
+{
+    static const struct {
+        float toward[3]; // toward the light: the view's forward, left, up
+        float color[3];
+    } rig[] = {
+        {{-0.80f, 0.40f, 0.45f},  {64, 59, 51}}, // key
+        {{-0.75f, -0.65f, 0.10f}, {14, 16, 19}}, // fill
+        {{0.55f, -0.30f, 0.78f},  {24, 22, 18}}, // rim
+    };
+    static const float ambient[3] = {33, 32, 30};
+    sphereor_t        *sphere     = backEnd.currentSphere;
+    const float        scale      = tr.overbrightMult * r_entlight_scale->value;
+    int                i;
+
+    for (i = 0; i < 3; i++) {
+        sphere->ambient.level[i] = (unsigned char)Q_min(ambient[i] * scale, 255.0f);
+    }
+    sphere->ambient.level[3] = 0xff;
+    sphere->numRealLights    = (int)ARRAY_LEN(rig);
+    sphere->bUsesCubeMap     = qfalse;
+    for (i = 0; i < (int)ARRAY_LEN(rig); i++) {
+        reallightinfo_t *light = &sphere->light[i];
+        vec3_t           dir;
+
+        VectorScale(backEnd.refdef.viewaxis[0], rig[i].toward[0], dir);
+        VectorMA(dir, rig[i].toward[1], backEnd.refdef.viewaxis[1], dir);
+        VectorMA(dir, rig[i].toward[2], backEnd.refdef.viewaxis[2], dir);
+        VectorNormalize(dir);
+        MatrixTransformVectorRight(backEnd.currentEntity->e.axis, dir, light->vDirection);
+        VectorScale(rig[i].color, scale, light->color);
+        light->eType      = LIGHT_DIRECTIONAL;
+        light->fIntensity = light->color[0] * 0.299f + light->color[1] * 0.587f + light->color[2] * 0.114f;
+    }
+    sphere->TessFunction = &RB_Light_Real;
+}
+
 static bool RB_Sphere_SetupGlobals()
 {
     int i;
@@ -811,6 +861,10 @@ static bool RB_Sphere_SetupGlobals()
     }
 
     if (backEnd.refdef.rdflags & RDF_HUD) {
+        if (backEnd.refdef.rdflags & RDF_STUDIOLIGHT) {
+            RB_Sphere_Studio();
+            return false;
+        }
         if (!backEnd.refdef.vieworg[0] && !backEnd.refdef.vieworg[1] && !backEnd.refdef.vieworg[2]) {
             backEnd.currentSphere->TessFunction = &RB_Light_Fullbright;
             return false;
@@ -850,7 +904,7 @@ static bool RB_Sphere_ResetPointColors()
     light_offset[0] = ambientlight[0] + light_offset[0] * 0.18;
     light_offset[1] = ambientlight[1] + light_offset[1] * 0.18;
     light_offset[2] = ambientlight[2] + light_offset[2] * 0.18;
-    if (tr.refdef.rdflags & RDF_FULLBRIGHT) {
+    if (backEnd.refdef.rdflags & RDF_FULLBRIGHT) {
         float fMin = tr.identityLight * 20.0;
 
         if (fMin <= light_offset[0] || fMin <= light_offset[1] || fMin <= light_offset[2]) {
@@ -1210,7 +1264,7 @@ void RB_Grid_SetupEntity()
 
 void RB_Grid_SetupStaticModel()
 {
-    RB_SetupStaticModelGridLighting(&tr.refdef, backEnd.currentStaticModel, backEnd.currentStaticModel->origin);
+    RB_SetupStaticModelGridLighting(&backEnd.refdef, backEnd.currentStaticModel, backEnd.currentStaticModel->origin);
 }
 
 void RB_Light_Fullbright(unsigned char *colors)

@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cg_ents.c -- present snapshot entities, happens every single frame
 
 #include "cg_local.h"
+#include "cg_remotepredict.h"
 #include "cg_radar.h"
 
 /*
@@ -444,11 +445,12 @@ void BG_EvaluateTrajectory(const trajectory_t *tr, int atTime, const vec3_t base
 
 /*
 ===============
-CG_CalcEntityLerpPositions
+CG_CalcEntityNetLerpPositions
 
+The stock position (CG_CalcEntityLerpPositions before remote prediction)
 ===============
 */
-void CG_CalcEntityLerpPositions(centity_t *cent)
+static void CG_CalcEntityNetLerpPositions(centity_t *cent)
 {
     int   i;
     float f;
@@ -524,6 +526,20 @@ void CG_CalcEntityLerpPositions(centity_t *cent)
         BG_EvaluateTrajectory(&cent->currentState.pos, cg.time, cent->currentState.origin, cent->lerpOrigin);
         VectorCopy(cent->currentState.angles, cent->lerpAngles);
     }
+}
+
+/*
+===============
+CG_CalcEntityLerpPositions
+
+Changed: the stock position goes to netLerpOrigin too, and remote prediction
+may then move where another player is drawn
+===============
+*/
+void CG_CalcEntityLerpPositions(centity_t *cent)
+{
+    CG_CalcEntityNetLerpPositions(cent);
+    CG_RP_UpdateEntity(cent);
 }
 
 /*

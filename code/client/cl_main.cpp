@@ -23,16 +23,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "client.h"
 #include "../server/server.h"
+#include "cl_lagometer.h"
 #include "cl_ui.h"
 #include "cl_demoindex.h"
 #include "cl_demohud.h"
+#include "cl_uicomp.h"
+#include "cl_uimenus.h"
 #include "../corepp/tiki.h"
 #include "../qcommon/cm_terrain.h"
 #include "../qcommon/localization.h"
 #include "../qcommon/bg_compat.h"
 #include "../sys/sys_local.h"
-#include "../sys/sys_update_checker.h"
-#include "../uilib/uimessage.h"
 
 extern "C" {
 	#include "../sys/sys_loadlib.h"
@@ -135,14 +136,9 @@ cvar_t	*cl_motdString;
 cvar_t	*cl_allowDownload;
 cvar_t	*cg_gametype;
 cvar_t	*cl_conXOffset;
-cvar_t	*cl_inGameVideo;
 
 cvar_t	*cl_serverStatusResendTime;
 cvar_t	*cl_trn;
-cvar_t	*cl_langamerefreshstatus;
-cvar_t	*cl_radar_icon_size;
-cvar_t	*cl_radar_speak_time;
-cvar_t	*cl_radar_blink_time;
 
 cvar_t	*cl_lanForcePackets;
 
@@ -202,7 +198,6 @@ void CL_ServerStatus_f(void);
 void CL_ServerStatusResponse( netadr_t from, msg_t *msg );
 
 static qboolean cl_bCLSystemStarted = qfalse;
-static qboolean cl_updateNotified = qfalse;
 
 /*
 ===============
@@ -1951,6 +1946,30 @@ qboolean CL_DemoHidesHealth( void ) {
 
 /*
 ====================
+CL_DemoShownClient
+
+Added in OPM
+The player a demo shows otherwise than its snapshots have them: one it
+doesn't show, from behind or from their eyes (cl_demoBehind), or the
+recorder from behind (cg_recordercamera); -1 for none. The HUD names them as
+a player followed
+====================
+*/
+int CL_DemoShownClient( void ) {
+	if ( !clc.demoplaying ) {
+		return -1;
+	}
+	if ( cl_demoBehind->integer >= 0 && cl_demoBehind->integer < MAX_CLIENTS ) {
+		return cl_demoBehind->integer;
+	}
+	if ( CL_DemoShownFromBehind( &cl.snap.ps ) ) {
+		return cl.snap.ps.clientNum;
+	}
+	return -1;
+}
+
+/*
+====================
 CL_DemoSpectatorHud
 
 Added in OPM
@@ -2852,7 +2871,7 @@ static void CL_StopLoopDemos_f( void ) {
 ==================
 CL_NextDemo
 
-Called when a demo or cinematic finishes
+Called when a demo finishes
 If the "nextdemo" cvar is set, that command will be issued
 ==================
 */
@@ -2888,13 +2907,6 @@ CL_ShutdownAll
 */
 void CL_ShutdownAll(qboolean shutdownRef) {
 
-#ifdef USE_CURL
-	CL_cURL_Shutdown();
-#endif
-	// clear sounds
-#if defined(NO_MODERN_DMA) && NO_MODERN_DMA
-	S_DisableSounds();
-#endif
 	// shutdown CGame
 	CL_ShutdownCGame();
 	// shutdown UI
@@ -2964,7 +2976,7 @@ void CL_MapLoading( qboolean flush, const char *pszMapName ) {
 			clc.lastPacketSentTime = -9999;
 		}
 		else {
-			// clear nextmap so the cinematic shutdown doesn't execute it
+			// (a new game: the last one's nextmap cleared)
 			Cvar_Set("nextmap", "");
 			CL_Disconnect();
 			Q_strncpyz(clc.servername, "localhost", sizeof(clc.servername));
@@ -3022,6 +3034,9 @@ void CL_ClearState( void )
 
     // Added in OPM
     CL_CleanupUserInfo();
+
+	// Added: the lagometer starts again with the new state
+	CL_Lagometer_Reset();
 }
 
 /*
@@ -3083,7 +3098,6 @@ void CL_Disconnect() {
 		clc.demofile = 0;
 	}
 
-	SCR_StopCinematic ();
 	S_ClearSoundBuffer();
 
 	// send a disconnect message to the server
@@ -3465,6 +3479,9 @@ void CL_Connect( const char *server, netadrtype_t family ) {
 	}
 	serverString = NET_AdrToStringwPort(clc.serverAddress);
 
+	// Added: the Reloaded connect's box asks the server for its name and map
+	UI_Menus_Connect(server, &clc.serverAddress);
+
 	Com_Printf( "%s resolved to %s\n", clc.servername, serverString );
 
 	if (cl_guidServerUniq->integer)
@@ -3740,12 +3757,8 @@ void CL_Vid_Restart_f( void ) {
 
 	CL_StartHunkUsers(qfalse);
 
-#if !defined(NO_MODERN_DMA) || !NO_MODERN_DMA
     s_bSoundPaused = true;
     S_LoadData(&save);
-#else
-    S_Init();
-#endif
 
 	SV_FinishSvsTimeFixups();
 
@@ -3757,7 +3770,7 @@ void CL_Vid_Restart_f( void ) {
 
     MUSIC_NewSoundtrack(current_soundtrack);
 
-	if (clc.state > CA_CONNECTED && clc.state != CA_CINEMATIC)
+	if (clc.state > CA_CONNECTED)
 	{
 		// send pure checksums
 		CL_SendPureChecksums();
@@ -3777,11 +3790,6 @@ handles will be invalid
 =================
 */
 void CL_Snd_Restart_f( void ) {
-#if defined(NO_MODERN_DMA) && NO_MODERN_DMA
-	S_Shutdown();
-	S_Init();
-    CL_Vid_Restart_f();
-#else
 	qboolean full;
 	soundsystemsavegame_t save;
     char tm_filename[MAX_RES_NAME];
@@ -3822,7 +3830,6 @@ void CL_Snd_Restart_f( void ) {
 	if (full) {
 		CL_Vid_Restart_f();
 	}
-#endif
 }
 
 
@@ -3905,23 +3912,6 @@ Called when all downloading has been completed
 */
 void CL_DownloadsComplete( void ) {
 
-#ifdef USE_CURL
-	// if we downloaded with cURL
-	if(clc.cURLUsed) {
-		clc.cURLUsed = qfalse;
-		CL_cURL_Shutdown();
-		if( clc.cURLDisconnected ) {
-			if(clc.downloadRestart) {
-				FS_Restart(clc.checksumFeed);
-				clc.downloadRestart = qfalse;
-			}
-			clc.cURLDisconnected = qfalse;
-			CL_Reconnect_f();
-			return;
-		}
-	}
-#endif
-
 	// if we downloaded files we need to restart the file system
 	if (clc.downloadRestart) {
 		clc.downloadRestart = qfalse;
@@ -3993,7 +3983,6 @@ A download completed or failed
 void CL_NextDownload(void) {
 	char *s;
 	char *remoteName, *localName;
-	qboolean useCURL = qfalse;
 
 	// We are looking to start a download here
 	if (*clc.downloadList) {
@@ -4017,47 +4006,15 @@ void CL_NextDownload(void) {
 			*s++ = 0;
 		else
 			s = localName + strlen(localName); // point at the nul byte
-#ifdef USE_CURL
-		if(!(cl_allowDownload->integer & DLF_NO_REDIRECT)) {
-			if(clc.sv_allowDownload & DLF_NO_REDIRECT) {
-				Com_Printf("WARNING: server does not "
-					"allow download redirection "
-					"(sv_allowDownload is %d)\n",
-					clc.sv_allowDownload);
-			}
-			else if(!*clc.sv_dlURL) {
-				Com_Printf("WARNING: server allows "
-					"download redirection, but does not "
-					"have sv_dlURL set\n");
-			}
-			else if(!CL_cURL_Init()) {
-				Com_Printf("WARNING: could not load "
-					"cURL library\n");
-			}
-			else {
-				CL_cURL_BeginDownload(localName, va("%s/%s",
-					clc.sv_dlURL, remoteName));
-				useCURL = qtrue;
-			}
-		}
-		else if(!(clc.sv_allowDownload & DLF_NO_REDIRECT)) {
-			Com_Printf("WARNING: server allows download "
-				"redirection, but it disabled by client "
-				"configuration (cl_allowDownload is %d)\n",
+		if((cl_allowDownload->integer & DLF_NO_UDP)) {
+			Com_Error(ERR_DROP, "UDP Downloads are "
+				"disabled on your client. "
+				"(cl_allowDownload is %d)",
 				cl_allowDownload->integer);
+			return;
 		}
-#endif /* USE_CURL */
-		if(!useCURL) {
-			if((cl_allowDownload->integer & DLF_NO_UDP)) {
-				Com_Error(ERR_DROP, "UDP Downloads are "
-					"disabled on your client. "
-					"(cl_allowDownload is %d)",
-					cl_allowDownload->integer);
-				return;
-			}
-			else {
-				CL_BeginDownload( localName, remoteName );
-			}
+		else {
+			CL_BeginDownload( localName, remoteName );
 		}
 		clc.downloadRestart = qtrue;
 
@@ -4642,7 +4599,7 @@ void CL_CheckTimeout( void ) {
 	// check timeout
 	//
 	if ( ( !CL_CheckPaused() || !paused->integer )
-		&& clc.state >= CA_CONNECTED && clc.state != CA_CINEMATIC
+		&& clc.state >= CA_CONNECTED
 	    && cls.realtime - clc.lastPacketTime > cl_timeout->value*1000) {
 		if (++cl.timeoutcount > 5) {	// timeoutcount saves debugger
 			const char* info;
@@ -4740,36 +4697,6 @@ void CL_SetFrameNumber(int frameNumber) {
 
 /*
 ==================
-CL_VerifyUpdate
-
-Check for a new version and display a message box
-when a new version is available
-==================
-*/
-void CL_VerifyUpdate() {
-    if (cl_updateNotified) {
-        return;
-    }
-
-    int lastMajor, lastMinor, lastPatch;
-    if (updateChecker.CheckNewVersion(lastMajor, lastMinor, lastPatch)) {
-        cl_updateNotified = true;
-
-        const char *updateText =
-            va("A new update is available!\n"
-               "The latest version is v%d.%d.%d (you are running v%s).\n"
-               "Check https://github.com/openmoh/openmohaa for more.",
-               lastMajor,
-               lastMinor,
-               lastPatch,
-               PRODUCT_VERSION_NUMBER_STRING);
-
-        UIMessageDialog::ShowMessageBox("Update available", updateText);
-    }
-}
-
-/*
-==================
 CL_Frame
 
 ==================
@@ -4780,37 +4707,11 @@ void CL_Frame ( int msec ) {
 		return;
 	}
 
-#ifdef USE_CURL
-	if(clc.downloadCURLM) {
-		CL_cURL_PerformDownload();
-		// we can't process frames normally when in disconnected
-		// download mode since the ui vm expects clc.state to be
-		// CA_CONNECTED
-		if(clc.cURLDisconnected) {
-			cls.realFrametime = msec;
-			cls.frametime = msec;
-			cls.realtime += cls.frametime;
-			SCR_UpdateScreen();
-			S_Update();
-			cls.framecount++;
-			return;
-		}
-	}
-#endif
-
-	if (CL_FinishedIntro()) {
-		if (clc.state == CA_DISCONNECTED) {
-			if (!UI_MenuActive() && !com_sv_running->integer) {
-				// if disconnected, bring up the menu
-				S_StopAllSounds2(qtrue);
-				S_TriggeredMusic_PlayIntroMusic();
-				UI_MenuEscape("main");
-			}
-
-            CL_VerifyUpdate();
-		} else if (clc.state == CA_CINEMATIC) {
-			UI_ForceMenuOff(qtrue);
-		}
+	if (clc.state == CA_DISCONNECTED && !UI_MenuActive() && !com_sv_running->integer) {
+		// if disconnected, bring up the menu
+		S_StopAllSounds2(qtrue);
+		S_TriggeredMusic_PlayIntroMusic();
+		UI_MenuEscape("main");
 	}
 
 	// Added in OPM
@@ -4947,8 +4848,9 @@ void CL_Frame ( int msec ) {
 	// update audio
 	S_Update();
 
-	// advance local effects for next frame
-	SCR_RunCinematic();
+#ifdef USE_DISCORD
+	CL_Discord_Frame();
+#endif
 
 	// Added in OPM
 	CL_RunDemoOnly( 0 );
@@ -5046,7 +4948,7 @@ void CL_StartHunkUsers( qboolean rendererOnly ) {
 	}
 
 	if( !cls.cgameStarted ) {
-		if( clc.state >= CA_LOADING && clc.state != CA_CINEMATIC ) {
+		if( clc.state >= CA_LOADING ) {
 			CL_InitCGame();
 		}
 	}
@@ -5223,14 +5125,6 @@ char** CL_RefFS_ListFiles(const char* name, const char* extension, int* numfiles
 
 /*
 ============
-CL_RefCIN_UploadCinematic
-============
-*/
-void CL_RefCIN_UploadCinematic(int handle) {
-}
-
-/*
-============
 CL_RefTIKI_GetNumChannels
 ============
 */
@@ -5352,6 +5246,9 @@ void CL_InitRef( void ) {
 	ri.Printf = CL_RefPrintf;
 	ri.Error = Com_Error;
 	ri.Milliseconds = CL_ScaledMilliseconds;
+	ri.FrameToken = Com_FrameToken;
+	ri.PresentGate = Com_PresentGate;
+	ri.PresentMark = Com_PresentMark;
 	ri.LV_ConvertString = Sys_LV_CL_ConvertString;
 	ri.Malloc = CL_RefMalloc;
 	ri.Free = CL_RefFree;
@@ -5417,9 +5314,6 @@ void CL_InitRef( void ) {
     ri.Cvar_SetDescription = Cvar_SetDescription;
     ri.Cvar_VariableIntegerValue = Cvar_VariableIntegerValue;
 
-    ri.CIN_UploadCinematic = CL_RefCIN_UploadCinematic;
-    ri.CIN_PlayCinematic = CIN_PlayCinematic;
-    ri.CIN_RunCinematic = CIN_RunCinematic;
     ri.CL_WriteAVIVideoFrame = CL_WriteAVIVideoFrame;
 
     ri.IN_Init = IN_Init;
@@ -5674,6 +5568,9 @@ void CL_Init( void ) {
 
 	start = Sys_Milliseconds();
 
+	// Added: the files compiled in, before the renderer lists its shader scripts
+	UI_CompHud_Files();
+
 	CL_ClearState ();
 	S_StopAllSounds2( qtrue );
 
@@ -5771,20 +5668,11 @@ void CL_Init( void ) {
 	cl_showMouseRate = Cvar_Get ("cl_showmouserate", "0", 0);
 
 	cl_allowDownload = Cvar_Get ("cl_allowDownload", "0", CVAR_ARCHIVE);
-#ifdef USE_CURL
-	cl_cURLLib = Cvar_Get("cl_cURLLib", DEFAULT_CURL_LIB, CVAR_ARCHIVE);
-#endif
 
 	cl_altbindings = Cvar_Get( "cl_altbindings", "0", CVAR_ARCHIVE );
-	cl_ctrlbindings = Cvar_Get( "cl_altbindings", "0", CVAR_ARCHIVE );
+	cl_ctrlbindings = Cvar_Get( "cl_ctrlbindings", "0", CVAR_ARCHIVE );
 
 	cl_conXOffset = Cvar_Get ("cl_conXOffset", "0", 0);
-#ifdef MACOS_X
-        // In game video is REALLY slow in Mac OS X right now due to driver slowness
-	cl_inGameVideo = Cvar_Get ("r_inGameVideo", "0", CVAR_ARCHIVE);
-#else
-	cl_inGameVideo = Cvar_Get ("r_inGameVideo", "1", CVAR_ARCHIVE);
-#endif
 
 	cl_serverStatusResendTime = Cvar_Get ("cl_serverStatusResendTime", "750", 0);
 
@@ -5817,10 +5705,6 @@ void CL_Init( void ) {
 
 	cl_motdString = Cvar_Get( "cl_motdString", "", CVAR_ROM );
 
-	cl_langamerefreshstatus = Cvar_Get( "cl_langamerefreshstatus", "Ready", 0 );
-	cl_radar_icon_size = Cvar_Get("cl_radar_icon_size", "10", CVAR_ARCHIVE);
-	cl_radar_speak_time = Cvar_Get("cl_radar_speak_time", "3", CVAR_ARCHIVE);
-	cl_radar_blink_time = Cvar_Get("cl_radar_blink_time", "0.333", CVAR_ARCHIVE);
 	cg_gametype = Cvar_Get( "cg_gametype", "0", 0 );
 
 	cl_lanForcePackets = Cvar_Get ("cl_lanForcePackets", "1", CVAR_ARCHIVE);
@@ -5876,7 +5760,6 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("demonextround", CL_DemoNextRound_f);
 	Cmd_AddCommand ("demoprevround", CL_DemoPrevRound_f);
 	Cmd_AddCommand ("demovideo", CL_DemoVideo_f);
-	Cmd_AddCommand ("cinematic", CL_PlayCinematic_f);
 	Cmd_AddCommand ("stoprecord", CL_StopRecord_f);
 	Cmd_AddCommand ("connect", CL_Connect_f);
 	Cmd_AddCommand ("menuconnect", CL_MenuConnect_f);
@@ -5892,7 +5775,6 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("tiki", CL_TikiInfoCommand_f );
 	Cmd_AddCommand ("vidmode", CL_VidMode_f );
 	Cmd_AddCommand ("saveshot", CL_SaveShot_f );
-	Cmd_AddCommand ("dialog", CL_Dialog_f );
 	Cmd_AddCommand ("aliasdump", Alias_Dump );
 	Cmd_AddCommand ("fastconnect", CL_FastConnect_f );
 	Cmd_AddCommand ("serverstatus", CL_ServerStatus_f );
@@ -5911,15 +5793,15 @@ void CL_Init( void ) {
 
 	Cvar_Set( "cl_running", "1" );
 
-#if defined(NO_MODERN_DMA) && NO_MODERN_DMA
-	S_Init2();
-#else
 	S_Init(qtrue);
-#endif
 
 	CL_GenerateQKey();
 	Cvar_Get( "cl_guid", "", CVAR_USERINFO | CVAR_ROM );
 	CL_UpdateGUID( NULL, 0 );
+
+#ifdef USE_DISCORD
+	CL_Discord_Init();
+#endif
 
 	CL_StartHunkUsers(qfalse);
 
@@ -5961,11 +5843,7 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	if(disconnect)
 		CL_Disconnect();
 
-#if defined(NO_MODERN_DMA) && NO_MODERN_DMA
-	S_Shutdown();
-#else
 	S_Shutdown(qtrue);
-#endif
 	CL_ShutdownRef();
 
 	CL_ShutdownUI();
@@ -5992,7 +5870,6 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("demonextround");
 	Cmd_RemoveCommand ("demoprevround");
 	Cmd_RemoveCommand ("demovideo");
-	Cmd_RemoveCommand ("cinematic");
 	Cmd_RemoveCommand ("stoprecord");
 	Cmd_RemoveCommand ("connect");
 	Cmd_RemoveCommand ("localservers");
@@ -6008,6 +5885,10 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 	Cmd_RemoveCommand ("stopvideo");
 
 	CL_ShutdownInput();
+
+#ifdef USE_DISCORD
+	CL_Discord_Shutdown();
+#endif
 
 	Cvar_Set( "cl_running", "0" );
 
@@ -6082,6 +5963,11 @@ void CL_ServerInfoPacket( netadr_t from, msg_t *msg ) {
 	qboolean gameMismatch;
 
 	infoString = MSG_ReadString( msg );
+
+	// Added: the answer the Reloaded connect's box asked for (it has no gamename)
+	if (UI_Menus_ServerInfo(&from, infoString)) {
+		return;
+	}
 
 	// if this isn't the correct gamename, ignore it
 	gamename = Info_ValueForKey( infoString, "gamename" );
@@ -6408,7 +6294,6 @@ void CL_LocalServers_f( void ) {
 	netadr_t	to;
 
 	Com_Printf( "Scanning for servers on the local network...\n");
-	Cvar_Set( "cl_langamerefreshstatus", "Scanning for servers on the local network...\n" );
 
 	// reset the list, waiting for response
 	cls.numlocalservers = 0;
@@ -6803,61 +6688,6 @@ void CL_SaveShot_f( void ) {
 	UpdateStereoSide( STEREO_CENTER );
 	Cbuf_ExecuteText( EXEC_NOW, expanded );
 	cls.no_menus = qfalse;
-}
-
-/*
-==================
-CL_Dialog_f
-==================
-*/
-void CL_Dialog_f( void ) {
-	char		title[ 64 ];
-	char		cvar[ 64 ];
-	char		command[ 64 ];
-	char		cancelCommand[ 64 ];
-	char		shader[ 64 ];
-	char		okshader[ 64 ];
-	char		cancelshader[ 64 ];
-	int			width, height;
-
-	if( Cmd_Argc() <= 3 ) {
-		Com_Printf( "usage: dialog title cvar_name command [width] [height]\n" );
-		return;
-	}
-
-	Q_strncpyz( title, Cmd_Argv( 1 ), sizeof( title ) );
-	Q_strncpyz( cvar, Cmd_Argv( 2 ), sizeof( cvar ) );
-	Q_strncpyz( command, Cmd_Argv( 3 ), sizeof( command ) );
-	Q_strncpyz( cancelCommand, Cmd_Argv( 4 ), sizeof( cancelCommand ) );
-
-	if( Cmd_Argc() > 5 ) {
-		width = atoi( Cmd_Argv( 5 ) );
-	} else {
-		width = 300;
-	}
-	if( Cmd_Argc() > 6 ) {
-		height = atoi( Cmd_Argv( 6 ) );
-	} else {
-		height = 200;
-	}
-
-	if( Cmd_Argc() > 7 ) {
-		Q_strncpyz( shader, Cmd_Argv( 7 ), sizeof( shader ) );
-	} else {
-		shader[ 0 ] = 0;
-	}
-	if( Cmd_Argc() > 8 ) {
-		Q_strncpyz( okshader, Cmd_Argv( 8 ), sizeof(okshader) );
-	} else {
-		okshader[ 0 ] = 0;
-	}
-	if( Cmd_Argc() > 9 ) {
-		Q_strncpyz( cancelshader, Cmd_Argv( 9 ), sizeof(cancelshader) );
-	} else {
-		cancelshader[ 0 ] = 0;
-	}
-
-	UI_CreateDialog( title, cvar, command, cancelCommand, width, height, shader, okshader, cancelshader );
 }
 
 /*

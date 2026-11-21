@@ -1,0 +1,98 @@
+// The Competitive HUD (cg_hudstyle 1): a vote on the right, what it is
+// about (up to six lines), the yes and no counts, the seconds left, how to
+// vote until you have; as tall as that
+menu "hud_comp_vote" 305 400 NONE 0
+virtualres 1 1920 1080
+drawcache 1
+align right centery
+bgcolor 0 0 0 0
+borderstyle NONE
+
+resource
+Label
+{
+name "votepanel"
+rect 0 127.5 280 145
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_vote_on
+shape fill 0.047 0.055 0.071 0.78
+shape frame 1 1 1 1 0.102
+fitbelow voteprompt 10
+}
+
+resource
+Label
+{
+name "votetitle"
+title "V O T E"
+rect 14 137.5 120 18
+fgcolor 0.102 0.435 0.831 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-12
+textalign left
+enabledcvar ui_hud_vote_on
+}
+
+resource
+Label
+{
+name "votetime"
+rect 146 137.5 120 18
+fgcolor 0.749 0.749 0.749 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-12s
+textalign right
+linkcvar ui_hud_vote_time
+enabledcvar ui_hud_vote_on
+}
+
+resource
+Label
+{
+name "votetext"
+rect 14 161.5 252 150
+fgcolor 1 1 1 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-16s
+textalign left
+textalign top
+linkcvar ui_hud_vote_text
+enabledcvar ui_hud_vote_on
+}
+
+resource
+Label
+{
+name "votetally"
+rect 14 215.5 252 24
+fgcolor 1 1 1 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-16s
+textalign left
+linkcvar ui_hud_vote_tally
+enabledcvar ui_hud_vote_on
+flowbelow votetext 6
+}
+
+resource
+Label
+{
+name "voteprompt"
+rect 14 243.5 252 110
+fgcolor 0.749 0.749 0.749 1
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-12s
+textalign left
+textalign top
+linkcvar ui_hud_vote_prompt
+enabledcvar ui_hud_vote_on
+flowbelow votetally 6
+}
+
+end.

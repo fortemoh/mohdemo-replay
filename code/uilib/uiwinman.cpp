@@ -141,15 +141,19 @@ CLASS_DECLARATION(UIWidget, UIWindowManager, NULL) {
     {NULL, NULL}
 };
 
+const byte *(*ui_cursorPicture)(int *w, int *h, uihandle_t *shader);
+
 UIWindowManager::UIWindowManager()
 {
     m_amidead          = false;
     m_lastbuttons      = 0;
     m_oldview          = NULL;
     m_firstResponder   = NULL;
-    m_backgroundwidget = NULL;
     m_cursor           = NULL;
     m_showcursor       = true;
+    m_cursorPic        = NULL;
+    m_cursorW          = 0;
+    m_cursorH          = 0;
     m_font             = NULL;
     m_bindactive       = NULL;
     setBorderStyle(border_none);
@@ -204,17 +208,11 @@ UIWidget *UIWindowManager::getResponder(UIPoint2D& pos)
     }
 
     for (i = m_children.NumObjects(); i > 0; i--) {
-        subview = m_children.ObjectAt(i);
-        if (subview != m_backgroundwidget) {
-            responder = subview->FindResponder(pos);
-            if (responder) {
-                return responder;
-            }
+        subview   = m_children.ObjectAt(i);
+        responder = subview->FindResponder(pos);
+        if (responder) {
+            return responder;
         }
-    }
-
-    if (m_backgroundwidget) {
-        return m_backgroundwidget->FindResponder(pos);
     }
 
     return this;
@@ -226,36 +224,29 @@ void UIWindowManager::Init(const UIRect2D& frame, const char *fontname)
     m_font = new UIFont(fontname);
 }
 
-void UIWindowManager::setBackgroundWidget(UIWidget *widget)
-{
-    m_backgroundwidget = widget;
-    if (widget) {
-        widget->setParent(this);
-        widget->setFrame(m_frame);
-    }
-}
-
 void UIWindowManager::UpdateViews(void)
 {
-    int i;
-    int n;
     int x, y;
 
-    if (m_backgroundwidget) {
-        m_backgroundwidget->Display(m_frame, 1.0);
-
-        n = m_children.NumObjects();
-        for (i = 1; i <= n; i++) {
-            if (m_children.ObjectAt(i) != m_backgroundwidget) {
-                m_children.ObjectAt(i)->Display(m_frame, 1.0);
-            }
-        }
-    } else {
-        Display(m_frame, 1.0);
-    }
+    Display(m_frame, 1.0);
 
     if (m_cursor && m_showcursor && uid.uiHasMouse) {
-        vec4_t col;
+        vec4_t     col;
+        int        w = 0, h = 0;
+        uihandle_t shader = 0;
+        // Added: another picture (ui_cursorPicture), the system's cursor set from it when it changes
+        const byte *pic = ui_cursorPicture ? ui_cursorPicture(&w, &h, &shader) : NULL;
+
+        if (pic != m_cursorPic || w != m_cursorW || h != m_cursorH) {
+            if (pic) {
+                IN_SetCursorFromImage(pic, w, h, NULL);
+                m_cursorPic = pic;
+                m_cursorW   = w;
+                m_cursorH   = h;
+            } else {
+                refreshCursor();
+            }
+        }
 
         set2D();
 
@@ -265,7 +256,11 @@ void UIWindowManager::UpdateViews(void)
             VectorSet4(col, 1, 1, 1, 1);
             uii.Rend_SetColor(col);
 
-            uii.Rend_DrawPicStretched(uid.mouseX, uid.mouseY, 0, 0, 0, 0, 1, 1, m_cursor->GetMaterial());
+            if (pic) {
+                uii.Rend_DrawPicStretched(uid.mouseX, uid.mouseY, w, h, 0, 0, 1, 1, shader);
+            } else {
+                uii.Rend_DrawPicStretched(uid.mouseX, uid.mouseY, 0, 0, 0, 0, 1, 1, m_cursor->GetMaterial());
+            }
         }
 
         m_font->setColor(UWhite);
@@ -376,6 +371,11 @@ UIWidget *UIWindowManager::ActiveControl(void)
     return m_activeControl;
 }
 
+UIWidget *UIWindowManager::ClickTarget(UIPoint2D& pos)
+{
+    return m_bindactive ? m_bindactive : getResponder(pos);
+}
+
 void UIWindowManager::ActivateControl(UIWidget *control)
 {
     UIWidget *wid;
@@ -398,7 +398,6 @@ void UIWindowManager::ActivateControl(UIWidget *control)
                 m_activeControl = NULL;
                 active->SendSignal(W_Deactivated);
                 active->SetHovermaterialActive(false);
-                active->SetPressedmaterialActive(false);
             }
 
             if (!active || !ActiveControl()) {
@@ -420,90 +419,6 @@ void UIWindowManager::DeactivateCurrentControl(void)
         m_activeControl = NULL;
         wid->SendSignal(W_Deactivated);
     }
-}
-
-UIWidget *UIWindowManager::FindNextControl(UIWidget *control)
-{
-    UIWidget *widget;
-    bool      back_up;
-
-    if (!control) {
-        control = this;
-    }
-
-    while (control) {
-        widget = control->getFirstChild();
-        if (widget) {
-            if (widget->isEnabled() && widget->CanActivate()) {
-                return widget;
-            }
-
-            control = widget;
-        } else {
-            widget = control->getNextSibling();
-            if (widget) {
-                if (widget->isEnabled() && widget->CanActivate()) {
-                    return widget;
-                }
-
-                control = widget;
-            } else {
-                back_up = true;
-
-                while (control->getParent() && back_up) {
-                    control = control->getParent();
-                    if (control->getNextSibling()) {
-                        control = control->getNextSibling();
-
-                        // there is an error in the fakk2 code where the second check if the control is enabled
-                        // while the second should check if the control can activate
-                        // this especially affects MOHAA
-                        if (control->isEnabled() && control->CanActivate()) {
-                            return control;
-                        }
-
-                        back_up = false;
-                    }
-                }
-
-                if (control == this) {
-                    break;
-                }
-            }
-        }
-    }
-
-    return NULL;
-}
-
-UIWidget *UIWindowManager::FindPrevControl(UIWidget *control)
-{
-    UIWidget *tmp_control;
-    UIWidget *next_control;
-
-    if (control) {
-        tmp_control = this;
-        do {
-            next_control = tmp_control;
-            tmp_control  = FindNextControl(tmp_control);
-
-            if (!tmp_control) {
-                return NULL;
-            }
-        } while (tmp_control != control);
-    } else {
-        tmp_control = this;
-        do {
-            next_control = tmp_control;
-            tmp_control  = FindNextControl(tmp_control);
-        } while (tmp_control);
-    }
-
-    if (next_control != this) {
-        return next_control;
-    }
-
-    return NULL;
 }
 
 void UIWindowManager::setCursor(const char *string)
@@ -534,65 +449,14 @@ void UIWindowManager::CharEvent(int ch)
 
 qboolean UIWindowManager::KeyEvent(int key, unsigned int time)
 {
-    UIWidget *selwidget = NULL;
-
-    if (key == K_TAB && uii.Sys_IsKeyDown(K_CTRL)) {
-        UIWidget *wid;
-
-        if (m_activeControl && m_activeControl != this) {
-            for (selwidget = m_activeControl; selwidget != NULL; selwidget = selwidget->getParent()) {
-                if (selwidget->getParent() == this) {
-                    break;
-                }
-            }
-        }
-
-        if (!selwidget) {
-            selwidget = getFirstChild();
-        }
-
-        for (wid = getNextChild(selwidget); wid != NULL; wid = getNextChild(wid)) {
-            if (!(selwidget->m_flags & WF_ALWAYS_BOTTOM) && selwidget->CanActivate()) {
-                ActivateControl(wid);
-                return true;
-            }
-        }
-        for (wid = getFirstChild(); wid != selwidget && wid != NULL; wid = getNextChild(wid)) {
-            if (!(selwidget->m_flags & WF_ALWAYS_BOTTOM) && selwidget->CanActivate()) {
-                ActivateControl(wid);
-                return true;
-            }
-        }
-    } else {
-        if (m_bindactive) {
-            m_bindactive->KeyEvent(key, time);
-        } else if (!(m_activeControl && m_activeControl->KeyEvent(key, time))
-                   && (key == K_DOWNARROW || key == K_UPARROW)) {
-            selwidget = m_activeControl;
-            if (selwidget && selwidget != this) {
-                for (selwidget = m_activeControl; selwidget != NULL; selwidget = selwidget->getParent()) {
-                    if (selwidget->getParent() == this) {
-                        break;
-                    }
-                }
-            }
-
-            if (selwidget != NULL) {
-                if (selwidget->isSubclassOf(UIWidgetContainer)) {
-                    UIWidgetContainer *widcon = (UIWidgetContainer *)selwidget;
-
-                    if (key == K_DOWNARROW) {
-                        selwidget = widcon->GetNextWidgetInOrder();
-                    } else if (key == K_UPARROW) {
-                        selwidget = widcon->GetPrevWidgetInOrder();
-                    }
-
-                    if (selwidget) {
-                        ActivateControl(selwidget);
-                    }
-                }
-            }
-        }
+    // Changed: Ctrl+Tab no longer moves the keys to the next top-level window (the console, the chat, a menu: often a
+    // hidden one, and the chat's line was lost), nor Up and Down a control doesn't take to a menu's next or previous
+    // widget by ordernumber (no menu the games load has two such widgets; with none, the menu's first widget was
+    // activated and brought to the front: the Reloaded main menu's photo then hid the profile's figures)
+    if (m_bindactive) {
+        m_bindactive->KeyEvent(key, time);
+    } else if (m_activeControl) {
+        m_activeControl->KeyEvent(key, time);
     }
 
     return true;
@@ -613,7 +477,6 @@ void UIWindowManager::CreateMenus(void)
             Menu              *m   = new Menu(w->getName());
 
             m->setFullscreen(wid->isFullscreen());
-            m->setVidMode(wid->getVidMode());
             m->AddMenuItem(w);
             m->ForceHide();
         }
@@ -628,26 +491,6 @@ UIReggedMaterial *UIWindowManager::RegisterShader(const str& name)
     for (i = 1; i <= m_materiallist.NumObjects(); i++) {
         regged = m_materiallist.ObjectAt(i);
         if (regged->GetName() == name) {
-            return regged;
-        }
-    }
-
-    regged = new UIReggedMaterial;
-    regged->SetMaterial(name);
-
-    m_materiallist.AddObject(regged);
-    return regged;
-}
-
-UIReggedMaterial *UIWindowManager::RefreshShader(const str& name)
-{
-    int               i;
-    UIReggedMaterial *regged;
-
-    for (i = 1; i <= m_materiallist.NumObjects(); i++) {
-        regged = m_materiallist.ObjectAt(i);
-        if (regged->GetName() == name) {
-            regged->RefreshMaterial();
             return regged;
         }
     }
@@ -752,146 +595,6 @@ bool UIWindowManager::IsDead(void)
     return m_amidead;
 }
 
-int UIWindowManager::AddBinding(str binding)
-{
-    int      i;
-    Binding *bind;
-
-    for (i = 1; i <= bindings.NumObjects(); i++) {
-        Binding *b = bindings.ObjectAt(i);
-
-        if (b->binding == binding) {
-            return i;
-        }
-    }
-
-    bind          = new Binding;
-    bind->binding = binding;
-    uii.Key_GetKeysForCommand(binding, &bind->key1, &bind->key2);
-    bindings.AddObject(bind);
-
-    return bindings.IndexOfObject(bind);
-}
-
-str UIWindowManager::GetKeyStringForCommand(str command, int index, qboolean alternate, int *key1, int *key2)
-{
-    str      s;
-    str      cmd;
-    Binding *bind;
-
-    if (index > bindings.NumObjects()) {
-        return "Invalid Command";
-    }
-
-    bind = bindings.ObjectAt(index);
-
-    if (command == bind->binding) {
-        if (bind->key1 < 0 || bind->key2 < 0) {
-            uii.Key_GetKeysForCommand(command, &bind->key1, &bind->key2);
-        }
-
-        if (bind->key2 >= 0) {
-            cmd = uii.Key_GetCommandForKey(bind->key2);
-            if (cmd != bind->binding) {
-                bind->key2 = -1;
-            }
-        }
-        if (bind->key1 >= 0) {
-            cmd = uii.Key_GetCommandForKey(bind->key1);
-            if (cmd != bind->binding) {
-                if (bind->key2 < 0) {
-                    bind->key1 = -1;
-                } else {
-                    bind->key1 = bind->key2;
-                    bind->key2 = -1;
-                }
-            }
-        }
-
-        if (alternate) {
-            if (bind->key2 >= 0) {
-                s = uii.Key_KeynumToString(bind->key2);
-            } else {
-                s = "None";
-            }
-        } else {
-            if (bind->key1 >= 0) {
-                s = uii.Key_KeynumToString(bind->key1);
-            } else {
-                s = "None";
-            }
-        }
-
-        if (key1) {
-            *key1 = bind->key1;
-        }
-        if (key2) {
-            *key2 = bind->key2;
-        }
-    } else {
-        s = "Invalid Command";
-    }
-
-    return s;
-}
-
-void UIWindowManager::BindKeyToCommand(str command, int key, int index, qboolean alternate)
-{
-    Binding *bind = bindings.ObjectAt(index);
-
-    if (bind->binding == command || !bind->binding.length()) {
-        if (!command.length()) {
-            uii.Key_SetBinding(key, "");
-            return;
-        }
-
-        if (!alternate) {
-            if (bind->key1 == key) {
-                return;
-            }
-
-            if (bind->key2 == key) {
-                uii.Key_SetBinding(bind->key1, "");
-                uii.Key_SetBinding(bind->key2, "");
-                bind->key1 = key;
-                bind->key2 = -1;
-            } else {
-                uii.Key_SetBinding(bind->key1, "");
-            }
-
-            if (!command.length()) {
-                uii.Key_SetBinding(key, "");
-            } else {
-                uii.Key_SetBinding(key, command.c_str());
-            }
-        } else {
-            if (bind->key2 == key) {
-                return;
-            }
-
-            if (bind->key1 == key) {
-                uii.Key_SetBinding(bind->key2, "");
-            } else {
-                uii.Key_SetBinding(bind->key2, "");
-                bind->key2 = key;
-
-                if (!command.length()) {
-                    uii.Key_SetBinding(key, "");
-                } else {
-                    uii.Key_SetBinding(key, command.c_str());
-                }
-            }
-        }
-    } else {
-        warning(
-            "UIWindowManager::BindKeyToCommand",
-            "Invalid bind command '%s' for widget command '%s'\n",
-            command.c_str(),
-            bind->binding.c_str()
-        );
-    }
-}
-
 UIWidget *UIWindowManager::BindActive(void)
 {
     return m_bindactive;
@@ -913,13 +616,6 @@ void UIWindowManager::Shutdown(void)
         delete mat;
     }
 
-    for (i = bindings.NumObjects(); i > 0; i--) {
-        Binding *b = bindings.ObjectAt(i);
-        bindings.RemoveObjectAt(i);
-
-        delete b;
-    }
-
     m_cursor = NULL;
     IN_FreeCursor();
 
@@ -937,48 +633,30 @@ void UIWindowManager::DeactiveFloatingWindows(void)
         if (pWidg->isSubclassOf(UIFloatingWindow)) {
             pWidg->SendSignal(W_Deactivated);
         }
-
-        if (pWidg->isSubclassOf(UIPopupMenu)) {
-            pWidg->ProcessEvent(W_Deactivated);
-        }
-    }
-}
-
-bool UIWindowManager::DialogExists(void)
-{
-    int       i;
-    UIWidget *pWidg;
-
-    for (i = 1; i <= m_children.NumObjects(); i++) {
-        pWidg = m_children.ObjectAt(i);
-        if (pWidg->isSubclassOf(UIDialog)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-void UIWindowManager::RemoveAllDialogBoxes(void)
-{
-    int       i;
-    UIWidget *pWidg;
-
-    for (i = m_children.NumObjects(); i > 0; i--) {
-        pWidg = m_children.ObjectAt(i);
-        if (pWidg->isSubclassOf(UIDialog)) {
-            UIDialog *pDlg = (UIDialog *)pWidg;
-
-            pDlg->m_cancel->m_command += "\n";
-            uii.Cmd_Stuff(pDlg->m_cancel->m_command);
-        }
     }
 }
 
 void UIWindowManager::refreshCursor()
 {
-    byte *pic;
-    int   width, height;
+    byte       *pic;
+    int         width, height;
+    // Added: another picture (ui_cursorPicture) is the system's cursor at once,
+    // not the stock one until a menu draws (a vid_restart, Alt+Enter, a map's
+    // load: the stock cursor showed over a window); its texels alone (no
+    // shader: nothing registered with the renderer here)
+    const byte *other = ui_cursorPicture ? ui_cursorPicture(&width, &height, NULL) : NULL;
+
+    if (other) {
+        IN_SetCursorFromImage(other, width, height, NULL);
+        m_cursorPic = other;
+        m_cursorW   = width;
+        m_cursorH   = height;
+        return;
+    }
+
+    // Added: the stock picture's (UpdateViews sets another again)
+    m_cursorPic = NULL;
+    m_cursorW = m_cursorH = 0;
 
     // Added in OPM
     //  Load cursor image and use it

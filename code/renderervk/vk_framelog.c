@@ -350,6 +350,24 @@ static void FL_DrawString( fontheader_t *font, const char *text, float x, float 
 static void FL_DrawStretchRaw( int x, int y, int w, int h, int cols, int rows, int components, const byte *data ) {
 	FL_2D( fl.real.DrawStretchRaw( x, y, w, h, cols, rows, components, data ) )
 }
+static int FL_Begin2DList( int handle ) {
+	FL_TIME_RETURN( int, twoD, fl.real.Begin2DList( handle ) )
+}
+static void FL_End2DList( void ) {
+	FL_2D( fl.real.End2DList() )
+}
+static void FL_Draw2DList( int handle ) {
+	FL_2D( fl.real.Draw2DList( handle ) )
+}
+static void FL_Free2DList( int handle ) {
+	FL_2D( fl.real.Free2DList( handle ) )
+}
+static void FL_DrawPolygon2D( const float (*points)[4], int count, qhandle_t shader ) {
+	FL_2D( fl.real.DrawPolygon2D( points, count, shader ) )
+}
+static void FL_Radar2DHeight( qhandle_t shader, float z ) {
+	FL_2D( fl.real.Radar2DHeight( shader, z ) )
+}
 
 // the registration exports: time added to cur.load
 #define FL_LOAD( type, call ) FL_TIME_RETURN( type, load, call )
@@ -386,6 +404,15 @@ static void FL_RegisterFont( const char *fontName, int pointSize, fontInfo_t *fo
 }
 static fontheader_t *FL_LoadFont( const char *name ) {
 	FL_LOAD( fontheader_t *, fl.real.LoadFont( name ) )
+}
+static qhandle_t FL_RegisterImage2D( const char *name, byte *rgba, int width, int height ) {
+	FL_LOAD( qhandle_t, fl.real.RegisterImage2D( name, rgba, width, height ) )
+}
+static qhandle_t FL_RegisterTexture2D( const char *name, byte *rgba, int width, int height ) {
+	FL_LOAD( qhandle_t, fl.real.RegisterTexture2D( name, rgba, width, height ) )
+}
+static qhandle_t FL_RegisterRadar2D( const char *name, const radar2D_t *radar, float z ) {
+	FL_LOAD( qhandle_t, fl.real.RegisterRadar2D( name, radar, z ) )
 }
 
 /*
@@ -541,10 +568,10 @@ static void FL_Dump( const char *name ) {
 
 	FL_Printf( w, "# vkframelog 1: renderer_vulkan frame log (see code/renderervk/README.md, Performance)\n" );
 	FL_Printf( w, "# device %s, %s, present mode %s, %dx%d, %d swapchain images, r_swapInterval %d, com_maxfps %d, r_ext_multisample %d,"
-		" r_vkSubmitThread %d, %d frames in flight\n",
+		" r_vkSubmitThread %d, r_smp %d, %d frames in flight\n",
 		glConfig.renderer_string, glConfig.version_string, VK_SwapchainPresentModeName(), vk.width, vk.height,
 		vk.swapchainImageCount, ri.Cvar_VariableIntegerValue( "r_swapInterval" ), ri.Cvar_VariableIntegerValue( "com_maxfps" ),
-		ri.Cvar_VariableIntegerValue( "r_ext_multisample" ), vk.submitThread, VK_MAX_FRAMES );
+		ri.Cvar_VariableIntegerValue( "r_ext_multisample" ), vk.submitThread, glConfig.smpActive, VK_MAX_FRAMES );
 	FL_Printf( w, "# %d frames%s, %.1f s\n", n,
 		fl.lost ? va( " (%llu older ones overwritten: raise r_vkFrameLog)", (unsigned long long)fl.lost ) : "",
 		( FL_Record( fl.count - 1 )->start - FL_Record( first )->start ) / 1e6 );
@@ -711,6 +738,11 @@ refexport_t *VK_FrameLogExports( refexport_t *real ) {
 	e->DrawLineLoop = FL_DrawLineLoop;
 	e->DrawString = FL_DrawString;
 	e->DrawStretchRaw = FL_DrawStretchRaw;
+	e->Begin2DList = FL_Begin2DList;
+	e->End2DList = FL_End2DList;
+	e->Draw2DList = FL_Draw2DList;
+	e->Free2DList = FL_Free2DList;
+	e->DrawPolygon2D = FL_DrawPolygon2D;
 	e->BeginRegistration = FL_BeginRegistration;
 	e->LoadWorld = FL_LoadWorld;
 	e->EndRegistration = FL_EndRegistration;
@@ -722,6 +754,10 @@ refexport_t *VK_FrameLogExports( refexport_t *real ) {
 	e->RefreshShaderNoMip = FL_RefreshShaderNoMip;
 	e->RegisterFont = FL_RegisterFont;
 	e->LoadFont = FL_LoadFont;
+	e->RegisterImage2D = FL_RegisterImage2D;
+	e->RegisterTexture2D = FL_RegisterTexture2D;
+	e->RegisterRadar2D = FL_RegisterRadar2D;
+	e->Radar2DHeight = FL_Radar2DHeight;
 
 	ri.Cmd_AddCommand( "vkframelog", FL_Command_f );
 	ri.Printf( PRINT_ALL, "r_vkFrameLog: recording the last %d frames, see vkframelog\n", fl.size );

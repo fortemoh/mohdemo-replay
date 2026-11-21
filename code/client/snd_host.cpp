@@ -26,15 +26,8 @@ source tree, or write to the Free Software Foundation, Inc.,
 // Public sound API. There is one host, the Omaha mixer (see snd_host.h).
 
 #include "snd_local.h"
-#include "client.h"
 
 const sndHost_t *s_sndHost = &s_sndHostOmaha;
-
-qboolean S_Host_Init(void)
-{
-    s_sndHost = &s_sndHostOmaha;
-    return s_sndHost->Init();
-}
 
 void MUSIC_NewSoundtrack(const char *name)
 {
@@ -79,21 +72,6 @@ void S_TriggeredMusic_PlayIntroMusic()
 void S_TriggeredMusic_Stop()
 {
     s_sndHost->TriggeredMusicStop();
-}
-
-void S_SetupMovieAudio(const char *pszMovieName)
-{
-    s_sndHost->SetupMovieAudio(pszMovieName);
-}
-
-void S_StopMovieAudio()
-{
-    s_sndHost->StopMovieAudio();
-}
-
-int S_CurrentMoviePosition()
-{
-    return s_sndHost->CurrentMoviePosition();
 }
 
 void S_LoadData(soundsystemsavegame_t *pSave)

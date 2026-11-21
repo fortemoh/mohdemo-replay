@@ -22,10 +22,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "snd_local.h"
 #include "cl_ui.h"
-#include "client.h"
-
-#include <stdio.h>
-#include <string.h>
 
 byte *data_p;
 byte *iff_end;

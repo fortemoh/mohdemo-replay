@@ -1,0 +1,71 @@
+// The Reloaded main menu, shown for main (cl_uimain.cpp): the rail and the pages over a blurred map's photo; the profile's model views (placed by the back layer)
+menu "reloaded_main" 640 480 NONE 0
+align left top
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle NONE
+fullscreen 1
+virtualres 1
+drawcache 1
+
+resource
+ReloadedMenu
+{
+name "back"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen main
+layer back
+}
+
+resource
+Label
+{
+name "allies"
+rect 0 0 64 64
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+linkcvar "ui_reloaded_allies"
+rendermodel 1
+modeloffset "0 0 0"
+modelrotateoffset "0 0 0"
+modelangles "4 160 0"
+modelscale 1
+modelaspect 1
+modelanim reloadedidle
+}
+
+resource
+Label
+{
+name "axis"
+rect 0 0 64 64
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+linkcvar "ui_reloaded_axis"
+rendermodel 1
+modeloffset "0 0 0"
+modelrotateoffset "0 0 0"
+modelangles "4 200 0"
+modelscale 1
+modelaspect 1
+modelanim reloadedidle
+}
+
+resource
+ReloadedMenu
+{
+name "front"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen main
+layer front
+}
+
+end.

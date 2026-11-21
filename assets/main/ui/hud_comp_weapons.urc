@@ -1,0 +1,37 @@
+// The Competitive HUD (cg_hudstyle 1): the right edge, the weapons carried;
+// CS2's (its strip in the middle, nothing under them): the last name's line
+// on the HUD's bottom margin, 24 as the strip's; higher with the ammo under
+// them (CS:GO's corners, ui_hud_corners): the ammo's numbers as far under
+// the last weapon as a weapon under the one above
+menu "hud_comp_weapons" 420 625 NONE 0
+virtualres 1 1920 1080
+drawcache 1
+align right bottom
+bgcolor 0 0 0 0
+borderstyle NONE
+
+// (never drawn: shown, the weapons move up)
+resource
+Label
+{
+name "corners"
+rect 0 0 1 1
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_corners
+}
+
+resource
+HudWeapons
+{
+name "weapons"
+rect 0 101 406 500
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-14s
+countfont oswald-medium-14s
+enabledcvar ui_hud_weapons_on
+moveif corners 0 -51
+}
+
+end.

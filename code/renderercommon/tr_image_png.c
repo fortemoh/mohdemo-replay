@@ -2484,13 +2484,6 @@ void R_LoadPNG(const char *name, byte **pic, int *width, int *height)
 	CloseBufferedFile(ThePNG);
 }
 
-/*
-=================
-RE_SavePNGFromRGB
-
-Bottom-up RGB (+ line padding), same buffer JPEG screenshots use.
-=================
-*/
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -2502,28 +2495,29 @@ Bottom-up RGB (+ line padding), same buffer JPEG screenshots use.
 #pragma GCC diagnostic pop
 #endif
 
-void RE_SavePNGFromRGB(const char *filename, int width, int height, const byte *rgb, int padding)
+/*
+=================
+RE_EncodePNGFromRGB
+
+Bottom-up RGB (+ line padding), same buffer JPEG screenshots use, as a PNG
+file in memory (malloc'd: free it with free), for a thread that writes it
+itself; *length its size. NULL on failure
+=================
+*/
+byte *RE_EncodePNGFromRGB(int width, int height, const byte *rgb, int padding, int *length)
 {
 	unsigned char *pngData;
-	int pngLen = 0;
-	int stride;
 
-	if (!filename || !filename[0] || width <= 0 || height <= 0 || !rgb) {
-		return;
+	*length = 0;
+	if (width <= 0 || height <= 0 || !rgb) {
+		return NULL;
 	}
-
-	stride = width * 3 + padding;
 	stbi_flip_vertically_on_write(1);
-	pngData = stbi_write_png_to_mem((const unsigned char *)rgb, stride, width, height, 3, &pngLen);
+	pngData = stbi_write_png_to_mem((const unsigned char *)rgb, width * 3 + padding, width, height, 3, length);
 	stbi_flip_vertically_on_write(0);
-	if (!pngData || pngLen <= 0) {
-		ri.Printf(PRINT_WARNING, "RE_SavePNGFromRGB: encode failed for '%s'\n", filename);
-		if (pngData) {
-			STBIW_FREE(pngData);
-		}
-		return;
+	if (pngData && *length <= 0) {
+		STBIW_FREE(pngData);
+		pngData = NULL;
 	}
-
-	ri.FS_WriteFile(filename, pngData, pngLen);
-	STBIW_FREE(pngData);
+	return pngData;
 }

@@ -583,7 +583,7 @@ qboolean CL_OpenAVIForWriting( const char *fileName, qboolean pipe )
   afd.motionJpeg = !afd.pipe && cl_aviMotionJpeg->integer;
 
   // Changed in OPM
-  //  Room for BGRA lines padded to GL_PACK_ALIGNMENT, from an aligned start
+  //  Room for 4-byte pixels in lines padded to 8 bytes, from an aligned start
   afd.cBuffer = ( byte * )Z_Malloc( ( afd.width * 4 + 8 ) * afd.height + 16 );
   afd.eBuffer = ( byte * )Z_Malloc( afd.width * afd.height * 4 );
 

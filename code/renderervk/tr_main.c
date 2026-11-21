@@ -552,12 +552,52 @@ static void SetFarClip( void )
 
 /*
 ===============
+R_PerspectiveMatrix
+
+A projection matrix of fields of view fovX x fovY (degrees)
+===============
+*/
+static void R_PerspectiveMatrix( float fovX, float fovY, float zNear, float zFar, float *m ) {
+	float	xmin, xmax, ymin, ymax;
+	float	width, height, depth;
+
+	ymax = zNear * tan( fovY * M_PI / 360.0f );
+	ymin = -ymax;
+
+	xmax = zNear * tan( fovX * M_PI / 360.0f );
+	xmin = -xmax;
+
+	width = xmax - xmin;
+	height = ymax - ymin;
+	depth = zFar - zNear;
+
+	m[0] = 2 * zNear / width;
+	m[4] = 0;
+	m[8] = ( xmax + xmin ) / width;	// normally 0
+	m[12] = 0;
+
+	m[1] = 0;
+	m[5] = 2 * zNear / height;
+	m[9] = ( ymax + ymin ) / height;	// normally 0
+	m[13] = 0;
+
+	m[2] = 0;
+	m[6] = 0;
+	m[10] = -( zFar + zNear ) / depth;
+	m[14] = -2 * zFar * zNear / depth;
+
+	m[3] = 0;
+	m[7] = 0;
+	m[11] = -1;
+	m[15] = 0;
+}
+
+/*
+===============
 R_SetupProjection
 ===============
 */
 void R_SetupProjection( void ) {
-	float	xmin, xmax, ymin, ymax;
-	float	width, height, depth;
 	float	zNear, zFar;
 
 	// dynamically compute far clip plane distance
@@ -569,35 +609,16 @@ void R_SetupProjection( void ) {
 	zNear	= r_znear->value;
 	zFar	= tr.viewParms.zFar;
 
-	ymax = zNear * tan( tr.refdef.fov_y * M_PI / 360.0f );
-	ymin = -ymax;
+	R_PerspectiveMatrix( tr.refdef.fov_x, tr.refdef.fov_y, zNear, zFar, tr.viewParms.projectionMatrix );
 
-	xmax = zNear * tan( tr.refdef.fov_x * M_PI / 360.0f );
-	xmin = -xmax;
-
-	width = xmax - xmin;
-	height = ymax - ymin;
-	depth = zFar - zNear;
-
-	tr.viewParms.projectionMatrix[0] = 2 * zNear / width;
-	tr.viewParms.projectionMatrix[4] = 0;
-	tr.viewParms.projectionMatrix[8] = ( xmax + xmin ) / width;	// normally 0
-	tr.viewParms.projectionMatrix[12] = 0;
-
-	tr.viewParms.projectionMatrix[1] = 0;
-	tr.viewParms.projectionMatrix[5] = 2 * zNear / height;
-	tr.viewParms.projectionMatrix[9] = ( ymax + ymin ) / height;	// normally 0
-	tr.viewParms.projectionMatrix[13] = 0;
-
-	tr.viewParms.projectionMatrix[2] = 0;
-	tr.viewParms.projectionMatrix[6] = 0;
-	tr.viewParms.projectionMatrix[10] = -( zFar + zNear ) / depth;
-	tr.viewParms.projectionMatrix[14] = -2 * zFar * zNear / depth;
-
-	tr.viewParms.projectionMatrix[3] = 0;
-	tr.viewParms.projectionMatrix[7] = 0;
-	tr.viewParms.projectionMatrix[11] = -1;
-	tr.viewParms.projectionMatrix[15] = 0;
+	// the first-person weapon's own (refdef_t viewmodel_fov_x/y), the same
+	// depths: only where it differs from the scene's
+	tr.viewParms.vmProjection = !tr.viewParms.isPortal && !tr.viewParms.isPortalSky && tr.refdef.viewmodel_fov_x > 0 && tr.refdef.viewmodel_fov_x < 180
+		&& tr.refdef.viewmodel_fov_y > 0 && tr.refdef.viewmodel_fov_y < 180
+		&& ( tr.refdef.viewmodel_fov_x != tr.refdef.fov_x || tr.refdef.viewmodel_fov_y != tr.refdef.fov_y );
+	if ( tr.viewParms.vmProjection ) {
+		R_PerspectiveMatrix( tr.refdef.viewmodel_fov_x, tr.refdef.viewmodel_fov_y, zNear, zFar, tr.viewParms.vmProjectionMatrix );
+	}
 }
 
 /*
@@ -982,10 +1003,6 @@ qboolean SurfIsOffscreen(const srfSurfaceFace_t* surface, shader_t* shader, int 
 		return qfalse;
 	}
 	
-	if ( glConfig.smpActive ) {		// FIXME!  we can't do RB_BeginSurface/RB_EndSurface stuff with smp!
-		return qfalse;
-	}
-
 	if (entityNum == ENTITYNUM_WORLD) {
 		surfOr = tr.viewParms.world;
 	} else {
@@ -1797,6 +1814,9 @@ void R_RenderView (viewParms_t *parms) {
 	R_DrawDebugStrings();
 
 	R_GenerateDrawSurfs();
+
+	// the lens flares' traces for this view, for the back end
+	R_FlareTraces();
 
     R_SortDrawSurfs(
 		tr.refdef.drawSurfs + firstDrawSurf, tr.refdef.numDrawSurfs - firstDrawSurf,

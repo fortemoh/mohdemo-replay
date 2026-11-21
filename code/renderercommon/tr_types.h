@@ -63,6 +63,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define RDF_NOWORLDMODEL	0x0001		// used for player configuration screen
 #define RDF_HUD				0x0002
 #define RDF_HYPERSPACE		0x0004		// teleportation effect
+#define RDF_STUDIOLIGHT		0x0008		// Added: with RDF_HUD, lit by a light of its own fixed to the view, not by
+										// the world's where the view is (a menu's figure: the label's modelstudio)
 
 typedef struct {
 	vec3_t		xyz;
@@ -198,6 +200,10 @@ typedef struct {
     float       sky_alpha;
     vec3_t      sky_origin;
     vec3_t      sky_axis[3];
+
+	// the field of view of what has the depth hack (the first-person weapon
+	// and its flash), drawn with a projection of its own; 0: the scene's
+	float		viewmodel_fov_x, viewmodel_fov_y;
 } refdef_t;
 
 

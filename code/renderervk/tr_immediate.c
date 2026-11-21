@@ -308,6 +308,10 @@ void RB_ImmVertex3f( float x, float y, float z ) {
 		RB_ImmFlush();
 	}
 
+	if ( backEnd.in2D ) {
+		// the 2D window's vertexes on the screen (tr_draw.c)
+		R_2DTransform( &x, &y );
+	}
 	n = imm.numVertexes++;
 	imm.xyz[n][0] = x;
 	imm.xyz[n][1] = y;

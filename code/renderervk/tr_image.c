@@ -2452,6 +2452,10 @@ static void R_LoadImage(const char* name, byte** pic, int* width, int* height, q
 			LoadJPG(name, pic, width, height);
 			*piMipmapsAvailable = 1;
         }
+		else if (!Q_stricmp(name + len - 4, ".png")) {
+			R_LoadPNG(name, pic, width, height);
+			*piMipmapsAvailable = 1;
+		}
 		else if (!Q_stricmp(name + len - 4, ".gst")) {
 			LoadGHOST(name, pic, width, height);
 			*piMipmapsAvailable = 0;
@@ -2732,6 +2736,25 @@ void R_CreateBuiltinImages(void) {
 	tr.scratchImage = R_CreateImageOld("*scratch", (byte*)data, DEFAULT_SIZE, DEFAULT_SIZE, 0, 1, r_picmip->integer, qfalse, qfalse, qfalse, WRAP_CLAMP, WRAP_CLAMP);
 	tr.scratchImage->r_sequence = -1;
 
+	// the frame blurred (the Reloaded menus' backdrop), about a 16th of the screen's size (each side the nearest
+	// power of two: uploaded unscaled), filled where it is drawn
+	tr.frameBlurImage = NULL;
+	if ( vk_frame_blur_supported() ) {
+		const int	w = 1 << Q_max( 0, (int)( log2f( glConfig.vidWidth / (float)VK_FRAME_BLUR ) + 0.5f ) );
+		const int	h = 1 << Q_max( 0, (int)( log2f( glConfig.vidHeight / (float)VK_FRAME_BLUR ) + 0.5f ) );
+		byte		*black = ri.Malloc( w * h * 4 );
+		int			i;
+
+		// (opaque: an RGB texture, its alpha 1 whatever the frame's is)
+		for ( i = 0; i < w * h; i++ ) {
+			black[i * 4 + 0] = black[i * 4 + 1] = black[i * 4 + 2] = 0;
+			black[i * 4 + 3] = 255;
+		}
+		tr.frameBlurImage = R_CreateImageOld("*frameblur.tga", black, w, h, 0, 1, qfalse, qtrue, qfalse, qfalse, WRAP_CLAMP, WRAP_CLAMP);
+		tr.frameBlurImage->r_sequence = -1;
+		ri.Free( black );
+	}
+
 	R_CreateDlightImage();
 }
 
@@ -2902,6 +2925,7 @@ R_DeleteTextures
 void R_DeleteTextures( void ) {
 	int		i;
 
+	R_AtlasShutdown();
 	for ( i=0; i<tr.numImages ; i++ ) {
         R_FreeImage(&tr.images[i]);
 	}
@@ -3242,6 +3266,423 @@ void	R_SkinList_f( void ) {
 		}
 	}
 	ri.Printf (PRINT_ALL, "------------------\n");
+}
+
+/*
+====================================================================
+
+THE 2D ATLAS
+
+The UI's images made in memory (RegisterImage2D: its baked faces, shapes and
+pictures) and a white texel (the boxes) in one texture, the page, so that
+their draws are one 2D batch (tr_draw.c). Each has a room on a skyline: its
+texels and a texel of copies of its edges around them, so the sampler reads
+its own texels at its edges as it would clamped (what is outside the rooms
+is never read). The page doubles when full (up to 4096 texels a side), its
+texels copied on the GPU; an image too big for it is a texture of its own.
+An image made again at a bigger size gets a new room (the old one is left
+until the renderer restarts)
+
+====================================================================
+*/
+
+#define ATLAS_FIRST		256
+#define ATLAS_MAX		4096
+#define ATLAS_NODES		1024
+
+static struct {
+	image_t		*page;
+	byte		*room;		// R_AtlasFill's texels, kept (roomSize bytes)
+	int			roomSize;
+	int			side;
+	int			numNodes;
+	int			nodes[ATLAS_NODES][3];	// the skyline: x, y, width
+} atlas;
+
+// the y at which a w x h room fits from node i, -1 when it doesn't
+static int R_AtlasFit( int i, int w, int h ) {
+	int x = atlas.nodes[i][0], y = 0;
+
+	if ( x + w > atlas.side ) {
+		return -1;
+	}
+	for ( ; w > 0 && i < atlas.numNodes; w -= atlas.nodes[i++][2] ) {
+		y = Q_max( y, atlas.nodes[i][1] );
+	}
+	return w <= 0 && y + h <= atlas.side ? y : -1;
+}
+
+// the lowest place of a w x h room, the skyline raised over it
+static qboolean R_AtlasPack( int w, int h, int *outX, int *outY ) {
+	int i, y, best = -1, bestY = 0, bestW = 0, right;
+
+	for ( i = 0; i < atlas.numNodes; i++ ) {
+		y = R_AtlasFit( i, w, h );
+		if ( y >= 0 && ( best < 0 || y + h < bestY || ( y + h == bestY && atlas.nodes[i][2] < bestW ) ) ) {
+			best = i;
+			bestY = y + h;
+			bestW = atlas.nodes[i][2];
+		}
+	}
+	if ( best < 0 || atlas.numNodes >= ATLAS_NODES ) {
+		return qfalse;
+	}
+	*outX = atlas.nodes[best][0];
+	*outY = bestY - h;
+
+	memmove( atlas.nodes[best + 1], atlas.nodes[best], ( atlas.numNodes - best ) * sizeof( atlas.nodes[0] ) );
+	atlas.numNodes++;
+	atlas.nodes[best][1] = bestY;
+	atlas.nodes[best][2] = w;
+	right = *outX + w;
+	for ( i = best + 1; i < atlas.numNodes && atlas.nodes[i][0] < right; ) {
+		const int cut = right - atlas.nodes[i][0];
+
+		atlas.nodes[i][0] += cut;
+		atlas.nodes[i][2] -= cut;
+		if ( atlas.nodes[i][2] > 0 ) {
+			break;
+		}
+		memmove( atlas.nodes[i], atlas.nodes[i + 1], ( atlas.numNodes - i - 1 ) * sizeof( atlas.nodes[0] ) );
+		atlas.numNodes--;
+	}
+	for ( i = 0; i + 1 < atlas.numNodes; i++ ) {
+		if ( atlas.nodes[i][1] == atlas.nodes[i + 1][1] ) {
+			atlas.nodes[i][2] += atlas.nodes[i + 1][2];
+			memmove( atlas.nodes[i + 1], atlas.nodes[i + 2], ( atlas.numNodes - i - 2 ) * sizeof( atlas.nodes[0] ) );
+			atlas.numNodes--;
+			i--;
+		}
+	}
+	return qtrue;
+}
+
+// an image's place in the page: its texels' texture coordinates
+static void R_AtlasPlace( image_t *image ) {
+	image->atlasRect[0] = ( image->atlasRoom[0] + 1 ) / (float)atlas.side;
+	image->atlasRect[1] = ( image->atlasRoom[1] + 1 ) / (float)atlas.side;
+	image->atlasRect[2] = image->width / (float)atlas.side;
+	image->atlasRect[3] = image->height / (float)atlas.side;
+}
+
+// the page made, or at twice its side (its texels copied), its images' places
+static void R_AtlasResize( int side ) {
+	int			i;
+
+	R_2DShadersChanged();
+	if ( atlas.page ) {
+		atlas.nodes[atlas.numNodes][0] = atlas.side;
+		atlas.nodes[atlas.numNodes][1] = 0;
+		atlas.nodes[atlas.numNodes++][2] = side - atlas.side;
+		vk_resize_texture( atlas.page, side, side );
+	} else {
+		static byte clear[4];
+
+		atlas.page = R_CreateImageOld( "*atlas2D", clear, 1, 1, 0, 0, qfalse, qtrue, qtrue, 0, WRAP_CLAMP, WRAP_CLAMP );
+		atlas.page->r_sequence = -1;
+		// (its clear and uniform areas compressed: most of what the 2D draws read)
+		atlas.page->flags |= IMGFLAG_COLORTARGET;
+		atlas.nodes[0][0] = atlas.nodes[0][1] = 0;
+		atlas.nodes[0][2] = side;
+		atlas.numNodes = 1;
+		vk_create_texture( atlas.page, side, side, 1, TEXFMT_RGBA8 );
+	}
+	atlas.side = side;
+
+	atlas.page->width = atlas.page->uploadWidth = side;
+	atlas.page->height = atlas.page->uploadHeight = side;
+	atlas.page->numMipmaps = 0;
+	atlas.page->internalFormat = TEXFMT_RGBA8;
+	for ( i = 0; i < tr.numImages; i++ ) {
+		if ( tr.images[i].atlas ) {
+			R_AtlasPlace( &tr.images[i] );
+		}
+	}
+}
+
+// an image's texels in its room, its edges copied around them
+static void R_AtlasFill( image_t *image, const byte *rgba ) {
+	const int	w = image->width, h = image->height;
+	const int	x0 = image->atlasRoom[0], y0 = image->atlasRoom[1];
+	int			x, y;
+
+	if ( atlas.roomSize < ( w + 2 ) * ( h + 2 ) * 4 ) {
+		free( atlas.room );
+		atlas.room = malloc( atlas.roomSize = ( w + 2 ) * ( h + 2 ) * 4 );
+	}
+	for ( y = 0; y < h + 2; y++ ) {
+		const byte	*row = rgba + Q_min( h - 1, Q_max( 0, y - 1 ) ) * w * 4;
+		byte		*out = atlas.room + y * ( w + 2 ) * 4;
+
+		Com_Memcpy( out, row, 4 );
+		Com_Memcpy( out + 4, row, w * 4 );
+		Com_Memcpy( out + ( w + 1 ) * 4, row + ( w - 1 ) * 4, 4 );
+	}
+	vk_upload_texture( atlas.page, 0, x0, y0, w + 2, h + 2, atlas.room );
+
+	// what covers its texels not clear (tr_draw.c, R_2DTiles): the runs of its
+	// 16 x 16 tiles holding any in each row of them, a run as wide as the one
+	// above it joining it; kept when it leaves out a tenth of the image
+	if ( image->atlasRects ) {
+		ri.Free( image->atlasRects );
+		image->atlasRects = NULL;
+	}
+	image->numAtlasRects = 0;
+	if ( w >= 48 && h >= 48 ) {
+		const int	tw = ( w + 15 ) / 16, th = ( h + 15 ) / 16;
+		byte		*tiles = ri.Hunk_AllocateTempMemory( tw * th );
+		short		(*rects)[4] = ri.Hunk_AllocateTempMemory( tw * th * sizeof( *rects ) );
+		int			tx, ty, run, i, n = 0, area = 0;
+
+		Com_Memset( tiles, 0, tw * th );
+		for ( y = 0; y < h; y++ ) {
+			for ( x = 0; x < w; x++ ) {
+				if ( rgba[( y * w + x ) * 4 + 3] ) {
+					tiles[( y / 16 ) * tw + x / 16] = 1;
+				}
+			}
+		}
+		for ( ty = 0; ty < th; ty++ ) {
+			for ( tx = 0; tx < tw; tx = run ) {
+				int x1, y1;
+
+				for ( ; tx < tw && !tiles[ty * tw + tx]; tx++ ) {
+				}
+				for ( run = tx; run < tw && tiles[ty * tw + run]; run++ ) {
+				}
+				if ( tx == run ) {
+					continue;
+				}
+				x1 = Q_min( run * 16, w );
+				y1 = Q_min( ty * 16 + 16, h );
+				for ( i = 0; i < n && !( rects[i][0] == tx * 16 && rects[i][2] == x1 && rects[i][3] == ty * 16 ); i++ ) {
+				}
+				if ( i == n ) {
+					rects[n][0] = tx * 16;
+					rects[n][1] = ty * 16;
+					rects[n][2] = x1;
+					n++;
+				}
+				rects[i][3] = y1;
+				area += ( x1 - tx * 16 ) * ( y1 - ty * 16 );
+			}
+		}
+		if ( area * 10 < w * h * 9 ) {
+			// (none: it draws nothing)
+			image->atlasRects = ri.Malloc( Q_max( 1, n ) * sizeof( *rects ) );
+			Com_Memcpy( image->atlasRects, rects, n * sizeof( *rects ) );
+			image->numAtlasRects = n;
+		}
+		ri.Hunk_FreeTempMemory( rects );
+		ri.Hunk_FreeTempMemory( tiles );
+	}
+}
+
+// a room for a w x h image in the page, grown as needed
+static qboolean R_AtlasRoom( image_t *image, int w, int h ) {
+	const int	maxSide = Q_min( ATLAS_MAX, glConfig.maxTextureSize > 0 ? glConfig.maxTextureSize : ATLAS_MAX );
+	int			x, y;
+
+	if ( w + 2 > maxSide || h + 2 > maxSide ) {
+		return qfalse;
+	}
+	if ( !atlas.page ) {
+		R_AtlasResize( ATLAS_FIRST );
+	}
+	while ( !R_AtlasPack( w + 2, h + 2, &x, &y ) ) {
+		if ( atlas.side >= maxSide ) {
+			return qfalse;
+		}
+		R_AtlasResize( atlas.side * 2 );
+	}
+	image->atlasRoom[0] = x;
+	image->atlasRoom[1] = y;
+	image->atlasRoom[2] = w;
+	image->atlasRoom[3] = h;
+	return qtrue;
+}
+
+void R_AtlasShutdown( void ) {
+	int i;
+
+	for ( i = 0; i < tr.numImages; i++ ) {
+		if ( tr.images[i].atlasRects ) {
+			ri.Free( tr.images[i].atlasRects );
+			tr.images[i].atlasRects = NULL;
+			tr.images[i].numAtlasRects = 0;
+		}
+	}
+	free( atlas.room );
+	Com_Memset( &atlas, 0, sizeof( atlas ) );
+}
+
+/*
+===============
+R_Image2D
+
+The image of a picture made in memory under a name, placed for a width x
+height picture: in the 2D atlas (image->atlas, at image->atlasRoom), or a
+texture of its own when too big for it (or own); its texels still to be
+written. NULL for a bad name or size. Made again under the same name, its
+size is replaced. No map load frees it; its 2D shader is found by its name
+as a file's would be. After the queued draws, which read the texels they
+were made with
+===============
+*/
+static image_t *R_Image2D(const char *name, int width, int height, qboolean own)
+{
+	char	fileName[MAX_QPATH];
+	image_t	*image;
+
+	if (!name || !name[0] || width <= 0 || height <= 0) {
+		return NULL;
+	}
+	// the queued draws and the open 2D batch with the texels they were made with
+	R_IssuePendingRenderCommands();
+	R_FrontEndSync();
+	R_End2DBatch();
+
+	Q_strncpyz(fileName, name, sizeof(fileName));
+	COM_DefaultExtension(fileName, sizeof(fileName), ".tga");
+	for (image = hashTable[generateHashValue(fileName)]; image; image = image->next) {
+		if (!strcmp(fileName, image->imgName)) {
+			break;
+		}
+	}
+	if (!image) {
+		// (made 1 x 1, then at its size below: not resampled to powers of two)
+		static byte clear[4];
+
+		image = R_CreateImageOld(fileName, clear, 1, 1, 0, 0, qfalse, qtrue, qtrue, 0, WRAP_CLAMP, WRAP_CLAMP);
+	}
+	image->r_sequence = -1;
+	// (it may leave the atlas or move in it: the shaders' 2D info made again)
+	R_2DShadersChanged();
+	if (!own && ((image->atlas && width <= image->atlasRoom[2] && height <= image->atlasRoom[3]) || R_AtlasRoom(image, width, height))) {
+		image->atlas = atlas.page;
+		image->width = image->uploadWidth = width;
+		image->height = image->uploadHeight = height;
+		R_AtlasPlace(image);
+		return image;
+	}
+	image->atlas = NULL;
+	if ( image->atlasRects ) {
+		ri.Free( image->atlasRects );
+		image->atlasRects = NULL;
+		image->numAtlasRects = 0;
+	}
+	if (width != image->uploadWidth || height != image->uploadHeight || image->internalFormat != TEXFMT_RGBA8) {
+		image->width = image->uploadWidth = width;
+		image->height = image->uploadHeight = height;
+		image->numMipmaps = 0;
+		image->internalFormat = TEXFMT_RGBA8;
+		image->flags |= IMGFLAG_COLORTARGET;
+		vk_create_texture(image, width, height, 1, TEXFMT_RGBA8);
+	}
+	return image;
+}
+
+/*
+===============
+R_RegisterImage2D
+
+An image made in memory (RGBA, the texels may be changed) under a name, for
+the UI's baked text faces, shapes and pictures (R_Image2D)
+===============
+*/
+static qhandle_t R_RegisterImage2D(const char *name, byte *rgba, int width, int height, qboolean own)
+{
+	image_t	*image = R_Image2D(name, width, height, own);
+
+	if (!image) {
+		return 0;
+	}
+	// (the radar's picture made by the UI again: these texels from now on)
+	vk_radar_forget(image);
+	if (image->atlas) {
+		R_AtlasFill(image, rgba);
+	} else {
+		vk_upload_texture(image, 0, 0, 0, width, height, rgba);
+	}
+	return RE_RegisterShaderNoMip(name);
+}
+
+qhandle_t RE_RegisterImage2D(const char *name, byte *rgba, int width, int height)
+{
+	return R_RegisterImage2D(name, rgba, width, height, qfalse);
+}
+
+/*
+===============
+RE_RegisterTexture2D
+
+RE_RegisterImage2D's image as a texture of its own, never in the atlas: a
+big picture drawn whole (the zoom overlays' masks), for which the atlas's
+page would double
+===============
+*/
+qhandle_t RE_RegisterTexture2D(const char *name, byte *rgba, int width, int height)
+{
+	return R_RegisterImage2D(name, rgba, width, height, qtrue);
+}
+
+/*
+===============
+RE_RegisterRadar2D
+
+The Competitive HUD radar's picture (cl_uicomp.cpp), made on the GPU from
+each cell's floors for height z (vk_radar_image): an image under a name as
+RE_RegisterImage2D's, in the 2D atlas or a texture of its own the same way,
+so it is drawn as the UI's own picture would be; its 2D shader returned, 0
+if it failed. The floors' memory is the renderer's from now on, in every
+case (given back once on the GPU)
+===============
+*/
+qhandle_t RE_RegisterRadar2D(const char *name, const radar2D_t *radar, float z)
+{
+	image_t	*image;
+	int		width, height;
+
+	if (!radar || !radar->memory) {
+		return 0;
+	}
+	width = radar->cw * radar->texels;
+	height = radar->ch * radar->texels;
+	if (radar->cw <= 0 || radar->ch <= 0 || radar->texels <= 0 || width > glConfig.maxTextureSize || height > glConfig.maxTextureSize
+		|| !( image = R_Image2D(name, width, height, qfalse) )) {
+		radar->release(radar->memory);
+		return 0;
+	}
+	if (!vk_radar_image(image, radar, z)) {
+		return 0;
+	}
+	// (its texels on the GPU: no clear tiles for R_2DTiles to leave out, a
+	// quad of it drawn whole, the same pixels)
+	if (image->atlasRects) {
+		ri.Free(image->atlasRects);
+		image->atlasRects = NULL;
+		image->numAtlasRects = 0;
+	}
+	return RE_RegisterShaderNoMip(name);
+}
+
+/*
+===============
+R_White2D
+
+The 2D shader of the atlas's white texel, made at the first box (the front
+end's)
+===============
+*/
+shader_t *R_White2D( void )
+{
+	static byte white[4 * 4 * 4];
+
+	if ( !tr.white2D && !R_OnRenderThread() ) {
+		Com_Memset( white, 255, sizeof( white ) );
+		tr.white2D = R_GetShaderByHandle( RE_RegisterImage2D( "*white2D", white, 4, 4 ) );
+	}
+	return tr.white2D;
 }
 
 /*

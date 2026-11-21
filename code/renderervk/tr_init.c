@@ -23,6 +23,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_local.h"
 
+#include <SDL3/SDL.h>
+
 glconfig_t	glConfig;
 qboolean	textureFilterAnisotropic = qfalse;
 int		 maxAnisotropy = 0;
@@ -448,151 +450,13 @@ vanilla q3 .. baseq3/screenshots/ *.tga
 team arena .. missionpack/screenshots/ *.tga
 
 two commands: "screenshot" and "screenshotJPEG"
+(here "screenshot" writes PNGs, as "screenshotPNG": see R_ScreenShot_f)
 we use statics to store a count and start writing the first screenshot/screenshot????.tga (.jpg) available
 (with FS_FileExists / FS_FOpenFileWrite calls)
 FIXME: the statics don't get a reinit between fs_game changes
 
 ============================================================================== 
 */ 
-
-/* 
-================== 
-RB_ReadPixels
-
-Reads an image but takes care of alignment issues for reading RGB images.
-
-Reads a minimum offset for where the RGB data starts in the image from
-integer stored at pointer offset. When the function has returned the actual
-offset was written back to address offset. This address will always have an
-alignment of packAlign to ensure efficient copying.
-
-Stores the length of padding after a line of pixels to address padlen
-
-Return value must be freed with ri.Hunk_FreeTempMemory()
-================== 
-*/  
-
-byte *RB_ReadPixels(int x, int y, int width, int height, size_t *offset, int *padlen)
-{
-	byte *buffer, *bufstart;
-	int padwidth, linelen;
-	const int packAlign = 1;	// vk_read_pixels rows are tightly packed
-	
-	linelen = width * 3;
-	padwidth = PAD(linelen, packAlign);
-	
-	// Allocate a few more bytes so that we can choose an alignment we like
-	buffer = ri.Hunk_AllocateTempMemory(padwidth * height + *offset + packAlign - 1);
-	
-	bufstart = PADP((intptr_t) buffer + *offset, packAlign);
-	vk_read_pixels(x, y, width, height, READ_RGB8, bufstart);
-	
-	*offset = bufstart - buffer;
-	*padlen = padwidth - linelen;
-	
-	return buffer;
-}
-
-/*
-==================
-RB_TakeScreenshot
-==================
-*/
-void RB_TakeScreenshot( int x, int y, int width, int height, char *fileName ) {
-	byte *allbuf, *buffer;
-	byte *srcptr, *destptr;
-	byte *endline, *endmem;
-	byte temp;
-	
-	int linelen, padlen;
-	size_t offset = 18, memcount;
-		
-	allbuf = RB_ReadPixels(x, y, width, height, &offset, &padlen);
-	buffer = allbuf + offset - 18;
-	
-	Com_Memset (buffer, 0, 18);
-	buffer[2] = 2;		// uncompressed type
-	buffer[12] = width & 255;
-	buffer[13] = width >> 8;
-	buffer[14] = height & 255;
-	buffer[15] = height >> 8;
-	buffer[16] = 24;	// pixel size
-
-	// swap rgb to bgr and remove padding from line endings
-	linelen = width * 3;
-	
-	srcptr = destptr = allbuf + offset;
-	endmem = srcptr + (linelen + padlen) * height;
-	
-	while(srcptr < endmem)
-	{
-		endline = srcptr + linelen;
-
-		while(srcptr < endline)
-		{
-			temp = srcptr[0];
-			*destptr++ = srcptr[2];
-			*destptr++ = srcptr[1];
-			*destptr++ = temp;
-			
-			srcptr += 3;
-		}
-		
-		// Skip the pad
-		srcptr += padlen;
-	}
-
-	memcount = linelen * height;
-
-	// gamma correct
-	if(glConfig.deviceSupportsGamma)
-		R_GammaCorrect(allbuf + offset, memcount);
-
-	ri.FS_WriteFile(fileName, buffer, memcount + 18);
-
-	ri.Hunk_FreeTempMemory(allbuf);
-}
-
-/* 
-================== 
-RB_TakeScreenshotJPEG
-================== 
-*/  
-void RB_TakeScreenshotJPEG( int x, int y, int width, int height, char *fileName ) {
-	byte *buffer;
-	size_t offset = 0, memcount;
-	int padlen;
-
-	buffer = RB_ReadPixels(x, y, width, height, &offset, &padlen);
-	memcount = (width * 3 + padlen) * height;
-
-	// gamma correct
-	if(glConfig.deviceSupportsGamma)
-		R_GammaCorrect(buffer + offset, memcount);
-
-	RE_SaveJPG(fileName, r_screenshotJpegQuality->integer, width, height, buffer + offset, padlen);
-	ri.Hunk_FreeTempMemory(buffer);
-}
-
-/*
-==================
-RB_TakeScreenshotPNG
-==================
-*/
-void RB_TakeScreenshotPNG( int x, int y, int width, int height, char *fileName ) {
-	byte *buffer;
-	size_t offset = 0, memcount;
-	int padlen;
-
-	buffer = RB_ReadPixels(x, y, width, height, &offset, &padlen);
-	memcount = (width * 3 + padlen) * height;
-
-	if(glConfig.deviceSupportsGamma)
-		R_GammaCorrect(buffer + offset, memcount);
-
-	RE_SavePNGFromRGB(fileName, width, height, buffer + offset, padlen);
-	ri.Hunk_FreeTempMemory(buffer);
-}
 
 /*
 ==================
@@ -602,9 +466,12 @@ Screenshots, levelshots and resampled screenshots are taken at the end of
 the frame, when everything is drawn (RB_SwapBuffers calls
 RB_TakePendingScreenshots): the backend draws into the swapchain image,
 whose contents are undefined until the frame draws. GL1 read the back
-buffer when the command ran, before the frame was drawn. The "Wrote"
-centerprint of the screenshot command runs once the file is written, so
-that it isn't in the picture.
+buffer when the command ran, before the frame was drawn. The back end
+records the copy there without waiting for the GPU (vk_read_pixels_async)
+and the main thread writes the file a few frames later, once the GPU has
+done it (R_ProcessReadbacks), with the engine's files and memory on its
+own thread. The "Wrote" centerprint of the screenshot command runs once
+the file is written, so that it isn't in the picture.
 ==================
 */
 typedef enum {
@@ -643,34 +510,18 @@ static pendingShot_t *R_AddPendingShot( shotType_t type, const char *fileName ) 
 	return shot;
 }
 
-static void R_TakeLevelShot( void );
-static void R_TakeResampledScreenShot( const char *filename, int destwidth, int destheight );
-
+// on the back end, at the end of the frame: the readbacks of its shots
 void RB_TakePendingScreenshots( void ) {
 	int i;
 
 	for ( i = 0; i < numPendingShots; i++ ) {
 		pendingShot_t *shot = &pendingShots[i];
 
-		switch ( shot->type ) {
-		case SHOT_TGA:
-			RB_TakeScreenshot( shot->x, shot->y, shot->width, shot->height, shot->fileName );
-			break;
-		case SHOT_JPEG:
-			RB_TakeScreenshotJPEG( shot->x, shot->y, shot->width, shot->height, shot->fileName );
-			break;
-		case SHOT_PNG:
-			RB_TakeScreenshotPNG( shot->x, shot->y, shot->width, shot->height, shot->fileName );
-			break;
-		case SHOT_LEVELSHOT:
-			R_TakeLevelShot();
-			break;
-		case SHOT_RESAMPLED:
-			R_TakeResampledScreenShot( shot->fileName, shot->width, shot->height );
-			break;
-		}
-		if ( shot->message[0] ) {
-			ri.Cmd_ExecuteText( EXEC_APPEND, shot->message );
+		if ( shot->type == SHOT_LEVELSHOT || shot->type == SHOT_RESAMPLED ) {
+			// sampled down from the whole frame
+			vk_read_pixels_async( 0, 0, glConfig.vidWidth, glConfig.vidHeight, READ_RGB8, READBACK_SHOT, shot, sizeof( *shot ) );
+		} else {
+			vk_read_pixels_async( shot->x, shot->y, shot->width, shot->height, READ_RGB8, READBACK_SHOT, shot, sizeof( *shot ) );
 		}
 	}
 	numPendingShots = 0;
@@ -688,23 +539,17 @@ const void *RB_TakeScreenshotCmd( const void *data ) {
 
 	cmd = (const screenshotCommand_t *)data;
 
-	if ( cmd->png ) {
-		type = SHOT_PNG;
-	} else if ( cmd->jpeg ) {
-		type = SHOT_JPEG;
-	} else {
-		type = SHOT_TGA;
-	}
+	// HDR output: this frame is saved as SDR
+	vk_sdr_frame();
 
+	type = (shotType_t)cmd->type;
 	shot = R_AddPendingShot( type, cmd->fileName );
 	if ( shot ) {
 		shot->x = cmd->x;
 		shot->y = cmd->y;
 		shot->width = cmd->width;
 		shot->height = cmd->height;
-		if ( cmd->message ) {
-			Q_strncpyz( shot->message, cmd->message, sizeof( shot->message ) );
-		}
+		Q_strncpyz( shot->message, cmd->message, sizeof( shot->message ) );
 	}
 
 	return (const void *)(cmd + 1);
@@ -715,9 +560,9 @@ const void *RB_TakeScreenshotCmd( const void *data ) {
 R_TakeScreenshot
 ==================
 */
-static void R_QueueScreenshot( int x, int y, int width, int height, char *name, qboolean jpeg, qboolean png, const char *message ) {
-	static char	fileName[MAX_OSPATH]; // bad things if two screenshots per frame?
-	static char	commandText[MAX_OSPATH + 64];
+// the command holds its file name and message (the render thread may run
+// it while the next frame's commands are queued)
+static void R_QueueShot( shotType_t type, int x, int y, int width, int height, const char *name, const char *message ) {
 	screenshotCommand_t	*cmd;
 
 	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
@@ -725,51 +570,21 @@ static void R_QueueScreenshot( int x, int y, int width, int height, char *name, 
 		return;
 	}
 	cmd->commandId = RC_SCREENSHOT;
-	// HDR output: this frame is saved as SDR
-	vk_sdr_frame();
-
+	cmd->type = type;
 	cmd->x = x;
 	cmd->y = y;
 	cmd->width = width;
 	cmd->height = height;
-	Q_strncpyz( fileName, name, sizeof(fileName) );
-	cmd->fileName = fileName;
-	cmd->jpeg = jpeg;
-	cmd->png = png;
-	cmd->message = NULL;
-	if ( message ) {
-		Q_strncpyz( commandText, message, sizeof( commandText ) );
-		cmd->message = commandText;
-	}
+	Q_strncpyz( cmd->fileName, name, sizeof( cmd->fileName ) );
+	Q_strncpyz( cmd->message, message ? message : "", sizeof( cmd->message ) );
+}
+
+static void R_QueueScreenshot( int x, int y, int width, int height, char *name, qboolean jpeg, qboolean png, const char *message ) {
+	R_QueueShot( png ? SHOT_PNG : jpeg ? SHOT_JPEG : SHOT_TGA, x, y, width, height, name, message );
 }
 
 void R_TakeScreenshot( int x, int y, int width, int height, char *name, qboolean jpeg, const char *message ) {
 	R_QueueScreenshot( x, y, width, height, name, jpeg, qfalse, message );
-}
-
-/* 
-================== 
-R_ScreenshotFilename
-================== 
-*/  
-void R_ScreenshotFilename( int lastNumber, char *fileName ) {
-	int		a,b,c,d;
-
-	if ( lastNumber < 0 || lastNumber > 9999 ) {
-		Com_sprintf( fileName, MAX_OSPATH, "screenshots/shot9999.tga" );
-		return;
-	}
-
-	a = lastNumber / 1000;
-	lastNumber -= a*1000;
-	b = lastNumber / 100;
-	lastNumber -= b*100;
-	c = lastNumber / 10;
-	lastNumber -= c*10;
-	d = lastNumber;
-
-	Com_sprintf( fileName, MAX_OSPATH, "screenshots/shot%i%i%i%i.tga"
-		, a, b, c, d );
 }
 
 /* 
@@ -828,69 +643,7 @@ R_ResampledScreenShot
 ====================
 */
 void R_ResampledScreenShot(const char* filename, int destwidth, int destheight) {
-	pendingShot_t *shot = R_AddPendingShot( SHOT_RESAMPLED, filename );
-
-	if ( shot ) {
-		shot->width = destwidth;
-		shot->height = destheight;
-	}
-}
-
-static void R_TakeResampledScreenShot(const char* filename, int destwidth, int destheight) {
-	char		checkname[MAX_OSPATH];
-	byte		*buffer;
-	byte		*source, *allsource;
-	byte		*src, *dst;
-	size_t			offset = 0;
-	int			padlen;
-	int			x, y;
-	int			r, g, b;
-	float		xScale, yScale;
-	int			xx, yy;
-
-	allsource = RB_ReadPixels(0, 0, glConfig.vidWidth, glConfig.vidHeight, &offset, &padlen);
-	source = allsource + offset;
-
-	buffer = ri.Hunk_AllocateTempMemory(destheight * destwidth * 3 + 18);
-	Com_Memset (buffer, 0, 18);
-	buffer[2]  = 2;		// uncompressed type
-	buffer[12] = destwidth & 255;
-	buffer[13] = destwidth >> 8;
-	buffer[14] = destheight & 255;
-	buffer[15] = destheight >> 8;
-	buffer[16] = 24;	// pixel size
-
-	// resample from source
-	xScale = glConfig.vidWidth / (float)(destwidth * 4);
-	yScale = glConfig.vidHeight / (float)(destheight * 3);
-	for ( y = 0 ; y < destheight ; y++ ) {
-		for ( x = 0 ; x < destwidth ; x++ ) {
-			r = g = b = 0;
-			for ( yy = 0 ; yy < 3 ; yy++ ) {
-				for ( xx = 0 ; xx < 4 ; xx++ ) {
-					src = source + (3 * glConfig.vidWidth + padlen) * (int)((y*3 + yy) * yScale) +
-						3 * (int) ((x*4 + xx) * xScale);
-					r += src[0];
-					g += src[1];
-					b += src[2];
-				}
-			}
-			dst = buffer + 18 + 3 * ( y * destwidth + x );
-			dst[0] = b / 12;
-			dst[1] = g / 12;
-			dst[2] = r / 12;
-		}
-	}
-
-	// gamma correct
-	if ( glConfig.deviceSupportsGamma ) {
-		R_GammaCorrect( buffer + 18, destheight * destwidth * 3 );
-	}
-
-	ri.FS_WriteFile( filename, buffer, destheight * destwidth * 3 + 18 );
-
-	ri.Hunk_FreeTempMemory( buffer );
-	ri.Hunk_FreeTempMemory( allsource );
+	R_QueueShot( SHOT_RESAMPLED, 0, 0, destwidth, destheight, filename, NULL );
 }
 
 /*
@@ -902,66 +655,14 @@ the menu system, sampled down from full screen distorted images
 ====================
 */
 void R_LevelShot( void ) {
-	R_AddPendingShot( SHOT_LEVELSHOT, NULL );
-}
+	char checkname[MAX_OSPATH];
 
-static void R_TakeLevelShot( void ) {
-	char		checkname[MAX_OSPATH];
-	byte		*buffer;
-	byte		*source, *allsource;
-	byte		*src, *dst;
-	size_t			offset = 0;
-	int			padlen;
-	int			x, y;
-	int			r, g, b;
-	float		xScale, yScale;
-	int			xx, yy;
-
-	Com_sprintf(checkname, sizeof(checkname), "levelshots/%s.tga", tr.world->baseName);
-
-	allsource = RB_ReadPixels(0, 0, glConfig.vidWidth, glConfig.vidHeight, &offset, &padlen);
-	source = allsource + offset;
-
-	buffer = ri.Hunk_AllocateTempMemory(128 * 128*3 + 18);
-	Com_Memset (buffer, 0, 18);
-	buffer[2] = 2;		// uncompressed type
-	buffer[12] = 128;
-	buffer[14] = 128;
-	buffer[16] = 24;	// pixel size
-
-	// resample from source
-	xScale = glConfig.vidWidth / 512.0f;
-	yScale = glConfig.vidHeight / 384.0f;
-	for ( y = 0 ; y < 128 ; y++ ) {
-		for ( x = 0 ; x < 128 ; x++ ) {
-			r = g = b = 0;
-			for ( yy = 0 ; yy < 3 ; yy++ ) {
-				for ( xx = 0 ; xx < 4 ; xx++ ) {
-					src = source + (3 * glConfig.vidWidth + padlen) * (int)((y*3 + yy) * yScale) +
-						3 * (int) ((x*4 + xx) * xScale);
-					r += src[0];
-					g += src[1];
-					b += src[2];
-				}
-			}
-			dst = buffer + 18 + 3 * ( y * 128 + x );
-			dst[0] = b / 12;
-			dst[1] = g / 12;
-			dst[2] = r / 12;
-		}
+	if ( !tr.world ) {
+		ri.Printf( PRINT_ALL, "levelshot: no map loaded\n" );
+		return;
 	}
-
-	// gamma correct
-	if ( glConfig.deviceSupportsGamma ) {
-		R_GammaCorrect( buffer + 18, 128 * 128 * 3 );
-	}
-
-	ri.FS_WriteFile( checkname, buffer, 128 * 128*3 + 18 );
-
-	ri.Hunk_FreeTempMemory(buffer);
-	ri.Hunk_FreeTempMemory(allsource);
-
-	ri.Printf( PRINT_ALL, "Wrote %s\n", checkname );
+	Com_sprintf( checkname, sizeof( checkname ), "levelshots/%s.tga", tr.world->baseName );
+	R_QueueShot( SHOT_LEVELSHOT, 0, 0, 0, 0, checkname, NULL );
 }
 
 /* 
@@ -972,78 +673,49 @@ screenshot
 screenshot [silent]
 screenshot [levelshot]
 screenshot [filename]
+screenshot <path or filename> <width> <height>
 
-Doesn't print the pacifier message if there is a second arg
+Screenshots are PNGs: "screenshot" and "screenshot [silent|filename]" run
+screenshotPNG, so old configs that bind "screenshot" get PNGs too. Two
+uses stay TGA, what the game reads back: levelshots (levelshots/<map>.tga)
+and a shot given a path (with a '/') or a size, the savegame picture that
+saveshot takes (<save>.tga at 256x256, shown by the load menu)
 ================== 
 */  
 void R_ScreenShot_f(void) {
 	char	checkname[MAX_OSPATH];
-	static int	lastNumber = -1;
+	const char	*name;
 	int		width, height;
-	qboolean	silent;
 
 	if (!strcmp(ri.Cmd_Argv(1), "levelshot")) {
 		R_LevelShot();
 		return;
 	}
 
-	if (!strcmp(ri.Cmd_Argv(1), "silent")) {
-		silent = qtrue;
+	if (ri.Cmd_Argc() < 2 || (ri.Cmd_Argc() == 2 && !strchr(ri.Cmd_Argv(1), '/'))) {
+		R_ScreenShotPNG_f();
+		return;
+	}
+
+	name = ri.Cmd_Argv(1);
+	if (strchr(name, '/')) {
+		Q_strncpyz(checkname, name, sizeof(checkname));
 	} else {
-		silent = qfalse;
+		Com_sprintf(checkname, MAX_OSPATH, "screenshots/%s.tga", name);
 	}
 
 	width = 0;
 	height = 0;
-
-	if (ri.Cmd_Argc() >= 2 && !silent) {
-		// explicit filename
-		const char* name = ri.Cmd_Argv(1);
-		if (strchr(name, '/')) {
-			Q_strncpyz(checkname, name, sizeof(checkname));
-		} else {
-			Com_sprintf(checkname, MAX_OSPATH, "screenshots/%s.tga", ri.Cmd_Argv(1));
-		}
-
-		if (ri.Cmd_Argc() > 2) {
-			width = atoi(ri.Cmd_Argv(2));
-			height = atoi(ri.Cmd_Argv(3));
-		}
-	} else {
-		// scan for a free filename
-
-		// if we have saved a previous screenshot, don't scan
-		// again, because recording demo avis can involve
-		// thousands of shots
-		if (lastNumber == -1) {
-			lastNumber = 0;
-		}
-		// scan for a free number
-		for (; lastNumber <= 9999; lastNumber++) {
-			R_ScreenshotFilename(lastNumber, checkname);
-
-			if (!ri.FS_FileExists(checkname))
-			{
-				break; // file doesn't exist
-			}
-		}
-
-		if (lastNumber >= 9999) {
-			ri.Printf(PRINT_ALL, "ScreenShot: Couldn't create a file\n");
-			return;
-		}
-
-		lastNumber++;
+	if (ri.Cmd_Argc() > 2) {
+		width = atoi(ri.Cmd_Argv(2));
+		height = atoi(ri.Cmd_Argv(3));
 	}
 
 	if (!width || !height) {
 		char message[MAX_OSPATH + 64];
 
-		message[0] = 0;
-		if (!silent) {
-			Com_sprintf(message, sizeof(message), "centerprint \"%s %s\"\n", ri.LV_ConvertString("Wrote"), checkname);
-		}
-		R_TakeScreenshot(0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qfalse, message[0] ? message : NULL);
+		Com_sprintf(message, sizeof(message), "centerprint \"%s %s\"\n", ri.LV_ConvertString("Wrote"), checkname);
+		R_TakeScreenshot(0, 0, glConfig.vidWidth, glConfig.vidHeight, checkname, qfalse, message);
 	} else {
 		R_ResampledScreenShot(checkname, width, height);
 	}
@@ -1154,6 +826,14 @@ void R_ScreenShotPNG_f (void) {
 }
 
 //============================================================================
+
+// Changed in OPM
+//  The readback writer's video frames (R_RunReadbackJob) aren't used: a
+//  video frame is read at the end of its frame and written at once, below
+typedef struct {
+	int			width, height;
+	qboolean	motionJpeg;
+} videoReadback_t;
 
 /*
 ==================
@@ -1270,12 +950,413 @@ const void *RB_TakeVideoFrameCmd( const void *data )
 
 	cmd = (const videoFrameCommand_t *)data;
 
+	// HDR output: the video gets the SDR frame
+	vk_sdr_frame();
+
 	// one a frame: one not taken yet, as nothing was drawn since, goes first
 	RB_TakePendingVideoFrame();
 	pendingVideoFrame = *cmd;
 	videoFramePending = qtrue;
 
 	return (const void *)(cmd + 1);
+}
+
+
+/*
+==================
+The readback writer
+
+The back end's pixel readbacks (vk_read_pixels_async) are taken in the
+order they were recorded, on the main thread, once the GPU has done them
+(R_ProcessReadbacks). What takes time with them runs on this thread: a
+screenshot's conversion, gamma, encoding and writing (about 5 ms for a
+2560x1440 TGA, which made a hitch on the main thread), the stencil sum of
+r_measureOverdraw and a video frame's encoding. The main thread opens a
+shot's file before (ri.FS_OpenFileWrite) and closes it after
+(ri.FS_CloseFile, then its message), in order; the thread writes to the
+open handle only (ri.FS_Write: an fwrite on it) and allocates with malloc
+(libjpeg and stb too). A readback goes back to the pool once its job is
+collected; RE_Shutdown waits for every job (R_FlushReadbacks).
+==================
+*/
+#define READBACK_JOBS	8		// as many as the pool's readbacks (vk.c)
+
+typedef struct {
+	int				handle;		// the readback
+	int				kind;		// READBACK_*
+	int				width, height;	// what it read
+	int				quality;	// JPEG quality (r_screenshotJpegQuality, r_aviMotionJpegQuality)
+	union {
+		pendingShot_t	shot;
+		videoReadback_t	video;
+	} u;
+	fileHandle_t	file;		// a shot's, opened by the main thread
+	byte			*data;		// a video frame's encoding (malloc)
+	size_t			length;
+	long			sum;		// the overdraw readback's
+} readbackJob_t;
+
+static struct {
+	SDL_Thread		*thread;
+	SDL_Mutex		*lock;
+	SDL_Condition	*wake, *done;
+	readbackJob_t	jobs[READBACK_JOBS];	// jobs[n % READBACK_JOBS]
+	int				queued, finished, collected;
+	qboolean		quit;
+} rbw;
+
+// a TGA file of the RGB rows (bottom row first, swapped to BGR); NULL on failure
+static byte *R_EncodeTGA( const byte *rgb, int width, int height, size_t *length ) {
+	size_t count = (size_t)width * height * 3, i;
+	byte *file = malloc( count + 18 );
+
+	if ( !file ) {
+		return NULL;
+	}
+	Com_Memset( file, 0, 18 );
+	file[2] = 2;		// uncompressed type
+	file[12] = width & 255;
+	file[13] = width >> 8;
+	file[14] = height & 255;
+	file[15] = height >> 8;
+	file[16] = 24;		// pixel size
+	for ( i = 0; i < count; i += 3 ) {
+		file[18 + i] = rgb[i + 2];
+		file[18 + i + 1] = rgb[i + 1];
+		file[18 + i + 2] = rgb[i];
+	}
+	*length = count + 18;
+	return file;
+}
+
+// a TGA file of the RGB rows sampled down to destwidth x destheight (4 x 3
+// samples a pixel, a 4:3 grid stretched over the source, as GL1's
+// levelshots and resampled screenshots), gamma corrected
+static byte *R_EncodeResampledTGA( const byte *rgb, int width, int height, int destwidth, int destheight, size_t *length ) {
+	size_t count = (size_t)destwidth * destheight * 3;
+	byte *file = malloc( count + 18 );
+	float xScale = width / (float)( destwidth * 4 );
+	float yScale = height / (float)( destheight * 3 );
+	int x, y, xx, yy, r, g, b;
+
+	if ( !file ) {
+		return NULL;
+	}
+	Com_Memset( file, 0, 18 );
+	file[2] = 2;
+	file[12] = destwidth & 255;
+	file[13] = destwidth >> 8;
+	file[14] = destheight & 255;
+	file[15] = destheight >> 8;
+	file[16] = 24;
+	for ( y = 0; y < destheight; y++ ) {
+		for ( x = 0; x < destwidth; x++ ) {
+			byte *dst = file + 18 + 3 * ( y * destwidth + x );
+
+			r = g = b = 0;
+			for ( yy = 0; yy < 3; yy++ ) {
+				for ( xx = 0; xx < 4; xx++ ) {
+					const byte *src = rgb + 3 * width * (int)( ( y * 3 + yy ) * yScale ) + 3 * (int)( ( x * 4 + xx ) * xScale );
+
+					r += src[0];
+					g += src[1];
+					b += src[2];
+				}
+			}
+			dst[0] = b / 12;
+			dst[1] = g / 12;
+			dst[2] = r / 12;
+		}
+	}
+	if ( glConfig.deviceSupportsGamma ) {
+		R_GammaCorrect( file + 18, count );
+	}
+	*length = count + 18;
+	return file;
+}
+
+// on the writer thread: everything but the engine's calls
+static void R_RunReadbackJob( readbackJob_t *job ) {
+	const int w = job->width, h = job->height;
+	const size_t count = (size_t)w * h * 3;
+	byte *pixels, *file = NULL;
+	size_t length = 0, i;
+	int pngLength;
+
+	if ( job->kind == READBACK_OVERDRAW ) {
+		pixels = malloc( (size_t)w * h );
+		if ( pixels ) {
+			vk_readback_get( job->handle, pixels );
+			for ( i = 0; i < (size_t)w * h; i++ ) {
+				job->sum += pixels[i];
+			}
+			free( pixels );
+		}
+		return;
+	}
+	if ( job->kind == READBACK_SHOT && !job->file ) {
+		return;
+	}
+
+	pixels = malloc( count );
+	if ( !pixels ) {
+		return;
+	}
+	vk_readback_get( job->handle, pixels );
+
+	if ( job->kind == READBACK_VIDEO ) {
+		const size_t linelen = (size_t)w * 3;
+		const size_t avipadwidth = PAD( linelen, AVI_LINE_PADDING );
+
+		if ( glConfig.deviceSupportsGamma ) {
+			R_GammaCorrect( pixels, count );
+		}
+		job->data = malloc( avipadwidth * h );
+		if ( job->data ) {
+			if ( job->u.video.motionJpeg ) {
+				job->length = RE_SaveJPGToBuffer( job->data, linelen * h, job->quality, w, h, pixels, 0 );
+			} else {
+				byte *dst = job->data;
+				int y;
+
+				// swap R and B and add the AVI line paddings
+				for ( y = 0; y < h; y++ ) {
+					const byte *src = pixels + linelen * y;
+
+					for ( i = 0; i < linelen; i += 3 ) {
+						*dst++ = src[i + 2];
+						*dst++ = src[i + 1];
+						*dst++ = src[i];
+					}
+					Com_Memset( dst, 0, avipadwidth - linelen );
+					dst += avipadwidth - linelen;
+				}
+				job->length = avipadwidth * h;
+			}
+		}
+		free( pixels );
+		return;
+	}
+
+	switch ( job->u.shot.type ) {
+	case SHOT_TGA:
+		if ( glConfig.deviceSupportsGamma ) {
+			R_GammaCorrect( pixels, count );
+		}
+		file = R_EncodeTGA( pixels, w, h, &length );
+		break;
+	case SHOT_JPEG:
+		if ( glConfig.deviceSupportsGamma ) {
+			R_GammaCorrect( pixels, count );
+		}
+		file = malloc( count );
+		if ( file ) {
+			length = RE_SaveJPGToBuffer( file, count, job->quality, w, h, pixels, 0 );
+		}
+		break;
+	case SHOT_PNG:
+		if ( glConfig.deviceSupportsGamma ) {
+			R_GammaCorrect( pixels, count );
+		}
+		file = RE_EncodePNGFromRGB( w, h, pixels, 0, &pngLength );
+		length = file ? (size_t)pngLength : 0;
+		break;
+	case SHOT_LEVELSHOT:
+		file = R_EncodeResampledTGA( pixels, w, h, 128, 128, &length );
+		break;
+	case SHOT_RESAMPLED:
+		file = R_EncodeResampledTGA( pixels, w, h, job->u.shot.width, job->u.shot.height, &length );
+		break;
+	}
+	if ( file && length ) {
+		ri.FS_Write( file, length, job->file );
+	}
+	free( file );
+	free( pixels );
+}
+
+static int SDLCALL R_ReadbackWriterMain( void *data ) {
+	(void)data;
+
+	SDL_LockMutex( rbw.lock );
+	for ( ;; ) {
+		readbackJob_t *job;
+
+		while ( rbw.finished == rbw.queued && !rbw.quit ) {
+			SDL_WaitCondition( rbw.wake, rbw.lock );
+		}
+		if ( rbw.finished == rbw.queued ) {
+			break;	// quit, every job done
+		}
+		job = &rbw.jobs[rbw.finished % READBACK_JOBS];
+		SDL_UnlockMutex( rbw.lock );
+
+		R_RunReadbackJob( job );
+
+		SDL_LockMutex( rbw.lock );
+		rbw.finished++;
+		SDL_BroadcastCondition( rbw.done );
+	}
+	SDL_UnlockMutex( rbw.lock );
+	return 0;
+}
+
+static qboolean R_StartReadbackWriter( void ) {
+	if ( rbw.thread ) {
+		return qtrue;
+	}
+	Com_Memset( &rbw, 0, sizeof( rbw ) );
+	rbw.lock = SDL_CreateMutex();
+	rbw.wake = SDL_CreateCondition();
+	rbw.done = SDL_CreateCondition();
+	if ( rbw.lock && rbw.wake && rbw.done ) {
+		rbw.thread = SDL_CreateThread( R_ReadbackWriterMain, "readbacks", NULL );
+	}
+	return rbw.thread != NULL;
+}
+
+// on the main thread: the jobs the thread finished (with wait, all of them),
+// in order: files closed, messages run, sums and video frames passed on,
+// the readbacks freed
+static void R_CollectReadbackJobs( qboolean wait ) {
+	int finished;
+
+	if ( !rbw.lock ) {
+		return;
+	}
+	SDL_LockMutex( rbw.lock );
+	while ( wait && rbw.finished < rbw.queued ) {
+		SDL_WaitCondition( rbw.done, rbw.lock );
+	}
+	finished = rbw.finished;
+	SDL_UnlockMutex( rbw.lock );
+
+	for ( ; rbw.collected < finished; rbw.collected++ ) {
+		readbackJob_t *job = &rbw.jobs[rbw.collected % READBACK_JOBS];
+
+		switch ( job->kind ) {
+		case READBACK_SHOT:
+			if ( job->file ) {
+				ri.FS_CloseFile( job->file );
+				if ( job->u.shot.type == SHOT_LEVELSHOT ) {
+					ri.Printf( PRINT_ALL, "Wrote %s\n", job->u.shot.fileName );
+				}
+				if ( job->u.shot.message[0] ) {
+					ri.Cmd_ExecuteText( EXEC_APPEND, job->u.shot.message );
+				}
+			}
+			break;
+		case READBACK_VIDEO:
+			if ( job->data && job->length ) {
+				ri.CL_WriteAVIVideoFrame( job->data, (int)job->length );
+			}
+			free( job->data );
+			job->data = NULL;
+			break;
+		case READBACK_OVERDRAW:
+			backEnd.pc.c_overDraw += job->sum;
+			break;
+		}
+		vk_readback_free( job->handle );
+	}
+}
+
+static void R_StopReadbackWriter( void ) {
+	if ( rbw.thread ) {
+		R_CollectReadbackJobs( qtrue );
+		SDL_LockMutex( rbw.lock );
+		rbw.quit = qtrue;
+		SDL_SignalCondition( rbw.wake );
+		SDL_UnlockMutex( rbw.lock );
+		SDL_WaitThread( rbw.thread, NULL );
+	}
+	if ( rbw.wake ) {
+		SDL_DestroyCondition( rbw.wake );
+	}
+	if ( rbw.done ) {
+		SDL_DestroyCondition( rbw.done );
+	}
+	if ( rbw.lock ) {
+		SDL_DestroyMutex( rbw.lock );
+	}
+	Com_Memset( &rbw, 0, sizeof( rbw ) );
+}
+
+/*
+==================
+R_ProcessReadbacks
+
+On the main thread, at the start of a frame: the jobs the writer finished,
+then the readbacks the GPU has done, in the order they were recorded,
+handed to the writer (a shot's file opened first)
+==================
+*/
+void R_ProcessReadbacks( void ) {
+	int handle, kind, dropped;
+	void *user;
+
+	if ( !tr.registered ) {
+		return;
+	}
+	R_CollectReadbackJobs( qfalse );
+	dropped = vk_readback_dropped();
+	if ( dropped ) {
+		ri.Printf( PRINT_WARNING, "%d readbacks dropped (screenshots, video frames): too many in flight\n", dropped );
+	}
+	while ( rbw.queued - rbw.collected < READBACK_JOBS && ( handle = vk_readback_next( &kind, &user ) ) != 0 ) {
+		readbackJob_t *job;
+
+		if ( !R_StartReadbackWriter() ) {
+			ri.Printf( PRINT_WARNING, "no readback writer thread (%s): readback dropped\n", SDL_GetError() );
+			vk_readback_free( handle );
+			continue;
+		}
+		job = &rbw.jobs[rbw.queued % READBACK_JOBS];
+		Com_Memset( job, 0, sizeof( *job ) );
+		job->handle = handle;
+		job->kind = kind;
+		switch ( kind ) {
+		case READBACK_SHOT:
+			job->u.shot = *(const pendingShot_t *)user;
+			if ( job->u.shot.type == SHOT_LEVELSHOT || job->u.shot.type == SHOT_RESAMPLED ) {
+				// read whole (RB_TakePendingScreenshots)
+				job->width = glConfig.vidWidth;
+				job->height = glConfig.vidHeight;
+			} else {
+				job->width = job->u.shot.width;
+				job->height = job->u.shot.height;
+			}
+			job->quality = r_screenshotJpegQuality->integer;
+			job->file = ri.FS_OpenFileWrite( job->u.shot.fileName );
+			break;
+		case READBACK_VIDEO:
+			job->u.video = *(const videoReadback_t *)user;
+			job->width = job->u.video.width;
+			job->height = job->u.video.height;
+			job->quality = r_aviMotionJpegQuality->integer;
+			break;
+		case READBACK_OVERDRAW:
+			job->width = ( (const int *)user )[0];
+			job->height = ( (const int *)user )[1];
+			break;
+		}
+		SDL_LockMutex( rbw.lock );
+		rbw.queued++;
+		SDL_SignalCondition( rbw.wake );
+		SDL_UnlockMutex( rbw.lock );
+	}
+}
+
+// before the renderer shuts down: every readback of the frames submitted
+// is done and written (a screenshot right before quitting is saved), and
+// the writer stops
+void R_FlushReadbacks( void ) {
+	if ( !tr.registered ) {
+		return;
+	}
+	vk_finish();
+	R_ProcessReadbacks();
+	R_StopReadbackWriter();
 }
 
 //============================================================================
@@ -1725,6 +1806,13 @@ void R_Register( void )
 	// 1: consecutive 2D draws of one shader are one surface, 2: DrawBox leaves
 	// out the boxes that change no pixel; 0 draws each as it comes (tr_draw.c)
 	r_batch2D = ri.Cvar_Get("r_batch2D", "3", 0);
+	// the opaque shaders drawn in the order of their pipelines (tr_shader.c,
+	// SortNewShader), so the back end binds fewer
+	r_sortPipelines = ri.Cvar_Get("r_sortPipelines", "1", CVAR_LATCH);
+	ri.Cvar_SetDescription(r_sortPipelines, "1: the opaque shaders are drawn in the order of the pipelines their draws bind (fewer pipeline binds a frame); 0: in the order they were loaded, as before. Opaque draws with the same depth at a pixel (z-fighting) can come out the other way");
+	// the back end on a render thread (tr_smp.c)
+	r_smp = ri.Cvar_Get("r_smp", "1", CVAR_ARCHIVE | CVAR_LATCH);
+	ri.Cvar_SetDescription(r_smp, "1: the back end (the draws' recording, the submission and the present) runs on a render thread while the game and the front end build the next frame; the frame rate is the slower half's, a frame's input to its present as before (see README, Render thread); 0: one thread");
 	r_drawbrushes = ri.Cvar_Get("r_drawbrushes", "1", CVAR_CHEAT);
 	r_drawbrushmodels = ri.Cvar_Get("r_drawbrushmodels", "1", CVAR_CHEAT);	
 	r_drawterrain = ri.Cvar_Get("r_drawterrain", "1", CVAR_CHEAT);
@@ -1756,7 +1844,15 @@ void R_Register( void )
 	r_lockpvs = ri.Cvar_Get ("r_lockpvs", "0", CVAR_CHEAT);
 	r_noportals = ri.Cvar_Get ("r_noportals", "0", CVAR_CHEAT);
 	r_entlightmap = ri.Cvar_Get("r_entlightmap", "0", CVAR_CHEAT);
-	r_fastentlight = ri.Cvar_Get("r_fastentlight", "0", CVAR_ARCHIVE);
+	// Changed: 1 by default, the models lit from the light grid (brighter, flat): 0's spherical lights leave players and
+	// guns dark in shade (a look choice, not for speed). Saved configs hold the old default 0, so the first start turns
+	// a 0 into 1 once; r_fastentlightChecked remembers it, and a 0 picked after that stays (a +set r_fastentlight 0 at a
+	// config's first start needs +set r_fastentlightChecked 1 too)
+	r_fastentlight = ri.Cvar_Get("r_fastentlight", "1", CVAR_ARCHIVE);
+	if (!ri.Cvar_Get("r_fastentlightChecked", "0", CVAR_ARCHIVE)->integer) {
+		ri.Cvar_Set("r_fastentlight", "1");
+		ri.Cvar_Set("r_fastentlightChecked", "1");
+	}
 	r_entlight_scale = ri.Cvar_Get("r_entlight_scale", "1.3", CVAR_CHEAT);
 	r_entlight_errbound = ri.Cvar_Get("r_entlight_errbound", "6", CVAR_ARCHIVE);
 	r_entlight_cubelevel = ri.Cvar_Get("r_entlight_cubelevel", "0", CVAR_ARCHIVE);
@@ -1928,13 +2024,31 @@ void R_Init( void ) {
 	if (max_termarks < MAX_TERMARKS)
 		max_termarks = MAX_TERMARKS;
 
-	ptr = ri.Malloc(sizeof(*backEndData) + sizeof(srfPoly_t) * max_polys + sizeof(polyVert_t) * max_polyverts + sizeof(srfMarkFragment_t) * max_termarks);
-	backEndData = (backEndData_t*)ptr;
-	backEndData->polys = (srfPoly_t*)((char*)ptr + sizeof(*backEndData));
-	backEndData->polyVerts = (polyVert_t*)((char*)ptr + sizeof(*backEndData) + sizeof(srfPoly_t) * max_polys);
-	backEndData->terMarks = (srfMarkFragment_t*)((char*)ptr + sizeof(*backEndData) + sizeof(srfPoly_t) * max_polys + sizeof(polyVert_t) * max_polyverts);
-	backEndData->staticModels = NULL;
-	backEndData->staticModelData = NULL;
+	// two with r_smp: the render thread reads one while the front end
+	// fills the other (R_InitNextFrame)
+	for (i = 0; i < (r_smp->integer ? 2 : 1); i++) {
+		size_t size = sizeof(*backEndData) + sizeof(srfPoly_t) * max_polys + sizeof(polyVert_t) * max_polyverts
+			+ sizeof(srfMarkFragment_t) * max_termarks + sizeof(terrainSlotChange_t) * MAX_TERRAIN_CHANGES
+			+ sizeof(glIndex_t) * MAX_TERRAIN_FRAME_INDEXES
+			+ sizeof(skelBoneCache_t) * MAX_SKELBONES + sizeof(int) * MAX_SKELMORPH;
+		backEndData_t *data;
+
+		ptr = ri.Malloc(size);
+		data = (backEndData_t*)ptr;
+		data->polys = (srfPoly_t*)((char*)ptr + sizeof(*backEndData));
+		data->polyVerts = (polyVert_t*)((char*)ptr + sizeof(*backEndData) + sizeof(srfPoly_t) * max_polys);
+		data->terMarks = (srfMarkFragment_t*)((char*)ptr + sizeof(*backEndData) + sizeof(srfPoly_t) * max_polys + sizeof(polyVert_t) * max_polyverts);
+		data->terrainChanges = (terrainSlotChange_t*)((char*)data->terMarks + sizeof(srfMarkFragment_t) * max_termarks);
+		data->terrainIndexes = (glIndex_t*)((char*)data->terrainChanges + sizeof(terrainSlotChange_t) * MAX_TERRAIN_CHANGES);
+		data->skelBones = (skelBoneCache_t*)((char*)data->terrainIndexes + sizeof(glIndex_t) * MAX_TERRAIN_FRAME_INDEXES);
+		data->skelMorphs = (int*)((char*)data->skelBones + sizeof(skelBoneCache_t) * MAX_SKELBONES);
+		data->staticModels = NULL;
+		data->staticModelData = NULL;
+		backEndDataArray[i] = data;
+	}
+	backEndDataArray[1] = backEndDataArray[1] ? backEndDataArray[1] : backEndDataArray[0];
+	tr.smpFrame = 0;
+	backEndData = backEndDataArray[0];
 	R_InitNextFrame();
 
 	InitGraphics();
@@ -1951,6 +2065,9 @@ void R_Init( void ) {
 
 	tr.pFontDebugStrings = R_LoadFont("verdana-14");
 	g_bInfoworldtris = qfalse;
+
+	// the render thread, once everything it uses exists
+	R_StartRenderThread();
 
 	ri.Printf( PRINT_ALL, "----- finished R_Init -----\n" );
 }
@@ -1978,8 +2095,12 @@ void RE_Shutdown( qboolean destroyWindow ) {
 
 	if ( tr.registered ) {
 		R_IssuePendingRenderCommands();
+		// the screenshots and video frames still in flight are written
+		R_FlushReadbacks();
 		R_DeleteTextures();
 	}
+	// the render thread has run its last list (R_IssuePendingRenderCommands)
+	R_StopRenderThread();
 
 	R_FreeStaticGeometry();
 	R_ClearSkinData();
@@ -2004,6 +2125,7 @@ void RE_Shutdown( qboolean destroyWindow ) {
 
 	// what tess holds doesn't outlive the renderer
 	R_Forget2DBatch();
+	R_2DListsShutdown();
 
 	tr.registered = qfalse;
 }
@@ -2084,10 +2206,25 @@ RE_SetRenderTime
 =============
 */
 void RE_SetRenderTime(int t) {
+	if ( glConfig.smpActive ) {
+		renderTimeCommand_t *cmd = R_GetCommandBuffer( sizeof( *cmd ) );
+
+		if ( cmd ) {
+			cmd->commandId = RC_SET_RENDER_TIME;
+			cmd->t = t;
+			cmd->refdefTime = tr.refdef.time;
+		}
+		return;
+	}
+	RB_SetRenderTime( t, tr.refdef.time );
+}
+
+// the render thread's RE_SetRenderTime (RC_SET_RENDER_TIME)
+void RB_SetRenderTime( int t, int refdefTime ) {
 	// the open 2D batch has the shader time it was made with
 	R_End2DBatch();
 	backEnd.refdef.floatTime = (long double)t / 1000.0;
-	R_UpdateGhostTextures();
+	R_UpdateGhostTextures( refdefTime );
 }
 
 /*
@@ -2226,6 +2363,15 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
     re.FreeRawImage = R_FreeRawImage;
 
 	re.Set2DInitialShaderTime = Set2DInitialShaderTime;
+	re.RegisterImage2D = RE_RegisterImage2D;
+	re.Begin2DList = RE_Begin2DList;
+	re.End2DList = RE_End2DList;
+	re.Draw2DList = RE_Draw2DList;
+	re.Free2DList = RE_Free2DList;
+	re.DrawPolygon2D = DrawPolygon2D;
+	re.RegisterTexture2D = RE_RegisterTexture2D;
+	re.RegisterRadar2D = RE_RegisterRadar2D;
+	re.Radar2DHeight = RE_Radar2DHeight;
 
 	return VK_FrameLogExports( &re );
 }

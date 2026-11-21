@@ -1,0 +1,50 @@
+// The Competitive HUD (cg_hudstyle 1): the damage's direction, three thin
+// red crescents well out from the crosshair, each turned toward where a hit
+// came from and fading in 1.5 s, a faint glow under each
+menu "hud_comp_damage" 640 640 NONE 0
+virtualres 1 1920 1080
+drawcache 1
+anchor 0.5 0.5
+bgcolor 0 0 0 0
+borderstyle NONE
+
+resource
+Label
+{
+name "arc0"
+rect 0 0 640 640
+bgcolor 0 0 0 0
+borderstyle NONE
+shape crescent 0.706 0.078 0.078 0.3 0.235 0.076 1.6819 0.89 0.965 0.965 1.0
+shape crescent 0.824 0.141 0.11 1 0.25 0.067 0.8631 0.945 0.975 0.983 1.0
+rotatecvar ui_hud_arc0_angle
+alphacvar ui_hud_arc0_alpha
+}
+
+resource
+Label
+{
+name "arc1"
+rect 0 0 640 640
+bgcolor 0 0 0 0
+borderstyle NONE
+shape crescent 0.706 0.078 0.078 0.3 0.235 0.076 1.6819 0.89 0.965 0.965 1.0
+shape crescent 0.824 0.141 0.11 1 0.25 0.067 0.8631 0.945 0.975 0.983 1.0
+rotatecvar ui_hud_arc1_angle
+alphacvar ui_hud_arc1_alpha
+}
+
+resource
+Label
+{
+name "arc2"
+rect 0 0 640 640
+bgcolor 0 0 0 0
+borderstyle NONE
+shape crescent 0.706 0.078 0.078 0.3 0.235 0.076 1.6819 0.89 0.965 0.965 1.0
+shape crescent 0.824 0.141 0.11 1 0.25 0.067 0.8631 0.945 0.975 0.983 1.0
+rotatecvar ui_hud_arc2_angle
+alphacvar ui_hud_arc2_alpha
+}
+
+end.

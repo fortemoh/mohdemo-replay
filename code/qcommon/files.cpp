@@ -673,9 +673,29 @@ char *FS_BaseDir_BuildOSPath( const char *base, const char *qpath ) {
 	return ospath;
 }
 
+// Added: the files compiled in, a list ending with a NULL name
+static const builtinFile_t *fs_builtinFiles;
+
+void FS_SetBuiltinFiles( const builtinFile_t *files ) {
+	fs_builtinFiles = files;
+}
+
+// Added: the one compiled in of a name
+static const builtinFile_t *FS_BuiltinFile( const char *qpath ) {
+	const builtinFile_t *f;
+
+	for ( f = fs_builtinFiles; f && f->name; f++ ) {
+		if ( !FS_FilenameCompare( f->name, qpath ) ) {
+			return f;
+		}
+	}
+	return NULL;
+}
+
 #ifndef _WIN32
 struct dirNames_s {
 	qboolean		listed;
+	qboolean		recent;				// Added: listed less than 2 s after a change, for the files compiled in
 	dev_t			dev;
 	ino_t			ino;
 	struct timespec	mtime;
@@ -812,13 +832,15 @@ static qboolean FS_DirMayHave( directory_t *dir, const char *filename ) {
 	names = dir->names;
 
 	if ( !names->listed || names->dev != st.st_dev || names->ino != st.st_ino
-		|| names->mtime.tv_sec != FS_MTIME( st ).tv_sec || names->mtime.tv_nsec != FS_MTIME( st ).tv_nsec ) {
-		names->listed = qfalse;
+		|| names->mtime.tv_sec != FS_MTIME( st ).tv_sec || names->mtime.tv_nsec != FS_MTIME( st ).tv_nsec
+		|| ( names->recent && !FS_BuiltinFile( filename ) ) ) {
 		clock_gettime( CLOCK_REALTIME, &now );
-		if ( now.tv_sec - FS_MTIME( st ).tv_sec < 2 || !FS_ListDirNames( names, ospath ) ) {
+		// Changed: but one is made then for a file compiled in (read as the game
+		// starts, its pid file just made in the home directory), for those only
+		names->recent = now.tv_sec - FS_MTIME( st ).tv_sec < 2 ? qtrue : qfalse;
+		if ( ( names->recent && !FS_BuiltinFile( filename ) ) || !( names->listed = FS_ListDirNames( names, ospath ) ) ) {
 			return qtrue;
 		}
-		names->listed = qtrue;
 		names->dev = st.st_dev;
 		names->ino = st.st_ino;
 		names->mtime = FS_MTIME( st );
@@ -2168,6 +2190,7 @@ long FS_ReadFileEx( const char *qpath, void **buffer, qboolean quiet ) {
 	byte*			buf;
 	qboolean		isConfig;
 	int				len;
+	const builtinFile_t	*f;
 
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization\n" );
@@ -2232,6 +2255,18 @@ long FS_ReadFileEx( const char *qpath, void **buffer, qboolean quiet ) {
 
 	// look for it in the filesystem or pack files
 	len = FS_FOpenFileRead( qpath, &h, qfalse, qtrue );
+	if ( h == 0 && ( f = FS_BuiltinFile( qpath ) ) ) {
+		// Added: one compiled in
+		if ( buffer ) {
+			fs_loadCount++;
+			fs_loadStack++;
+			buf = (byte*)Hunk_AllocateTempMemory( f->size + 1 );
+			Com_Memcpy( buf, f->data, f->size );
+			buf[f->size] = 0;
+			*buffer = buf;
+		}
+		return f->size;
+	}
 	if ( h == 0 ) {
 		if ( buffer ) {
 			*buffer = NULL;
@@ -2774,6 +2809,23 @@ char **FS_ListFilteredFiles( const char *path, const char *extension, const char
 			}
 		}
 
+		// Added: the files compiled in
+		for ( const builtinFile_t *f = fs_builtinFiles; f && f->name && !bDirSearch; f++ ) {
+			const int nameLength = strlen( f->name );
+			int depth;
+
+			FS_ReturnPath( f->name, zpath, &depth );
+			if ( Q_stricmpn( f->name, path, pathLength ) || ( pathLength && f->name[pathLength] != '/' )
+				|| ( !wantSubs && depth - pathDepth != 1 ) || nameLength < extensionLength
+				|| Q_stricmp( f->name + nameLength - extensionLength, currentExtension ) ) {
+				continue;
+			}
+			if ( filter && !Com_FilterPath( filter, f->name + pathLength + ( pathLength ? 1 : 0 ), qfalse ) ) {
+				continue;
+			}
+			nfiles = FS_AddFileToList( (char *)f->name + pathLength + ( pathLength ? 1 : 0 ), list, nfiles );
+		}
+
 		pExtension = pExtToken;
 	} while (pExtToken);
 
@@ -3271,6 +3323,35 @@ void FS_TouchFile_f( void ) {
 	if ( f ) {
 		FS_FCloseFile( f );
 	}
+}
+
+/*
+============
+FS_FileInGamePak
+
+Added: whether the file a read opens is in one of the games' own pk3s:
+pak and a digit (Pak0 to Pak6EnUk and pak7, pak1 to pak5), in main,
+mainta or maintt. Not a mod's or a map's pk3, nor a loose file
+============
+*/
+qboolean FS_FileInGamePak(const char *filename)
+{
+	searchpath_t	*search;
+	const pack_t	*pak;
+
+	for (search = fs_searchpaths; search; search = search->next) {
+		// (a pak a pure server doesn't allow isn't read: as FS_FOpenFileRead)
+		if (search->pack && !FS_PakIsPure(search->pack)) {
+			continue;
+		}
+		if (FS_FOpenFileReadDir(filename, search, NULL, qfalse, qfalse) > 0) {
+			pak = search->pack;
+			return pak && !Q_stricmpn(pak->pakBasename, "pak", 3) && isdigit((unsigned char)pak->pakBasename[3])
+				&& (!Q_stricmp(pak->pakGamename, BASEGAME) || !Q_stricmp(pak->pakGamename, GAME_EXTENSION_MOHTA)
+					|| !Q_stricmp(pak->pakGamename, GAME_EXTENSION_BASE_MOHTT));
+		}
+	}
+	return qfalse;
 }
 
 /*
@@ -3856,19 +3937,6 @@ FS_Startup
 */
 static void FS_Startup(const char* gameName)
 {
-	cvar_t *fs_homepath = Cvar_Get("fs_homepath", "", CVAR_INIT|CVAR_PROTECTED);
-	const char *configPath = Sys_DefaultHomeConfigPath();
-	const char *dataPath = Sys_DefaultHomeDataPath();
-	const char *statePath = Sys_DefaultHomeStatePath();
-
-	if(*(fs_homepath)->string) {
-		// Setting fs_homepath manually overrides everything else
-		configPath = dataPath = statePath = fs_homepath->string;
-	} else if(!*configPath || !*dataPath || !*statePath) {
-		// #shouldneverhappen; just a sensible fallback
-		configPath = dataPath = statePath = Sys_DefaultInstallPath();
-	}
-
 	Com_Printf( "----- FS_Startup -----\n" );
 
 	fs_debug = Cvar_Get( "fs_debug", "0", 0 );
@@ -3877,18 +3945,25 @@ static void FS_Startup(const char* gameName)
 #endif
 	fs_basepath = Cvar_Get("fs_basepath", Sys_DefaultInstallPath(), CVAR_INIT | CVAR_PROTECTED);
 	fs_basegame = Cvar_Get ("fs_basegame", "", CVAR_INIT );
-	fs_homeconfigpath = Cvar_Get ("fs_homeconfigpath", configPath, CVAR_INIT|CVAR_PROTECTED );
-	fs_homedatapath = Cvar_Get ("fs_homedatapath", dataPath, CVAR_INIT|CVAR_PROTECTED );
-	fs_homestatepath = Cvar_Get ("fs_homestatepath", statePath, CVAR_INIT|CVAR_PROTECTED );
+
+	// Configs, saves, screenshots, logs and caches default to the game
+	// folder instead of a per-user folder (AppData, ~/.local, ~/.config...).
+	// Setting fs_homepath, or any of the three paths below, still overrides.
+	cvar_t *fs_homepath = Cvar_Get("fs_homepath", "", CVAR_INIT|CVAR_PROTECTED);
+	const char *homePath = fs_homepath->string[0] ? fs_homepath->string : fs_basepath->string;
+	fs_homeconfigpath = Cvar_Get ("fs_homeconfigpath", homePath, CVAR_INIT|CVAR_PROTECTED );
+	fs_homedatapath = Cvar_Get ("fs_homedatapath", homePath, CVAR_INIT|CVAR_PROTECTED );
+	fs_homestatepath = Cvar_Get ("fs_homestatepath", homePath, CVAR_INIT|CVAR_PROTECTED );
 	fs_gamedirvar = Cvar_Get ("fs_game", "", CVAR_INIT|CVAR_SYSTEMINFO );
 	fs_restrict = Cvar_Get( "fs_restrict", "", CVAR_INIT );
 	fs_steampath = Cvar_Get ("fs_steampath", Sys_SteamPath(), CVAR_INIT|CVAR_PROTECTED );
 	fs_gogpath = Cvar_Get ("fs_gogpath", Sys_GogPath(), CVAR_INIT|CVAR_PROTECTED );
 	fs_microsoftstorepath = Cvar_Get ("fs_microsoftstorepath", Sys_MicrosoftStorePath(), CVAR_INIT|CVAR_PROTECTED );
 
-#ifdef __APPLE__
+	// Changed (Project: Omaha's): the binary's folder searched on every platform, not only macOS, after fs_basepath
+	// (skipped when it is the same folder): the client ships loose files in <bin>/main (the hitmarker's sounds) that
+	// weren't found when fs_basepath points at the game data installed elsewhere (the launcher's "game elsewhere")
 	fs_apppath = Cvar_Get ("fs_apppath", Sys_DefaultAppPath(), CVAR_INIT|CVAR_PROTECTED );
-#endif
 
 	FS_InitPathVars( );
 
@@ -4547,13 +4622,14 @@ void	FS_Flush( fileHandle_t f ) {
 }
 
 void	FS_FilenameCompletion( const char *dir, const char *ext,
-		qboolean stripExt, void(*callback)(const char *s), qboolean allowNonPureFilesOnDisk ) {
+		qboolean stripExt, void(*callback)(const char *s), qboolean allowNonPureFilesOnDisk, qboolean wantSubs ) {
 	char	**filenames;
 	int		nfiles;
 	int		i;
 	char	filename[ MAX_STRING_CHARS ];
 
-	filenames = FS_ListFilteredFiles( dir, ext, NULL, qfalse, &nfiles, allowNonPureFilesOnDisk );
+	// Changed: the files in the folders under dir too, if wantSubs
+	filenames = FS_ListFilteredFiles( dir, ext, NULL, wantSubs, &nfiles, allowNonPureFilesOnDisk );
 
 	FS_SortFileList( filenames, nfiles );
 
@@ -4742,53 +4818,4 @@ void FS_CanonicalFilename(char* filename)
     }
 
 	*dest = 0;
-}
-
-void FS_FileTime(const char *filename, char *date, char *size)
-{
-    const char *ospath;
-    struct stat fileStat;
-    int         result = -1;
-
-    date[0] = 0;
-    size[0] = 0;
-
-    // Fixed in OPM:
-    // don't only check the home directory (fs_homepath) for possible files,
-    // but look through all searchpaths
-    //ospath = FS_BuildOSPath(fs_homepath->string, fs_gamedir, filename);
-    for (auto search = fs_searchpaths; search; search = search->next) {
-        if (search->dir != NULL && search->dir->path[0]) {
-            ospath = FS_BuildOSPath(search->dir->path, fs_gamedir, filename);
-            result = stat(ospath, &fileStat);
-            if (result != -1) {
-                // found the valid file
-                break;
-            }
-        }
-    }
-
-    if (result == -1) {
-        int err = errno;
-        return;
-    }
-
-    time_t modTime  = fileStat.st_mtime;
-    off_t  fileSize = fileStat.st_size;
-
-    // FIXME: provide option not to use idiotic date formats
-    tm tm = *localtime(&modTime);
-    Q_snprintf(
-        date,
-        128,
-        "%2d/%02d/%04d %2d:%02d%c",
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_year + 1900,
-        (tm.tm_hour + 12) % 12,
-        tm.tm_min,
-        tm.tm_hour < 12 ? 'a' : 'p'
-    );
-
-    Q_snprintf(size, 128, "%ld", fileSize);
 }

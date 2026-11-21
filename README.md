@@ -55,12 +55,12 @@ kills or more by one player, each at most 3 seconds after the one before.
   Spearhead and Breakthrough demos aren't supported.
 - Python 3 and PySide6 for the app, FFmpeg to record.
 - To build the game: CMake 3.25 or later, Ninja, a C++ compiler, Flex,
-  Bison, libcurl, SDL 3 (3.2.0 or later) and the Vulkan headers 1.4.
+  Bison, SDL 3 (3.2.0 or later) and the Vulkan headers 1.4.
 
 On Ubuntu or Debian:
 
 ```bash
-sudo apt install cmake ninja-build g++ flex bison libcurl4-openssl-dev python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets ffmpeg
+sudo apt install cmake ninja-build g++ flex bison python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets ffmpeg
 ```
 
 SDL 3 is `libsdl3-dev` on Ubuntu 25.04 and later and Debian 13. Ubuntu 22.04

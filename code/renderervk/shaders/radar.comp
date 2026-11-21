@@ -1,0 +1,273 @@
+#version 450
+
+// radar.comp -- the Competitive HUD radar's picture for a storey's height (vk_radar.c: RE_RegisterRadar2D and
+// RE_Radar2DHeight), made from each cell's floors as the UI's own picture is (RM_Paint in cl_uicomp.cpp), byte for
+// byte, into the room buffer: the picture as its place in the 2D atlas holds it (its edge texels copied once around
+// it, border 1; a texture of its own: border 0), which the renderer copies there.
+//
+// A cell (t x t texels; the picture's top row the map's north) shows its floor nearest the height, the first of
+// equals in the list's order: its inside its shade, its sides with a stair a stripe (on its left, right, top and
+// bottom texels), brighter the nearer the floor is to the height (radar.glsl; no outlines: a wall is the shade's
+// edge); no floor: clear, its colour kept (235 240 245, so a shade's edge blends into clear, not into black). The
+// floors' edge against no floor is smoothed as marching squares draws it: a floor's corner with no floor on either
+// side or across it cut, a corner without a floor between floors on both sides filled with their mean, each a
+// triangle of half a cell's sides, a texel's alpha its floor's times the share of it covered, in exact eighths. The
+// shapes don't change with the height, only the shades. The whole picture: a thread a room texel. With CHANGING, a
+// height's change from zOld to z: a thread a cell of those that can change (the list the UI made: a floor's, or one
+// without a floor beside a cell of more than one), writing only its texels that do.
+
+#include "radar.glsl"
+
+#ifdef CHANGING
+layout( local_size_x = 64 ) in;
+#else
+layout( local_size_x = 8, local_size_y = 8 ) in;
+#endif
+
+// radar2D_t's memory as words: the cells' first floors (cw * ch + 1) at 0, the floors (radarFloor_t: z, fill, then
+// alpha | sides << 8; sides bits 4-7 a stair toward the left, right, north, south neighbour, 0-3 its cell's corners
+// cut: NW, NE, SW, SE) at floorsWord, the changing cells at changingWord
+layout( std430, set = 0, binding = 0 ) readonly buffer Floors {
+	uint	words[];
+} floors;
+
+// the room's texels, RGBA8 a word, its rows w + 2 * border texels
+layout( std430, set = 0, binding = 1 ) writeonly buffer Room {
+	uint	texels[];
+} room;
+
+layout( push_constant ) uniform Push {
+	uint	cw, ch, t;		// the cells across and down, a cell's texels across
+	uint	floorsWord, changingWord, numChanging;
+	uint	border;
+	float	z, zOld;		// the height to paint for; the one painted before (CHANGING)
+} p;
+
+// the floor of [first, last) nearest z (the first of equals)
+uint RM_Nearest( uint first, uint last, float z )
+{
+	uint best = first;
+
+	for ( uint n = first + 1u; n < last; n++ ) {
+		precise float dn = abs( uintBitsToFloat( floors.words[p.floorsWord + 3u * n] ) - z );
+		precise float db = abs( uintBitsToFloat( floors.words[p.floorsWord + 3u * best] ) - z );
+
+		if ( dn < db ) {
+			best = n;
+		}
+	}
+	return best;
+}
+
+// floor n's inside's alpha
+uint RM_FloorAlpha( uint n )
+{
+	return floors.words[p.floorsWord + 3u * n + 2u] & 0xFFu;
+}
+
+// a floor's look for height z: its stair's alpha, its inside's, its sides
+struct RM_Look {
+	uint	stair, alpha, sides;
+};
+
+RM_Look RM_LookAt( uint n, float z )
+{
+	const float fz = uintBitsToFloat( floors.words[p.floorsWord + 3u * n] );
+	const float fill = uintBitsToFloat( floors.words[p.floorsWord + 3u * n + 1u] );
+	const uint packed = floors.words[p.floorsWord + 3u * n + 2u];
+	RM_Look l;
+
+	l.stair = RM_Stair( RM_Focus( fz, z ), fill );
+	l.alpha = packed & 0xFFu;
+	l.sides = ( packed >> 8 ) & 0xFFu;
+	return l;
+}
+
+// the alpha of a cell's texel i, j (j down from its top row, the map's north up): on its left, right, top or bottom
+// row that side's stair (a stripe), if it has one (a corner on two sides, a cell a texel across on all four); else its
+// inside
+uint RM_Alpha( RM_Look l, uint i, uint j )
+{
+	const uint at = uint( i == 0u ) | uint( i == p.t - 1u ) << 1 | uint( j == 0u ) << 2 | uint( j == p.t - 1u ) << 3;
+
+	return ( l.sides & at << 4 ) != 0u ? l.stair : l.alpha;
+}
+
+// a floor's corners q (bit 0 east, bit 1 south): 1 where its cell's are cut (sides bits 0-3, RM_Floors: no floor on
+// either side nor across), else 0
+uvec4 RM_Cuts( RM_Look l )
+{
+	return ( uvec4( l.sides ) >> uvec4( 0u, 1u, 2u, 3u ) ) & 1u;
+}
+
+// a cell without a floor at x, y (y up): its corners q (bit 0 east, bit 1 south) where floors on both sides of it fill
+// it, their alphas summed, else 0; for height z (now) and zOld (was). Outside the picture: no floor
+void RM_Fills( int x, int y, float z, float zOld, out uvec4 now, out uvec4 was )
+{
+	const ivec4 sx = ivec4( x - 1, x + 1, x, x ), sy = ivec4( y, y, y + 1, y - 1 );	// west, east, north, south
+	uvec4 a = uvec4( 0u ), b = uvec4( 0u );
+	bvec4 has = bvec4( false );
+
+	for ( int k = 0; k < 4; k++ ) {
+		if ( sx[k] >= 0 && sy[k] >= 0 && sx[k] < int( p.cw ) && sy[k] < int( p.ch ) ) {
+			const uint c = uint( sy[k] ) * p.cw + uint( sx[k] ), first = floors.words[c], last = floors.words[c + 1u];
+
+			if ( first != last ) {
+				has[k] = true;
+				a[k] = RM_FloorAlpha( RM_Nearest( first, last, z ) );
+				b[k] = zOld == z ? a[k] : RM_FloorAlpha( RM_Nearest( first, last, zOld ) );
+			}
+		}
+	}
+	for ( int q = 0; q < 4; q++ ) {
+		const int h = q & 1, v = 2 + ( q >> 1 );	// (west or east, north or south)
+		const bool filled = has[h] && has[v];
+
+		now[q] = filled ? a[h] + a[v] : 0u;
+		was[q] = filled ? b[h] + b[v] : 0u;
+	}
+}
+
+// the eighths of a cell's texel i, j under its corner q's triangle (half the cell's sides, its edge at 45 degrees): by
+// its reach, the cell's texels across less twice the texel's steps from the corner, 0 1 4 7 8 for 0 to 4 and on
+uint RM_Under( uint q, uint i, uint j )
+{
+	const int reach = int( p.t ) - 2 * int( ( ( q & 1u ) != 0u ? p.t - 1u - i : i ) + ( ( q & 2u ) != 0u ? p.t - 1u - j : j ) );
+
+	return uint( clamp( 3 * reach - 2, 0, 8 ) );
+}
+
+// a texel's alpha from its cell's corners: a floor's (its alpha less the cut corners' share), or without one the
+// filled corners' share of their floors' mean
+uint RM_Cover( uvec4 corner, uint i, uint j, bool hasFloor, uint alpha )
+{
+	const uint covered = RM_Under( 0u, i, j ) * corner.x + RM_Under( 1u, i, j ) * corner.y + RM_Under( 2u, i, j ) * corner.z
+		+ RM_Under( 3u, i, j ) * corner.w;
+
+	return hasFloor ? ( alpha * ( 8u - covered ) + 4u ) >> 3 : ( covered + 8u ) >> 4;
+}
+
+uint RM_Texel( uint alpha )
+{
+	return 235u | ( 240u << 8 ) | ( 245u << 16 ) | ( alpha << 24 );
+}
+
+#ifdef CHANGING
+
+// picture texel x, y into the room, with its copies around the picture's edge
+void RM_Store( uint x, uint y, uint value )
+{
+	const uint w = p.cw * p.t, h = p.ch * p.t, rowWidth = w + 2u * p.border;
+	uint xs[3], ys[3], nx = 1u, ny = 1u;
+
+	xs[0] = x + p.border;
+	ys[0] = y + p.border;
+	if ( p.border != 0u ) {
+		if ( x == 0u ) {
+			xs[nx++] = 0u;
+		}
+		if ( x == w - 1u ) {
+			xs[nx++] = w + 1u;
+		}
+		if ( y == 0u ) {
+			ys[ny++] = 0u;
+		}
+		if ( y == h - 1u ) {
+			ys[ny++] = h + 1u;
+		}
+	}
+	for ( uint b = 0u; b < ny; b++ ) {
+		for ( uint a = 0u; a < nx; a++ ) {
+			room.texels[ys[b] * rowWidth + xs[a]] = value;
+		}
+	}
+}
+
+void main()
+{
+	if ( gl_GlobalInvocationID.x >= p.numChanging ) {
+		return;
+	}
+
+	const uint c = floors.words[p.changingWord + gl_GlobalInvocationID.x];
+	const uint first = floors.words[c], last = floors.words[c + 1u];
+	const int x = int( c % p.cw ), y = int( c / p.cw );
+	const uint x0 = uint( x ) * p.t, y0 = ( p.ch - 1u - uint( y ) ) * p.t;
+
+	if ( first == last ) {
+		uvec4 fill, was;
+
+		RM_Fills( x, y, p.z, p.zOld, fill, was );
+		if ( all( equal( fill, was ) ) ) {
+			return;	// (its texels the same)
+		}
+		for ( uint j = 0u; j < p.t; j++ ) {
+			for ( uint i = 0u; i < p.t; i++ ) {
+				const uint alpha = RM_Cover( fill, i, j, false, 0u );
+
+				if ( alpha != RM_Cover( was, i, j, false, 0u ) ) {
+					RM_Store( x0 + i, y0 + j, RM_Texel( alpha ) );
+				}
+			}
+		}
+		return;
+	}
+	const RM_Look l = RM_LookAt( RM_Nearest( first, last, p.z ), p.z );
+	const RM_Look was = RM_LookAt( RM_Nearest( first, last, p.zOld ), p.zOld );
+
+	if ( l.alpha == was.alpha && l.sides == was.sides && ( ( l.sides & 240u ) == 0u || l.stair == was.stair ) ) {
+		return;	// (its texels the same)
+	}
+	const uvec4 cut = RM_Cuts( l );	// (the same at every height)
+
+	for ( uint j = 0u; j < p.t; j++ ) {
+		for ( uint i = 0u; i < p.t; i++ ) {
+			const uint alpha = RM_Cover( cut, i, j, true, RM_Alpha( l, i, j ) );
+
+			if ( alpha != RM_Cover( cut, i, j, true, RM_Alpha( was, i, j ) ) ) {
+				RM_Store( x0 + i, y0 + j, RM_Texel( alpha ) );
+			}
+		}
+	}
+}
+
+#else
+
+void main()
+{
+	const uint w = p.cw * p.t, h = p.ch * p.t, rowWidth = w + 2u * p.border;
+	const uint rx = gl_GlobalInvocationID.x, ry = gl_GlobalInvocationID.y;
+
+	if ( rx >= rowWidth || ry >= h + 2u * p.border ) {
+		return;
+	}
+
+	// (the room's edge: a copy of the picture's)
+	const uint px = uint( clamp( int( rx ) - int( p.border ), 0, int( w ) - 1 ) );
+	const uint py = uint( clamp( int( ry ) - int( p.border ), 0, int( h ) - 1 ) );
+	const uint i = px % p.t, j = py % p.t;
+	const int x = int( px / p.t ), y = int( p.ch - 1u - py / p.t );
+	const uint c = uint( y ) * p.cw + uint( x ), first = floors.words[c], last = floors.words[c + 1u];
+	uint alpha;
+
+	if ( first == last ) {
+		// (a corner is filled only between floors on both sides: with none to the west or east, none is; their
+		// first floors read with its own)
+		const uint west = floors.words[x > 0 ? c - 1u : c], east = floors.words[x + 1 < int( p.cw ) ? c + 2u : c + 1u];
+
+		alpha = 0u;
+		if ( west != first || east != last ) {
+			uvec4 fill, same;
+
+			RM_Fills( x, y, p.z, p.z, fill, same );
+			alpha = RM_Cover( fill, i, j, false, 0u );
+		}
+	} else {
+		const RM_Look l = RM_LookAt( RM_Nearest( first, last, p.z ), p.z );
+
+		alpha = RM_Cover( RM_Cuts( l ), i, j, true, RM_Alpha( l, i, j ) );
+	}
+	room.texels[ry * rowWidth + rx] = RM_Texel( alpha );
+}
+
+#endif

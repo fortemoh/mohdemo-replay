@@ -1,0 +1,88 @@
+// The Competitive HUD (cg_hudstyle 1): top left, the compass (no radar),
+// the game messages under the radar (hud_comp_topleft; moved down with its
+// size, cg_hud_radar_size) or under the compass
+menu "hud_comp_topleft_compass" 420 560 NONE 0
+virtualres 1 1920 1080
+drawcache 1
+align left top
+bgcolor 0 0 0 0
+borderstyle NONE
+
+// the compass (no radar): a tracker, a radar with no map (HudMates): you a
+// white dot in the middle, each teammate a gold dot in its direction, the
+// nearer the middle the nearer (the ring at 60 m and on), the nearest out of
+// sight too (the stock compass's); the damage wedge
+resource
+Label
+{
+name "compass"
+rect 29 29 112 112
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_compass_on
+shape circle 0.047 0.055 0.071 0.45
+shape ring 2 $ui_hud_acc_radar 0.6
+}
+
+resource
+Label
+{
+name "you"
+rect 82 82 6 6
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_compass_on
+shape circle 1 1 1 0.9
+}
+
+resource
+HudMates
+{
+name "mates"
+rect 15 15 140 140
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_compass_on
+}
+
+resource
+Label
+{
+name "compasswedge"
+rect 29 29 112 112
+bgcolor 0 0 0 0
+borderstyle NONE
+enabledcvar ui_hud_compass_on
+shape poly 0.753 0.188 0.129 1 0.5 0.38 0.64 0.02 0.6056 0.0113 0.5707 0.005 0.5354 0.0013 0.5 0 0.4646 0.0013 0.4293 0.005 0.3944 0.0113 0.36 0.02
+rotatecvar ui_hud_dmg_angle
+alphacvar ui_hud_dmg_alpha
+}
+
+// the game messages under the radar, or under the compass
+resource
+HudFeed
+{
+name "messages"
+rect 25 289 360 120
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-16s
+boldfont oswald-semibold-16s
+enabledcvar ui_hud_msgs_r
+feed messages
+}
+
+resource
+HudFeed
+{
+name "messagesc"
+rect 25 201 360 120
+bgcolor 0 0 0 0
+borderstyle NONE
+font oswald-medium-16s
+boldfont oswald-semibold-16s
+enabledcvar ui_hud_msgs_c
+feed messages
+}
+
+end.

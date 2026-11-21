@@ -34,8 +34,6 @@ extern "C" {
 void CG_InitRadar();
 void CG_UpdateRadarClient(centity_t* ent);
 void CG_ReadNonPVSClient(radarUnpacked_t* radarUnpacked);
-void CG_UpdateRadar();
-void CG_RadarClientSpeaks(int num);
 
 #ifdef __cplusplus
 }

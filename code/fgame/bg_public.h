@@ -93,6 +93,7 @@ static const unsigned int DEAD_VIEWHEIGHT       = 8;
 //
 
 #define CS_MATCHEND        26 // cgs.matchEndTime
+#define CS_TEAMSCORES      27 // Added: "<allies> <axis>" in team games, "" otherwise (the Competitive HUD)
 
 #define CS_MODELS          32
 #define CS_OBJECTIVES      (CS_MODELS + MAX_MODELS)         // 1056
@@ -259,7 +260,6 @@ movement on the server game.
 #define PMF_NO_MOVE         (1 << 8)
 #define PMF_VIEW_DUCK_RUN   (1 << 9)
 #define PMF_VIEW_JUMP_START (1 << 10)
-#define PMF_LEVELEXIT       (1 << 11)
 #define PMF_TURRET          (1 << 12)
 #define PMF_NO_WEAPONBAR    (1 << 14)
 #define PMF_NO_HUD          (1 << 15)
@@ -822,6 +822,13 @@ movement on the server game.
     };
 
     int BG_MapCGMToProtocol(int protocol, int messageNumber);
+
+    // the quick messages' lines (2.0's and later's, 1.11's: what the chat
+    // says) and groups' names; the localization's keys (bg_misc.cpp)
+    extern const char       *pInstantMsgEng[6][9];
+    extern const char       *pInstantMsgEng_ver6[5][9];
+    extern const char *const pInstantMsgGroupsEng[6];
+    extern const char *const pInstantMsgGroupsEng_ver6[5];
 
 #ifdef __cplusplus
 }

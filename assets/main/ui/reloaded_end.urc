@@ -1,0 +1,22 @@
+// The Reloaded end of a mission's level (cl_uimenus.cpp), shown for the stock
+// statistics screens; not fullscreen: the game runs on under it, to take the
+// fire its CONTINUE sends
+menu "reloaded_end" 640 480 NONE 0
+align left top
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle NONE
+virtualres 1
+
+resource
+ReloadedMenu
+{
+name "front"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen end
+}
+
+end.

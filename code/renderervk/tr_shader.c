@@ -2853,71 +2853,44 @@ static void CollapseMultitexture(int *stagecounter) {
 =============
 
 FixRenderCommandList
+
 https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=493
 Arnout: this is a nasty issue. Shaders can be registered after drawsurfaces are generated
 but before the frame is rendered. This will, for the duration of one frame, cause drawsurfaces
 to be rendered with bad shaders. To fix this, need to go through all render commands and fix
 sortedIndex.
+
+Here the frame's draw surfaces are those of backEndData (every scene's,
+tr_scene.c), so they are fixed there instead of through the command list
 ==============
 */
 static void FixRenderCommandList( int newShader ) {
-	renderCommandList_t	*cmdList = &backEndData->commands;
+	int i, n;
 
-	if( cmdList ) {
-		const void *curCmd = cmdList->cmds;
+	// the frame's draw surfaces so far, of all its scenes (backEndData's:
+	// tr.refdef.drawSurfs points at the thread's between frames with r_smp)
+	n = tr.refdef.numDrawSurfs < MAX_DRAWSURFS ? tr.refdef.numDrawSurfs : MAX_DRAWSURFS;
+	for ( i = 0; i < n; i++ ) {
+		drawSurf_t *ds = &backEndData->drawSurfs[i];
+		unsigned int sortedIndex = ( ds->sort >> QSORT_SHADERNUM_SHIFT ) & ( MAX_SHADERS - 1 );
 
-		while ( 1 ) {
-			switch ( *(const int *)curCmd ) {
-			case RC_SET_COLOR:
-				{
-				const setColorCommand_t *sc_cmd = (const setColorCommand_t *)curCmd;
-				curCmd = (const void *)(sc_cmd + 1);
-				break;
-				}
-			case RC_STRETCH_PIC:
-				{
-				const stretchPicCommand_t *sp_cmd = (const stretchPicCommand_t *)curCmd;
-				curCmd = (const void *)(sp_cmd + 1);
-				break;
-				}
-			case RC_DRAW_SURFS:
-				{
-				int i;
-				drawSurf_t	*drawSurf;
-				shader_t	*pShader;
-				int			fogNum;
-				int			entityNum;
-				int			dlightMap;
-				int			sortedIndex;
-				const drawSurfsCommand_t *ds_cmd =  (const drawSurfsCommand_t *)curCmd;
+		if ( sortedIndex >= (unsigned int)newShader ) {
+			ds->sort = ( ds->sort & ~( (unsigned int)( MAX_SHADERS - 1 ) << QSORT_SHADERNUM_SHIFT ) ) | ( ( sortedIndex + 1 ) << QSORT_SHADERNUM_SHIFT );
+		}
+	}
+	// the sprites' too (R_AddSpriteSurf, and refSprite_t::shaderNum that
+	// the back end reads)
+	n = tr.refdef.numSpriteSurfs < MAX_SPRITESURFS ? tr.refdef.numSpriteSurfs : MAX_SPRITESURFS;
+	for ( i = 0; i < n; i++ ) {
+		drawSurf_t *ds = &backEndData->spriteSurfs[i];
+		refSprite_t *sprite = (refSprite_t *)ds->surface;
+		unsigned int sortedIndex = ( ds->sort >> QSORT_SHADERNUM_SHIFT ) & ( MAX_SHADERS - 1 );
 
-				for( i = 0, drawSurf = ds_cmd->drawSurfs; i < ds_cmd->numDrawSurfs; i++, drawSurf++ ) {
-					R_DecomposeSort( drawSurf->sort, &entityNum, &pShader, &fogNum, &dlightMap );
-                    sortedIndex = (( drawSurf->sort >> QSORT_SHADERNUM_SHIFT ) & (MAX_SHADERS-1));
-					if( sortedIndex >= newShader ) {
-						sortedIndex++;
-						drawSurf->sort = (sortedIndex << QSORT_SHADERNUM_SHIFT) | entityNum | ( fogNum << QSORT_FOGNUM_SHIFT ) | (int)dlightMap;
-					}
-				}
-				curCmd = (const void *)(ds_cmd + 1);
-				break;
-				}
-			case RC_DRAW_BUFFER:
-				{
-				const drawBufferCommand_t *db_cmd = (const drawBufferCommand_t *)curCmd;
-				curCmd = (const void *)(db_cmd + 1);
-				break;
-				}
-			case RC_SWAP_BUFFERS:
-				{
-				const swapBuffersCommand_t *sb_cmd = (const swapBuffersCommand_t *)curCmd;
-				curCmd = (const void *)(sb_cmd + 1);
-				break;
-				}
-			case RC_END_OF_LIST:
-			default:
-				return;
-			}
+		if ( sortedIndex >= (unsigned int)newShader ) {
+			ds->sort = ( ds->sort & ~( (unsigned int)( MAX_SHADERS - 1 ) << QSORT_SHADERNUM_SHIFT ) ) | ( ( sortedIndex + 1 ) << QSORT_SHADERNUM_SHIFT );
+		}
+		if ( sprite->shaderNum >= newShader ) {
+			sprite->shaderNum++;
 		}
 	}
 }
@@ -2937,12 +2910,20 @@ static void SortNewShader( void ) {
 	int		i;
 	float	sort;
 	shader_t	*newShader;
+	qboolean	byPipeline;
 
 	newShader = tr.shaders[ tr.numShaders - 1 ];
 	sort = newShader->sort;
+	// the opaque shaders in the order of their pipelines (R_ShaderPipelineClass),
+	// those of one pipeline in the order they were made; the other sort
+	// classes blend, so they keep the order they were made in
+	byPipeline = r_sortPipelines->integer && sort == SS_OPAQUE;
 
 	for ( i = tr.numShaders - 2 ; i >= 0 ; i-- ) {
-		if ( tr.sortedShaders[ i ]->sort <= sort ) {
+		if ( tr.sortedShaders[ i ]->sort < sort ) {
+			break;
+		}
+		if ( tr.sortedShaders[ i ]->sort == sort && ( !byPipeline || tr.sortedShaders[ i ]->pipelineClass <= newShader->pipelineClass ) ) {
 			break;
 		}
 		tr.sortedShaders[i+1] = tr.sortedShaders[i];
@@ -2999,7 +2980,14 @@ static shader_t *GeneratePermanentShader( void ) {
 		}
 	}
 
+	// the sort keys of the draw surfaces made so far name the shaders by
+	// their place in tr.sortedShaders (R_AddDrawSurf, R_DecomposeSort), which
+	// SortNewShader moves: those of this frame are fixed, and with r_smp the
+	// thread, which decodes its frame's keys with the same table, is done
+	// with its frame first
+	R_FrontEndSync();
 	SortNewShader();
+	FixRenderCommandList( newShader->sortedIndex );
 
 	currentShader = NULL;
 
@@ -3018,14 +3006,57 @@ pass, trying to guess which is the correct one to best aproximate
 what it is supposed to look like.
 =================
 */
+
+// the colors a surface's own lighting gives: no penalty when ranking stages
+// (FindShader gives a world shader's first stage exactVertex)
+static qboolean VertexLightingLitColor( colorGen_t rgbGen ) {
+	switch ( rgbGen ) {
+	case CGEN_IDENTITY:
+	case CGEN_IDENTITY_LIGHTING:
+	case CGEN_EXACT_VERTEX:
+	case CGEN_VERTEX:
+	case CGEN_LIGHTING_GRID:
+	case CGEN_LIGHTING_SPHERICAL:
+	case CGEN_STATIC:
+		return qtrue;
+	default:
+		return qfalse;
+	}
+}
+
 static void VertexLightingCollapse( void ) {
 	int		stage;
+	int		first;
 	shaderStage_t	*bestStage;
 	int		bestImageRank;
 	int		rank;
+	qboolean	opaque;
+
+	// a stage drawn without blending paints over the stages before it (all
+	// of it, or all but its alpha test's holes): drop those first. Many
+	// shaders start with a reflection (tcGen environment) under the texture
+	first = 0;
+	for ( stage = 1; stage < MAX_SHADER_STAGES && unfoggedStages[stage].active; stage++ ) {
+		const shaderStage_t *pStage = &unfoggedStages[stage];
+
+		if ( !( pStage->stateBits & ( GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS | GLS_DEPTHFUNC_EQUAL ) )
+			&& !pStage->bundle[0].isLightmap ) {
+			first = stage;
+		}
+	}
+	if ( first ) {
+		memmove( &unfoggedStages[0], &unfoggedStages[first], sizeof( unfoggedStages[0] ) * ( stage - first ) );
+		Com_Memset( &unfoggedStages[stage - first], 0, sizeof( unfoggedStages[0] ) * first );
+	}
+
+	// FinishShader works out the sort after this, from the stage left, so
+	// it is still unset unless the shader names one: unset is opaque when
+	// the first stage doesn't blend, as FinishShader will decide
+	opaque = shader.sort == SS_OPAQUE
+		|| ( shader.sort == SS_BAD && !( unfoggedStages[0].stateBits & ( GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS ) ) );
 
 	// if we aren't opaque, just use the first pass
-	if ( shader.sort == SS_OPAQUE ) {
+	if ( opaque ) {
 
 		// pick the best texture for the single pass
 		bestStage = &unfoggedStages[0];
@@ -3048,7 +3079,7 @@ static void VertexLightingCollapse( void ) {
 			if ( pStage->bundle[0].numTexMods ) {
 				rank -= 5;
 			}
-			if ( pStage->rgbGen != CGEN_IDENTITY && pStage->rgbGen != CGEN_IDENTITY_LIGHTING ) {
+			if ( !VertexLightingLitColor( pStage->rgbGen ) ) {
 				rank -= 3;
 			}
 
@@ -3058,15 +3089,23 @@ static void VertexLightingCollapse( void ) {
 			}
 		}
 
-		unfoggedStages[0].bundle[0] = bestStage->bundle[0];
+		// both bundles: a nextBundle stage's second one goes with it
+		if ( bestStage != &unfoggedStages[0] ) {
+			Com_Memcpy( unfoggedStages[0].bundle, bestStage->bundle, sizeof( unfoggedStages[0].bundle ) );
+			unfoggedStages[0].multitextureEnv = bestStage->multitextureEnv;
+			unfoggedStages[0].rgbGen = bestStage->rgbGen;
+			unfoggedStages[0].rgbWave = bestStage->rgbWave;
+			Com_Memcpy( unfoggedStages[0].colorConst, bestStage->colorConst, sizeof( unfoggedStages[0].colorConst ) );
+		}
 		unfoggedStages[0].stateBits &= ~( GLS_DSTBLEND_BITS | GLS_SRCBLEND_BITS );
 		unfoggedStages[0].stateBits |= GLS_DEPTHMASK_TRUE;
-		if ( shader.lightmapIndex == LIGHTMAP_NONE ) {
-			unfoggedStages[0].rgbGen = CGEN_LIGHTING_GRID;
-		} else {
+		// world surfaces light by their vertex colors in place of the
+		// lightmap; models, effects and 2D pictures keep their stage's color
+		// (lightingGrid for them reads a grid FinishShader never asked for)
+		if ( shader.lightmapIndex >= 0 || shader.lightmapIndex == LIGHTMAP_BY_VERTEX || shader.lightmapIndex == LIGHTMAP_WHITEIMAGE ) {
 			unfoggedStages[0].rgbGen = CGEN_EXACT_VERTEX;
 		}
-		unfoggedStages[0].alphaGen = AGEN_SKIP;		
+		unfoggedStages[0].alphaGen = AGEN_SKIP;
 	} else {
 		// don't use a lightmap (tesla coils)
 		if ( unfoggedStages[0].bundle[0].isLightmap ) {
@@ -3106,6 +3145,45 @@ Returns a freshly allocated shader with all the needed info
 from the current global working shader
 =========================
 */
+/*
+====================
+R_ShaderPipelineClass
+
+What of the shader being finished decides the pipelines its draws bind
+(VK_BuildPipelineKey: the stages' state bits and color generators, the
+textures' formats and environments, the cull mode, polygon offset, the
+effects shader for deforms), hashed: opaque shaders are sorted by it
+(SortNewShader, r_sortPipelines), so consecutive draws bind the same
+pipeline more often
+====================
+*/
+static unsigned R_ShaderPipelineClass( void ) {
+	unsigned h = 2166136261u;
+	int i, b;
+#define HASH( v ) ( h = ( h ^ (unsigned)( v ) ) * 16777619u )
+
+	HASH( shader.cullType );
+	HASH( shader.polygonOffset );
+	HASH( shader.numDeforms != 0 );
+	for ( i = 0; i < MAX_SHADER_STAGES && unfoggedStages[i].active; i++ ) {
+		const shaderStage_t *s = &unfoggedStages[i];
+
+		HASH( s->stateBits );
+		HASH( s->rgbGen );
+		HASH( s->alphaGen );
+		HASH( s->multitextureEnv );
+		for ( b = 0; b < NUM_TEXTURE_BUNDLES; b++ ) {
+			const textureBundle_t *tb = &s->bundle[b];
+			int fmt = tb->isLightmap ? TEXFMT_RGB8 : tb->image[0] ? tb->image[0]->internalFormat : -1;
+
+			// a unit, and whether its texture samples alpha as 1 (VK_PIPE_TEX*_RGB)
+			HASH( fmt < 0 ? 2 : ( fmt == TEXFMT_RGB8 || fmt == TEXFMT_RGB5 || fmt == TEXFMT_BC1_RGB ) ? 1 : 0 );
+		}
+	}
+#undef HASH
+	return h;
+}
+
 static shader_t *FinishShader( void ) {
 	int stage;
 	int i;
@@ -3295,10 +3373,32 @@ static shader_t *FinishShader( void ) {
 	// determine which stage iterator function is appropriate
 	ComputeStageIteratorFunc();
 
+	shader.pipelineClass = R_ShaderPipelineClass();
+
 	return GeneratePermanentShader();
 }
 
 //========================================================================================
+
+/*
+==================
+R_ShaderTextExists
+
+Added: whether a shader script defines name
+==================
+*/
+qboolean R_ShaderTextExists( const char *name ) {
+	char			strippedName[MAX_QPATH];
+	shadertext_t	*sh;
+
+	COM_StripExtension(name, strippedName, sizeof(strippedName));
+	for (sh = hashTable[generateHashValue(strippedName)]; sh; sh = sh->next) {
+		if (!Q_stricmp(sh->name, strippedName)) {
+			return sh->text != NULL;
+		}
+	}
+	return qfalse;
+}
 
 /*
 ==================
@@ -3649,7 +3749,8 @@ qhandle_t RE_RefreshShaderNoMip(const char* name) {
 		return 0;
 	}
 
-	// the open 2D batch keeps the image it was made with
+	// the open 2D batch keeps the image it was made with (r_smp: the thread's)
+	R_FrontEndSync();
 	R_End2DBatch();
 
     COM_StripExtension(name, strippedName, sizeof(strippedName));
@@ -3961,6 +4062,10 @@ void R_SetupShaders()
 
     ri.Printf(0, "Setting up Shaders\n");
     currentShader = NULL;
+    // the shaders before are freed (RE_BeginRegistration's hunk clear, the
+    // render thread idle): the boxes' white shader is made again at the next
+    // box (R_White2D), not drawn from freed memory
+    tr.white2D = NULL;
     for (hash = 0; hash < FILE_HASH_SIZE; ++hash)
     {
 		for (shader = hashTable[hash]; shader; shader = shader->next) {

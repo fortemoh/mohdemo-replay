@@ -70,7 +70,6 @@ public:
     void Dragged(Event *ev);
     void SizeChanged(Event *ev);
     void OnActivated(Event *ev);
-    void OnDeactivated(Event *ev);
     void
     Create(UIWidget *parent, const UIRect2D& rect, const char *title, const UColor& bgColor, const UColor& fgColor);
     void                Draw(void) override;

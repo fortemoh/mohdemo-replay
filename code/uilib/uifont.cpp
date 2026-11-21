@@ -21,247 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "ui_local.h"
-
-qboolean UI_FontDBCSIsLeadByte(fontheader_t *font, unsigned short uch);
-int      UI_FontCodeSearch(const fontheader_t *font, unsigned short uch);
-int      UI_FontStringMaxWidth(fontheader_t *pFont, const char *pszString, int iMaxLen);
-
-const unsigned char DBCS_Maekin_TraditionalChinese[] = {
-    0x0A1, 0x0E3, 0x0A1, 0x0CA, 0x0A1, 0x5B,  0x0A2, 0x4E,  0x0A2, 0x0B1, 0x0A1, 0x0CC, 0x0A2, 0x0B2, 0x0A2, 0x43,
-    0x0A2, 0x4C,  0x0A1, 0x0EC, 0x0A2, 0x4D,  0x0A2, 0x0B4, 0x0A1, 0x73,  0x0A1, 0x6F,  0x0A3, 0x4E,  0x0F9, 0x0DE,
-    0x0A2, 0x73,  0x0F9, 0x0F0, 0x0A2, 0x0B5, 0x0A1, 0x0CD, 0x0A2, 0x0B6, 0x0A1, 0x0B0, 0x0A1, 0x0B8, 0x0A2, 0x0B7,
-    0x0A1, 0x5D,  0x0A1, 0x5F,  0x0A1, 0x0B3, 0x0A1, 0x0B4, 0x0A2, 0x0B8, 0x0A1, 0x5E,  0x0A1, 0x60,  0x0A2, 0x0AF,
-    0x0A1, 0x0C5, 0x0A1, 0x0DE, 0x0A1, 0x0F0, 0x0A1, 0x0F1, 0x0A1, 0x0F2, 0x0A1, 0x0D3, 0x0A2, 0x71,  0x0A2, 0x0A6,
-    0x0F9, 0x0E1, 0x0F9, 0x0EA, 0x0F9, 0x0F3, 0x0A1, 0x0A1, 0x57,  0x0A1, 0x59,  0x0A2, 0x78,  0x0F9, 0x0F8, 0x0A2,
-    0x79,  0x0A1, 0x49,  0x0A2, 0x49,  0x0A1, 0x0AD, 0x0A2, 0x43,  0x0A2, 0x48,  0x0A1, 0x0F4, 0x0A1, 0x0AE, 0x0A1,
-    0x0AF, 0x0A1, 0x7D,  0x0A1, 0x7E,  0x0A1, 0x0C4, 0x0A1, 0x0CF, 0x0A1, 0x0FC, 0x0A1, 0x61,  0x0A1, 0x63,  0x0A1,
-    0x0A1, 0x0A1, 0x62,  0x0A1, 0x64,  0x0A1, 0x0A2, 0x0A1, 0x0A7, 0x0A1, 0x0A8, 0x0A1, 0x0A9, 0x0A1, 0x0B2, 0x0A1,
-    0x46,  0x0A1, 0x51,  0x0A3, 0x0B5, 0x0A1, 0x41,  0x0A1, 0x4D,  0x0A1, 0x42,  0x0A1, 0x4E,  0x0A3, 0x0AE, 0x0A1,
-    0x0D5, 0x0A1, 0x0E0, 0x0A1, 0x71,  0x0A1, 0x0D8, 0x0A1, 0x0F6, 0x0A1, 0x0E7, 0x0A1, 0x6D,  0x0A1, 0x6F,  0x0A1,
-    0x73,  0x0A1, 0x0F8, 0x0A2, 0x0A9, 0x0A2, 0x0AB, 0x0A3, 0x47,  0x0A2, 0x7A,  0x0A2, 0x7E,  0x0F9, 0x0DD, 0x0F9,
-    0x0E6, 0x0F9, 0x0EF, 0x0F9, 0x0FA, 0x0A1, 0x0E8, 0x0A1, 0x0FA, 0x0A2, 0x7C,  0x0A2, 0x0A2, 0x0F9, 0x0E3, 0x0F9,
-    0x0EC, 0x0F9, 0x0F5, 0x0F9, 0x0FC, 0x0A1, 0x44,  0x0A1, 0x43,  0x0A1, 0x4F,  0x0A1, 0x45,  0x0A1, 0x50,  0x0A3,
-    0x0B2, 0x0A1, 0x0D2, 0x0A1, 0x0DC, 0x0A1, 0x0EE, 0x0A1, 0x0EF, 0x0A1, 0x0F3, 0x0A1, 0x4B,  0x0A1, 0x4C,  0x0A1,
-    0x0D6, 0x0A1, 0x0E1, 0x0A1, 0x72,  0x0A1, 0x0D9, 0x0A1, 0x0F7, 0x0A1, 0x6E,  0x0A1, 0x70,  0x0A2, 0x7D,  0x0A2,
-    0x0A3, 0x0F9, 0x0E5, 0x0F9, 0x0EE, 0x0F9, 0x0F7, 0x0A1, 0x0FB, 0x0A1, 0x0F9, 0x0A1, 0x74,  0x0A1, 0x0E9, 0x0A2,
-    0x74,  0x0A2, 0x0A7, 0x0F9, 0x0E2, 0x0F9, 0x0EB, 0x0F9, 0x0F4, 0x0A2, 0x0A8, 0x0A2, 0x0AA, 0x0A1, 0x48,  0x0A1,
-    0x53,  0x0,   0x0
-};
-
-const unsigned char DBCS_Maekin_Korean[] = {
-    0x0A1, 0x0C6, 0x0A1, 0x0AF, 0x0A1, 0x0B1, 0x0A1, 0x0C7, 0x0A1, 0x0C8, 0x0A1, 0x0C9, 0x0A1,
-    0x0B5, 0x0A1, 0x0B7, 0x0A1, 0x0B9, 0x0A1, 0x0BB, 0x0A1, 0x0BD, 0x0A1, 0x0B3, 0x0A3, 0x0A1,
-    0x0A3, 0x0A5, 0x0A3, 0x0A9, 0x0A3, 0x0AC, 0x0A3, 0x0AE, 0x0A3, 0x0BA, 0x0A3, 0x0BB, 0x0A3,
-    0x0BF, 0x0A3, 0x0DD, 0x0A3, 0x0FD, 0x0A1, 0x0CB, 0x0,   0x0,   0x0,   0x0,   0x0,
-};
-
-const unsigned char DBCS_Maekin_SimplifiedChinese[] = {
-    0x0A1, 0x0A7, 0x0A1, 0x0A4, 0x0A1, 0x0A6, 0x0A1, 0x0A5, 0x0A8, 0x44,  0x0A1, 0x0AC, 0x0A1, 0x0AF, 0x0A1,
-    0x0B1, 0x0A1, 0x0AD, 0x0A1, 0x0C3, 0x0A1, 0x0A2, 0x0A1, 0x0A3, 0x0A1, 0x0A8, 0x0A1, 0x0A9, 0x0A1, 0x0B5,
-    0x0A1, 0x0B7, 0x0A1, 0x0B9, 0x0A1, 0x0BB, 0x0A1, 0x0BF, 0x0A1, 0x0B3, 0x0A1, 0x0BD, 0x0A3, 0x0A1, 0x0A3,
-    0x0A2, 0x0A3, 0x0A7, 0x0A3, 0x0A9, 0x0A3, 0x0AC, 0x0A3, 0x0AE, 0x0A3, 0x0BA, 0x0A3, 0x0BB, 0x0A3, 0x0BF,
-    0x0A3, 0x0DD, 0x0A3, 0x0E0, 0x0A3, 0x0FC, 0x0A3, 0x0A1, 0x0AB, 0x0A1, 0x0,   0x0,
-};
-const unsigned char DBCS_Maekin_Japanese[] = {
-    0x81,  0x8B,  0x81, 0x66,  0x81, 0x68,  0x81, 0x0F1, 0x81, 0x8C,  0x81, 0x8D,  0x81, 0x8E,  0x81, 0x41,  0x81,
-    0x42,  0x81,  0x58, 0x81,  0x72, 0x81,  0x74, 0x81,  0x76, 0x81,  0x78, 0x81,  0x7A, 0x81,  0x6C, 0x82,  0x9F,
-    0x82,  0x0A1, 0x82, 0x0A3, 0x82, 0x0A5, 0x82, 0x0A7, 0x82, 0x0C1, 0x82, 0x0E1, 0x82, 0x0E3, 0x82, 0x0E5, 0x82,
-    0x0EC, 0x81,  0x4A, 0x81,  0x4B, 0x81,  0x54, 0x81,  0x55, 0x83,  0x40, 0x83,  0x42, 0x83,  0x44, 0x83,  0x46,
-    0x83,  0x48,  0x83, 0x62,  0x83, 0x83,  0x83, 0x85,  0x83, 0x87,  0x83, 0x8E,  0x83, 0x95,  0x83, 0x96,  0x81,
-    0x45,  0x81,  0x5B, 0x81,  0x52, 0x81,  0x53, 0x81,  0x49, 0x81,  0x93, 0x81,  0x6A, 0x81,  0x43, 0x81,  0x44,
-    0x81,  0x46,  0x81, 0x47,  0x81, 0x48,  0x81, 0x6E,  0x81, 0x70,  0x0,  0x0,   0x0,  0x0,
-};
-
-const unsigned char DBCS_Tokin_Japanese[] = {
-    0x81, 0x92, 0x81, 0x65, 0x81, 0x67, 0x81, 0x71, 0x81, 0x73, 0x81, 0x75, 0x81, 0x77, 0x81, 0x79,
-    0x81, 0x6B, 0x81, 0x90, 0x81, 0x69, 0x81, 0x6D, 0x81, 0x6F, 0x81, 0x92, 0x81, 0x8F, 0x0,
-};
-
-const unsigned char DBCS_Tokin_Korean[] = {
-    0x0A1, 0x0AE, 0x0A1, 0x0B0, 0x0A1, 0x0B4, 0x0A1, 0x0B6, 0x0A1, 0x0B8, 0x0A1, 0x0BA, 0x0A1, 0x0BC,
-    0x0A1, 0x0B2, 0x0A3, 0x0A4, 0x0A3, 0x0A8, 0x0A3, 0x0DB, 0x0A3, 0x0FB, 0x0A3, 0x0DC, 0x0,   0x0,
-};
-
-int UIFont::CodeSearch(unsigned short uch)
-{
-    CheckRefreshFont();
-
-    if (!m_font) {
-        return -1;
-    }
-
-    return UI_FontCodeSearch(m_font, uch);
-}
-
-bool UIFont::DBCSIsLeadByte(unsigned short uch)
-{
-    CheckRefreshFont();
-
-    if (!m_font) {
-        return false;
-    }
-
-    return UI_FontDBCSIsLeadByte(m_font, uch);
-}
-
-bool UIFont::DBCSIsMaekin(unsigned short uch)
-{
-    const unsigned char *tokinList;
-    const unsigned char *p;
-    unsigned char        ch;
-
-    CheckRefreshFont();
-
-    if (!m_font) {
-        return false;
-    }
-
-    if (uch < 0x100) {
-        return false;
-    }
-
-    ch = (uch >> 8) & 0xFF;
-
-    switch (m_font->codePage) {
-    case 932:
-        tokinList = DBCS_Maekin_Japanese;
-        break;
-    case 936:
-        tokinList = DBCS_Maekin_SimplifiedChinese;
-        break;
-    case 949:
-        tokinList = DBCS_Maekin_Korean;
-        break;
-    case 950:
-        tokinList = DBCS_Maekin_TraditionalChinese;
-        break;
-    default:
-        return false;
-    }
-
-    for (p = tokinList; *p; p += 2) {
-        if (p[0] == ch && p[1] == uch) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool UIFont::DBCSIsAtokin(unsigned short uch)
-{
-    const unsigned char *tokinList;
-    const unsigned char *p;
-    unsigned char        ch;
-
-    CheckRefreshFont();
-
-    if (!m_font) {
-        return false;
-    }
-
-    if (uch < 0x100) {
-        return false;
-    }
-
-    ch = (uch >> 8) & 0xFF;
-
-    switch (m_font->codePage) {
-    case 932:
-        tokinList = DBCS_Tokin_Japanese;
-        break;
-    case 936:
-    case 950:
-        tokinList = (const unsigned char *)"";
-        break;
-    case 949:
-        tokinList = DBCS_Tokin_Korean;
-        break;
-    default:
-        return false;
-    }
-
-    for (p = tokinList; *p; p += 2) {
-        if (p[0] == ch && p[1] == uch) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-int UIFont::DBCSGetWordBlockCount(const char *text, int maxlen)
-{
-    unsigned char *p;
-    unsigned short uch;
-    unsigned int   len;
-    bool           isATokin;
-    bool           isControl;
-    bool           hasDBCS = false;
-
-    if (maxlen < 0) {
-        maxlen = strlen(text);
-    }
-
-    if (maxlen == 0) {
-        return 0;
-    }
-
-    uch = (unsigned char)text[0];
-    p   = (unsigned char *)(text + 1);
-
-    if (!text[0]) {
-        return uch;
-    }
-
-    if (DBCSIsLeadByte(uch)) {
-        len = 2;
-        uch = *p | (uch << 8);
-        p++;
-        hasDBCS = true;
-    } else {
-        len = 1;
-    }
-
-    DBCSIsMaekin(uch);
-    isATokin  = DBCSIsAtokin(uch);
-    isControl = uch < ' ';
-
-    while (len < maxlen && *p) {
-        unsigned int   clen;
-        unsigned short prev;
-
-        prev = uch;
-        uch  = *p++;
-
-        if (DBCSIsLeadByte(uch)) {
-            clen = 2;
-            uch  = *p++ | (uch << 8);
-        } else {
-            clen = 1;
-        }
-
-        if (isControl || uch < ' ') {
-            break;
-        }
-
-        if (!DBCSIsMaekin(uch) && !isATokin
-            && (hasDBCS || clen > 1 || (prev == ' ' || prev == '-') && uch != ' ' && uch != '-')) {
-            break;
-        }
-
-        isATokin  = DBCSIsAtokin(uch);
-        isControl = false;
-        hasDBCS   = clen > 1;
-        len += clen;
-    }
-
-    if (len > maxlen) {
-        len = maxlen;
-    }
-
-    return len;
-}
+#include "uibake.h"
 
 UIFont::UIFont()
 {
@@ -273,13 +33,36 @@ UIFont::UIFont()
     color = UBlack;
     setColor(color);
 
-    refHandle = uii.GetRefSequence();
-    name      = "verdana-14";
+    refHandle  = UI_FontStamp();
+    name       = "verdana-14";
+    widthRatio = 1.0f;
+    m_fit      = 1.0f;
+    m_hasVirtualScale = false;
 }
 
 UIFont::UIFont(const char *fn)
 {
     setFont(fn);
+    widthRatio = 1.0f;
+    m_fit      = 1.0f;
+    m_hasVirtualScale = false;
+}
+
+void UIFont::setVirtualScale(const float *virtualScale)
+{
+    const float page = UI_BakedFontScale(m_font);
+
+    m_virtualScale[0] = virtualScale[0];
+    m_virtualScale[1] = virtualScale[1];
+    m_hasVirtualScale = true;
+
+    // the renderer scales glyphs across no more than down: on a wide screen,
+    // text is narrower than its 640x480 layout width
+    widthRatio = virtualScale[0] > virtualScale[1] ? virtualScale[1] / virtualScale[0] : 1.0f;
+    // Added: a baked face is drawn across at its page's scale (Print)
+    if (page > 0.0f) {
+        widthRatio = page / virtualScale[0];
+    }
 }
 
 void UIFont::setColor(UColor col)
@@ -294,12 +77,16 @@ void UIFont::setAlpha(float alpha)
 
 void UIFont::setFont(const char *fontname)
 {
-    m_font = uii.Rend_LoadFont(fontname);
+    // Added: a TrueType face baked at the size drawn (uibake.cpp), else a RitualFont
+    m_font = UI_BakeFont(fontname);
+    if (!m_font) {
+        m_font = uii.Rend_LoadFont(fontname);
+    }
     if (!m_font) {
         uii.Sys_Error(ERR_DROP, "Couldn't load font %s\n", fontname);
     }
 
-    refHandle = uii.GetRefSequence();
+    refHandle = UI_FontStamp();
     name      = fontname;
 }
 
@@ -312,6 +99,21 @@ void UIFont::Print(float x, float y, const char *text, size_t maxlen, const floa
     }
 
     uii.Rend_SetColor(color);
+    // Added: a baked face across at its page's scale, a texel a pixel (its
+    // start where the virtual screen puts it; the renderer rounds it)
+    if (virtualScreen && UI_BakedFontScale(m_font) > 0.0f) {
+        const float page  = UI_BakedFontScale(m_font) * m_fit;
+        const float vs[2] = {page, virtualScreen[1] * m_fit};
+
+        uii.Rend_DrawString(m_font, text, x * virtualScreen[0] / page, y / m_fit, maxlen, vs);
+        return;
+    }
+    if (virtualScreen && m_fit != 1.0f) {
+        const float vs[2] = {virtualScreen[0] * m_fit, virtualScreen[1] * m_fit};
+
+        uii.Rend_DrawString(m_font, text, x / m_fit, y / m_fit, maxlen, vs);
+        return;
+    }
     // Round to integer to avoid blurry text
     uii.Rend_DrawString(m_font, text, (int)x, (int)y, maxlen, virtualScreen);
 }
@@ -321,7 +123,8 @@ void UIFont::PrintJustified(
 )
 {
     float       newx, newy;
-    int         textwidth, textheight;
+    float       textwidth;
+    int         textheight;
     UIRect2D    sizedRect;
     const char *source;
     char       *dest;
@@ -403,127 +206,19 @@ void UIFont::PrintJustified(
     }
 }
 
-void UIFont::PrintOutlinedJustified(
-    const UIRect2D&   rect,
-    fonthorzjustify_t horz,
-    fontvertjustify_t vert,
-    const char       *text,
-    const UColor&     outlineColor,
-    const float      *vVirtualScale
-)
+float UIFont::FitScale(const char *text, float width)
 {
-    float       newx, newy;
-    int         textwidth, textheight;
-    UIRect2D    sizedRect;
-    const char *source;
-    char       *dest;
-    char        string[2048];
-    UColor      originalColor;
-    bool        bVirtual;
+    float w;
 
-    textwidth = 0;
-
-    if (vVirtualScale) {
-        sizedRect.pos.x       = rect.pos.x / vVirtualScale[0];
-        sizedRect.pos.y       = rect.pos.y / vVirtualScale[1];
-        sizedRect.size.width  = rect.size.width / vVirtualScale[0];
-        sizedRect.size.height = rect.size.height / vVirtualScale[1];
-    } else {
-        sizedRect = rect;
+    m_fit = 1.0f;
+    if (width <= 0.0f || !*text) {
+        return 1.0f;
     }
-
-    if (horz == FONT_JUSTHORZ_LEFT && vert == FONT_JUSTVERT_TOP) {
-        // no need to justify
-        Print(sizedRect.pos.x, sizedRect.pos.y, text, -1, vVirtualScale);
-        return;
-    }
-
-    textheight = getHeight(text, -1);
-
-    switch (vert) {
-    case FONT_JUSTVERT_TOP:
-        newy = sizedRect.pos.y + 2.0;
-        break;
-    case FONT_JUSTVERT_CENTER:
-        newy = sizedRect.pos.y + (sizedRect.size.height - textheight) * 0.5;
-        break;
-    case FONT_JUSTVERT_BOTTOM:
-        newy = sizedRect.pos.y + sizedRect.size.height - textheight - 2.0;
-        break;
-    default:
-        newy = 0;
-        break;
-    }
-
-    originalColor = color;
-    bVirtual      = vVirtualScale != NULL;
-    source        = text;
-    while (*source) {
-        // skip new lines
-        while (*source == '\n') {
-            source++;
-        }
-
-        if (!*source) {
-            // don't print an empty string
-            return;
-        }
-
-        dest = string;
-
-        do {
-            *dest++ = *source++;
-        } while (*source && *source != '\n');
-
-        *dest = 0;
-
-        if (textwidth != FONT_JUSTHORZ_LEFT) {
-            textwidth = getWidth(string, -1);
-        }
-
-        switch (horz) {
-        case FONT_JUSTHORZ_CENTER:
-            newx = sizedRect.pos.x + (sizedRect.size.width - textwidth) * 0.5;
-            break;
-        case FONT_JUSTHORZ_LEFT:
-            newx = sizedRect.pos.x + 2.0;
-            break;
-        case FONT_JUSTHORZ_RIGHT:
-            newx = sizedRect.pos.x + sizedRect.size.width - textwidth - 2.0;
-            break;
-        default:
-            newx = 0;
-            break;
-        }
-
-        //
-        // draw the outline
-        //
-        setColor(outlineColor);
-        Print(newx + 1, newy + 2, string, -1, vVirtualScale);
-        Print(newx + 2, newy + 1, string, -1, vVirtualScale);
-        Print(newx - 1, newy + 2, string, -1, vVirtualScale);
-        Print(newx - 2, newy + 1, string, -1, vVirtualScale);
-        Print(newx - 1, newy - 2, string, -1, vVirtualScale);
-        Print(newx - 2, newy - 1, string, -1, vVirtualScale);
-        Print(newx + 1, newy - 2, string, -1, vVirtualScale);
-        Print(newx + 2, newy - 1, string, -1, vVirtualScale);
-        Print(newx + 2, newy, string, -1, vVirtualScale);
-        Print(newx - 2, newy, string, -1, vVirtualScale);
-        Print(newx, newy + 2, string, -1, vVirtualScale);
-        Print(newx, newy - 2, string, -1, vVirtualScale);
-        //
-        // draw the text
-        //
-        setColor(originalColor);
-        Print(newx, newy, string, -1, vVirtualScale);
-
-        // expand for newline
-        newy += getHeight(" ", -1);
-    }
+    w = getWidth(text, -1);
+    return w > width ? Q_max(0.5f, width / w) : 1.0f;
 }
 
-int UIFont::getMaxWidthIndex(const char *text, int maxlen)
+float UIFont::getWidth(const char *text, int maxlen)
 {
     CheckRefreshFont();
 
@@ -531,23 +226,11 @@ int UIFont::getMaxWidthIndex(const char *text, int maxlen)
         return 0;
     }
 
-    return UI_FontStringMaxWidth(m_font, text, maxlen);
+    return UI_FontStringWidth(m_font, text, maxlen) * widthRatio * m_fit;
 }
 
-int UIFont::getWidth(const char *text, int maxlen)
+float UIFont::getCharWidth(unsigned char ch)
 {
-    CheckRefreshFont();
-
-    if (!m_font) {
-        return 0;
-    }
-
-    return UI_FontStringWidth(m_font, text, maxlen);
-}
-
-int UIFont::getCharWidth(unsigned short ch)
-{
-    int   index;
     int   indirected;
     float widthMul = 1.0f; // Added in OPM for easier readability
 
@@ -562,24 +245,12 @@ int UIFont::getCharWidth(unsigned short ch)
         widthMul = 3.0f;
     }
 
-    if (m_font->numPages) {
-        int code = CodeSearch(ch);
-        if (code < 0) {
-            return 0;
-        }
-
-        index      = m_font->charTable[code].index;
-        indirected = m_font->charTable[code].loc;
-    } else {
-        indirected = m_font->sgl[0]->indirection[ch];
-        if (indirected < 0 || indirected > 255) {
-            return 0;
-        }
-
-        index = 0;
+    indirected = m_font->sgl[0]->indirection[ch];
+    if (indirected < 0 || indirected > 255) {
+        return 0;
     }
 
-    return m_font->sgl[index]->locations[indirected].size[0] * 256.0 * widthMul;
+    return m_font->sgl[0]->locations[indirected].size[0] * 256.0 * widthMul * widthRatio * m_fit;
 }
 
 int UIFont::getHeight(const char *text, int maxlen, const float *virtualScale)
@@ -614,75 +285,21 @@ int UIFont::getHeight(const float *virtualScale)
 
     if (virtualScale) {
         if (m_font) {
-            return (m_font->sgl[0]->height * virtualScale[0]);
+            return (m_font->sgl[0]->height * virtualScale[0] * m_fit);
         } else {
-            return (16.0 * virtualScale[1]);
+            return (16.0 * virtualScale[1] * m_fit);
         }
     } else {
         if (m_font) {
-            return m_font->sgl[0]->height;
+            return m_font->sgl[0]->height * m_fit;
         } else {
-            return 16;
+            return 16 * m_fit;
         }
     }
-}
-
-qboolean UI_FontDBCSIsLeadByte(fontheader_t *font, unsigned short uch)
-{
-    // Byte ranges found in Wikipedia articles with relevant search strings in each case
-    switch (font->codePage) {
-    case 932:
-        // Shift_jis
-        return ((uch >= 0x81) && (uch <= 0x9F)) || ((uch >= 0xE0) && (uch <= 0xFC));
-        // Lead bytes F0 to FC may be a Microsoft addition.
-    case 936:
-        // GBK
-        return (uch >= 0x81) && (uch <= 0xFE);
-    case 949:
-        // Korean Wansung KS C-5601-1987
-        return (uch >= 0x81) && (uch <= 0xFE);
-    case 950:
-        // Big5
-        return (uch >= 0x81) && (uch <= 0xFE);
-    case 1361:
-        // Korean Johab KS C-5601-1992
-        return ((uch >= 0x84) && (uch <= 0xD3)) || ((uch >= 0xD8) && (uch <= 0xDE)) || ((uch >= 0xE0) && (uch <= 0xF9));
-    }
-    return false;
-}
-
-int UI_FontCodeSearch(const fontheader_t *font, unsigned short uch)
-{
-    int mid;
-    int l, r;
-
-    r = font->charTableLength;
-    l = 0;
-    while (l < r) {
-        mid = (l + r) / 2;
-
-        if (font->charTable[mid].cp > uch) {
-            r = (l + r) / 2;
-            continue;
-        }
-
-        if (uch == font->charTable[mid].cp) {
-            return (l + r) / 2;
-        }
-
-        l = mid + 1;
-    }
-
-    if (uch != font->charTable[l].cp) {
-        return -1;
-    }
-
-    return l;
 }
 
 float UI_FontgetCharWidthf(fontheader_t *font, unsigned short uch)
 {
-    int   index;
     int   indirected;
     float widthMul = 1.0f; // Added in OPM for easier readability
 
@@ -695,60 +312,12 @@ float UI_FontgetCharWidthf(fontheader_t *font, unsigned short uch)
         widthMul = 3.0f;
     }
 
-    if (font->numPages) {
-        int code = UI_FontCodeSearch(font, uch);
-        if (code < 0) {
-            return 0.f;
-        }
-
-        index      = font->charTable[code].index;
-        indirected = font->charTable[code].loc;
-    } else {
-        indirected = font->sgl[0]->indirection[uch];
-        if (indirected < 0 || indirected > 255) {
-            return 0.f;
-        }
-
-        index = 0;
+    indirected = font->sgl[0]->indirection[uch];
+    if (indirected < 0 || indirected > 255) {
+        return 0.f;
     }
 
-    return font->sgl[index]->locations[indirected].size[0] * widthMul;
-}
-
-int UI_FontStringMaxWidth(fontheader_t *pFont, const char *pszString, int iMaxLen)
-{
-    float widths    = 0.0;
-    float maxwidths = iMaxLen / 256.0f;
-    int   i;
-
-    if (!pFont) {
-        return 0;
-    }
-
-    for (int i = 0; pszString[i] && (iMaxLen == -1 || i < iMaxLen); i++) {
-        unsigned short uch = (unsigned char)pszString[i];
-
-        if (UI_FontDBCSIsLeadByte(pFont, uch)) {
-            uch = (uch << 8) | pszString[i];
-            if (!pszString[i]) {
-                break;
-            }
-
-            i++;
-        }
-
-        if (uch == '\n') {
-            widths = 0.0;
-        } else {
-            widths += UI_FontgetCharWidthf(pFont, uch);
-
-            if (maxwidths < widths) {
-                return i - 1;
-            }
-        }
-    }
-
-    return -1;
+    return font->sgl[0]->locations[indirected].size[0] * widthMul;
 }
 
 int UI_FontStringWidth(fontheader_t *pFont, const char *pszString, int iMaxLen)
@@ -762,15 +331,6 @@ int UI_FontStringWidth(fontheader_t *pFont, const char *pszString, int iMaxLen)
 
     for (int i = 0; pszString[i] && (iMaxLen == -1 || i < iMaxLen); i++) {
         unsigned short uch = (unsigned char)pszString[i];
-
-        if (UI_FontDBCSIsLeadByte(pFont, uch)) {
-            uch = (uch << 8) | pszString[i];
-            if (!pszString[i]) {
-                break;
-            }
-
-            i++;
-        }
 
         if (uch == '\n') {
             widths = 0.0;
@@ -788,8 +348,14 @@ int UI_FontStringWidth(fontheader_t *pFont, const char *pszString, int iMaxLen)
 
 void UIFont::CheckRefreshFont()
 {
-    if (refHandle != uii.GetRefSequence()) {
+    if (refHandle != UI_FontStamp()) {
         setFont(name);
+        // Added: a baked face found anew may have another page scale (baked at
+        // the screen's new size): the width ratio made again for it now, so
+        // what this frame measures (and a 2D list keeps) has the new one
+        if (m_hasVirtualScale) {
+            setVirtualScale(m_virtualScale);
+        }
     } else if (!uii.IsRendererLoaded()) {
         m_font = NULL;
     }

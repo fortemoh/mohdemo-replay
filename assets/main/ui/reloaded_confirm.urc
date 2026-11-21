@@ -1,0 +1,22 @@
+// The Reloaded main menu's confirmations (Quit, Disconnect), shown over it (cl_uimain.cpp)
+menu "reloaded_confirm" 640 480 NONE 0
+align left top
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle NONE
+fullscreen 1
+virtualres 1
+drawcache 1
+
+resource
+ReloadedMenu
+{
+name "front"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen confirm
+}
+
+end.

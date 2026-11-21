@@ -22,29 +22,26 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #pragma once
 
+#include <vector>
+
 typedef void (*consoleHandler_t)(const char *text);
 
 class item
 {
 public:
-    str           string;
-    int           lines;
-    int           begins[10];
-    int           breaks[10];
-    const UColor *pColor;
+    str              string;
+    int              lines;
+    // Changed: as many rows as the text needs (there were 10, the rest ran off on the last one)
+    std::vector<int> begins;
+    std::vector<int> breaks;
+    const UColor    *pColor;
 
     item();
 };
 
 inline item::item()
 {
-    lines = 0;
-
-    for (int i = 0; i < 10; i++) {
-        begins[i] = 0;
-        breaks[i] = 0;
-    }
-
+    lines  = 0;
     pColor = NULL;
 }
 
@@ -55,7 +52,9 @@ class UIConsole : public UIWidget
 protected:
     UList<str>       m_history;
     void            *m_historyposition;
-    item             m_items[MAX_CONSOLE_ITEMS];
+    // Changed: m_maxitems of them (MAX_CONSOLE_ITEMS, but con_scrollback in the ~ console)
+    item            *m_items;
+    int              m_maxitems;
     str              m_currentline;
     UIVertScroll    *m_scroll;
     int              m_firstitem;
@@ -71,21 +70,36 @@ public:
     CLASS_PROTOTYPE(UIConsole);
 
 protected:
-    int  getFirstItem(void);
     int  getNextItem(int prev);
     int  getLastItem(void);
     int  AddLine(void);
     void DrawBottomLine(void);
     void AddHistory(void);
+    void Paste(void);
 
     virtual void Print(Event *ev);
     virtual void KeyEnter(void);
+    virtual void TabComplete(void);
 
 public:
     UIConsole();
+    ~UIConsole();
 
+    // Added: the lines kept, the text there was cleared
+    void     setMaxItems(int count);
     void     setConsoleHandler(consoleHandler_t handler);
     void     AddText(const char *text, const UColor *pColor);
+    // Added: the line being typed, the caret in it
+    const str& getCurrentLine(void) const { return m_currentline; }
+    size_t     getCaret(void) const { return m_caret; }
+    // Added: the line being typed dropped, as after one is sent (its place in the history and its completion too)
+    void       ClearCurrentLine(void)
+    {
+        m_currentline             = "";
+        m_caret                   = 0;
+        m_historyposition         = NULL;
+        m_refreshcompletionbuffer = true;
+    }
     void     CalcLineBreaks(item& theItem);
     void     Clear(void);
     void     FrameInitialized(void) override;
@@ -119,6 +133,8 @@ public:
     void OnClosePressed(Event *ev);
     void setConsoleBackground(const UColor& color, float alpha);
     void setConsoleColor(const UColor& color);
+    // Added: the lines the console in it keeps
+    void setScrollback(int lines);
 };
 
 class UIDMConsole : public UIConsole
@@ -131,6 +147,7 @@ public:
 
 private:
     void KeyEnter(void) override;
+    void TabComplete(void) override;
 
 public:
     UIDMConsole();
@@ -173,4 +190,6 @@ public:
     void     SetQuickMessageMode(qboolean bQuickMessage);
     int      GetMessageMode(void);
     void     SetMessageMode(int iMode);
+    // Added: the console in it
+    UIDMConsole *getConsole(void) { return m_console; }
 };

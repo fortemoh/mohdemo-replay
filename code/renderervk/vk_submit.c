@@ -35,6 +35,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // 640x480, 0.5 ms at 3840x2160 on a Radeon 780M), which is why it is only
 // the fallback.
 //
+// With the render thread (r_smp) the frames it ends are submitted there and
+// the thread only presents them (VK_QueuePresentJob): a frame's submission
+// then never waits behind the present of the frame before (about 50 us in
+// NVIDIA's present), so the GPU starts each frame as soon as it is recorded.
+// The queue is shared then: vkQueueSubmit on the render thread and
+// vkQueuePresentKHR (and the thread's own submissions) here take queueLock.
+// A frame drawn offscreen is copied into the image the thread acquired
+// after its last present, in the render thread's submission, once the
+// thread is done with that present (the render thread drains it first).
+//
 // The queue and the swapchain are externally synchronized. While the thread
 // has frames to submit, the main thread uses neither: it drains the thread
 // first (VK_DrainSubmitThread) to submit on its own (mid-frame flushes,
@@ -61,8 +71,12 @@ typedef struct {
 	VkCommandBuffer	cmds[2];
 	uint32_t		numCmds;
 	qboolean		present;		// present it; otherwise submit only
+	qboolean		presentOnly;	// submitted by the render thread already: present image only
 	int				image;			// the swapchain image it was drawn into, -1: the offscreen image, to copy
 	VkSemaphore		acquired;		// that image's acquire semaphore, when no submission waited for it yet
+	uint64_t		aoSignalValue, aoWaitValue;	// the compute queue's ambient occlusion (VK_TemporalTakeAoSubmitInfo), 0 none
+	uint64_t		inputUs;		// r_vkLatency: the frame's input time
+	uint64_t		token;			// the engine's name for the frame, for its present gate
 	uint64_t		handoffUs;		// when the main thread queued it
 	uint64_t		frameStartUs;	// vk.frameStartUs of the frame
 
@@ -74,7 +88,7 @@ typedef struct {
 	uint64_t		startUs;		// when the thread started it
 	uint64_t		presentAt;		// when it called vkQueuePresentKHR, 0: no present
 	uint32_t		submits;
-	uint64_t		submitUs, acquireUs, presentUs;
+	uint64_t		submitUs, acquireUs, presentUs, presentWaitUs;
 } vkSubmitJob_t;
 
 #define VK_THREAD_MESSAGES		16384	// validation messages raised on the thread, until printed
@@ -83,6 +97,7 @@ static struct {
 	SDL_Thread		*thread;
 	SDL_ThreadID	threadId;
 	SDL_Mutex		*lock;
+	SDL_Mutex		*queueLock;		// vk.queue: the thread's submissions and presents, the render thread's submissions
 	SDL_Condition	*wake;			// the thread waits for a job or quit
 	SDL_Condition	*done;			// the main thread waits for a job to be done
 	qboolean		quit;
@@ -124,8 +139,11 @@ THE THREAD
 
 static VkResult VK_ThreadSubmit( vkSubmitJob_t *job, uint32_t count, const VkSubmitInfo *submits, VkFence fence ) {
 	uint64_t start = VK_Microseconds();
-	VkResult result = qvkQueueSubmit( vk.queue, count, submits, fence );
+	VkResult result;
 
+	SDL_LockMutex( vk_submit.queueLock );
+	result = qvkQueueSubmit( vk.queue, count, submits, fence );
+	SDL_UnlockMutex( vk_submit.queueLock );
 	job->submitUs += VK_Microseconds() - start;
 	job->submits++;
 	return result;
@@ -177,6 +195,8 @@ without the thread
 static VkResult VK_ThreadPresent( vkSubmitJob_t *job, uint32_t imageIndex ) {
 	VkSwapchainPresentFenceInfoEXT fenceInfo;
 	VkPresentInfoKHR presentInfo;
+	VkPresentIdKHR presentId;
+	uint64_t id = 0;
 	VkResult result;
 	uint64_t start;
 
@@ -198,14 +218,25 @@ static VkResult VK_ThreadPresent( vkSubmitJob_t *job, uint32_t imageIndex ) {
 		fenceInfo.pFences = &vk.presentFenceSlots[vk.nextPresentFence].fence;
 		presentInfo.pNext = &fenceInfo;
 	}
+	if ( vk.presentWait ) {
+		VK_ChainPresentId( &presentInfo, &presentId, &id );
+	}
 	if ( vk_submit.inlatPresenting ) {
 		vk_submit.inlatPresenting( job->serial );
 	}
 
+	// the frame limiter's hold: no two presents closer than the cap's
+	// period (outside queueLock: the main thread submits meanwhile), and
+	// the present's moment inside it, right before the call
+	ri.PresentGate( job->token );
 	start = VK_Microseconds();
 	job->presentAt = start;
+	SDL_LockMutex( vk_submit.queueLock );
+	ri.PresentMark( job->token );
 	result = qvkQueuePresentKHR( vk.queue, &presentInfo );
+	SDL_UnlockMutex( vk_submit.queueLock );
 	job->presentUs = VK_Microseconds() - start;
+	VK_ProbePresent( job->inputUs, start, id );
 	if ( result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ) {
 		job->outOfDate = qtrue;
 		job->presented = result == VK_SUBOPTIMAL_KHR;
@@ -226,6 +257,16 @@ static VkResult VK_ThreadPresent( vkSubmitJob_t *job, uint32_t imageIndex ) {
 			VK_DestroyRetiredSwapchains( qfalse );
 		}
 	}
+	// vsync: until it is shown, before the next image is acquired and the
+	// next frame reads its input (the main or render thread waits for this
+	// job with FIFO)
+	if ( result == VK_SUCCESS && !job->outOfDate ) {
+		result = VK_WaitForPresentShown( id, &job->presentWaitUs );
+		if ( result == VK_ERROR_OUT_OF_DATE_KHR ) {
+			job->outOfDate = qtrue;
+			result = VK_SUCCESS;
+		}
+	}
 	return result;
 }
 
@@ -242,6 +283,7 @@ the swapchain is out of date the frame is submitted and not presented.
 static VkResult VK_ThreadCopyAndPresent( vkSubmitJob_t *job, vkFrame_t *frame ) {
 	VkPipelineStageFlags waitStage = VK_PresentCopyStage();
 	VkSubmitInfo submits[2];
+	vkAoSubmitChain_t aoChain;
 	VkSemaphore acquired;
 	uint32_t imageIndex;
 	int semaphore;
@@ -252,6 +294,7 @@ static VkResult VK_ThreadCopyAndPresent( vkSubmitJob_t *job, vkFrame_t *frame ) 
 	submits[0].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	submits[0].commandBufferCount = job->numCmds;
 	submits[0].pCommandBuffers = job->cmds;
+	VK_TemporalAoChainSubmit( &aoChain, &submits[0], job->aoSignalValue, job->aoWaitValue );
 
 	SDL_LockMutex( vk_submit.lock );
 	ahead = vk_submit.ahead;
@@ -294,6 +337,7 @@ static void VK_RunSubmitJob( vkSubmitJob_t *job, int slot ) {
 	vkFrame_t *frame = &vk.frames[slot];
 	VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	VkSubmitInfo submit;
+	vkAoSubmitChain_t aoChain;
 	uint32_t imageIndex;
 	int semaphore;
 
@@ -303,7 +347,11 @@ static void VK_RunSubmitJob( vkSubmitJob_t *job, int slot ) {
 	submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	submit.commandBufferCount = job->numCmds;
 	submit.pCommandBuffers = job->cmds;
-	if ( job->image >= 0 ) {
+	if ( job->presentOnly ) {
+		// submitted by the render thread, which signals the image's present
+		// semaphore
+		job->result = VK_ThreadPresent( job, job->image );
+	} else if ( job->image >= 0 ) {
 		// drawn into the swapchain image, which went to the presentation
 		// layout at its end; the first submission that used the image waits
 		// for its semaphore (VK_SelectTarget's barrier waits at the same stage)
@@ -314,6 +362,7 @@ static void VK_RunSubmitJob( vkSubmitJob_t *job, int slot ) {
 		}
 		submit.signalSemaphoreCount = 1;
 		submit.pSignalSemaphores = &vk.presentSemaphores[job->image];
+		VK_TemporalAoChainSubmit( &aoChain, &submit, job->aoSignalValue, job->aoWaitValue );
 		job->result = VK_ThreadSubmit( job, 1, &submit, frame->fence );
 		if ( job->result == VK_SUCCESS ) {
 			job->result = VK_ThreadPresent( job, job->image );
@@ -322,6 +371,7 @@ static void VK_RunSubmitJob( vkSubmitJob_t *job, int slot ) {
 		job->result = VK_ThreadCopyAndPresent( job, frame );
 	} else {
 		// minimized, or the frame drew nothing: the window keeps the last frame
+		VK_TemporalAoChainSubmit( &aoChain, &submit, job->aoSignalValue, job->aoWaitValue );
 		job->result = VK_ThreadSubmit( job, 1, &submit, frame->fence );
 	}
 
@@ -372,7 +422,9 @@ static int SDLCALL VK_SubmitThreadMain( void *data ) {
 		SDL_LockMutex( vk_submit.lock );
 		vk_submit.taken++;
 		vk_submit.finished[slot] = qtrue;
-		SDL_SignalCondition( vk_submit.done );
+		// every waiter: with r_smp the render thread and the main thread can
+		// both wait for a frame (one woken alone left the other asleep)
+		SDL_BroadcastCondition( vk_submit.done );
 	}
 	SDL_UnlockMutex( vk_submit.lock );
 	return 0;
@@ -453,6 +505,7 @@ static void VK_TakeSubmitJob( int slot ) {
 	vk.stats.threadSubmitUs += job->submitUs;
 	vk.stats.threadAcquireUs += job->acquireUs;
 	vk.stats.threadPresentUs += job->presentUs;
+	vk.stats.threadPresentWaitUs += job->presentWaitUs;
 	if ( job->presentAt ) {
 		vk.stats.threadPresents++;
 		vk.stats.frameToPresentUs += job->presentAt - job->frameStartUs;
@@ -605,6 +658,11 @@ void VK_QueueSubmitJob( vkFrame_t *frame, const VkCommandBuffer *cmds, uint32_t 
 	job->image = image;
 	job->acquired = acquired;
 	job->frameStartUs = vk.frameStartUs;
+	job->inputUs = frame->probeInputUs;
+	job->token = frame->token;
+	// the compute queue's ambient occlusion (r_aoAsync): taken here, on
+	// the main thread
+	VK_TemporalTakeAoSubmitInfo( &job->aoSignalValue, &job->aoWaitValue );
 	if ( present && vk_submit.inlatQueued ) {
 		vk_submit.inlatQueued( job->serial );
 	}
@@ -621,6 +679,79 @@ void VK_QueueSubmitJob( vkFrame_t *frame, const VkCommandBuffer *cmds, uint32_t 
 
 /*
 ===============
+VK_QueuePresentJob
+
+The render thread submitted the frame itself (its submission signals the
+present semaphore of image): the thread presents it, then acquires the
+image of the next frame as after any present
+===============
+*/
+void VK_QueuePresentJob( vkFrame_t *frame, int image ) {
+	int slot = (int)( frame - vk.frames );
+	vkSubmitJob_t *job = &vk_submit.jobs[slot];
+
+	Com_Memset( job, 0, sizeof( *job ) );
+	job->serial = frame->serial;
+	job->present = qtrue;
+	job->presentOnly = qtrue;
+	job->image = image;
+	job->frameStartUs = vk.frameStartUs;
+	job->inputUs = frame->probeInputUs;
+	job->token = frame->token;
+	if ( vk_submit.inlatQueued ) {
+		vk_submit.inlatQueued( job->serial );
+	}
+	vk_submit.pending[slot] = qtrue;
+
+	SDL_LockMutex( vk_submit.lock );
+	job->handoffUs = VK_Microseconds();
+	vk_submit.finished[slot] = qfalse;
+	vk_submit.order[vk_submit.queued % VK_MAX_FRAMES] = slot;
+	vk_submit.queued++;
+	SDL_SignalCondition( vk_submit.wake );
+	SDL_UnlockMutex( vk_submit.lock );
+}
+
+/*
+===============
+VK_JoinSubmittingJobs
+
+Before the render thread submits a frame itself: the frames handed over
+whole (ended on the main thread, as while loading) are submitted first, in
+their order
+===============
+*/
+void VK_JoinSubmittingJobs( void ) {
+	uint64_t i;
+
+	if ( !vk_submit.thread ) {
+		return;
+	}
+	for ( i = vk_submit.queued > VK_MAX_FRAMES ? vk_submit.queued - VK_MAX_FRAMES : 0; i < vk_submit.queued; i++ ) {
+		int slot = vk_submit.order[i % VK_MAX_FRAMES];
+
+		if ( vk_submit.pending[slot] && !vk_submit.jobs[slot].presentOnly ) {
+			VK_JoinSubmitJob( slot );
+		}
+	}
+}
+
+// vk.queue while the thread may be presenting (the render thread's
+// submissions, VK_QueueSubmit in vk.c)
+void VK_LockSubmitQueue( void ) {
+	if ( vk_submit.queueLock ) {
+		SDL_LockMutex( vk_submit.queueLock );
+	}
+}
+
+void VK_UnlockSubmitQueue( void ) {
+	if ( vk_submit.queueLock ) {
+		SDL_UnlockMutex( vk_submit.queueLock );
+	}
+}
+
+/*
+===============
 VK_StartSubmitThread
 
 At vk_initialize, before the frames and the swapchain are created
@@ -629,10 +760,11 @@ At vk_initialize, before the frames and the swapchain are created
 qboolean VK_StartSubmitThread( void ) {
 	Com_Memset( &vk_submit, 0, sizeof( vk_submit ) );
 	vk_submit.lock = SDL_CreateMutex();
+	vk_submit.queueLock = SDL_CreateMutex();
 	vk_submit.messageLock = SDL_CreateMutex();
 	vk_submit.wake = SDL_CreateCondition();
 	vk_submit.done = SDL_CreateCondition();
-	if ( vk_submit.lock && vk_submit.messageLock && vk_submit.wake && vk_submit.done ) {
+	if ( vk_submit.lock && vk_submit.queueLock && vk_submit.messageLock && vk_submit.wake && vk_submit.done ) {
 		vk_submit.thread = SDL_CreateThread( VK_SubmitThreadMain, "vksubmit", NULL );
 	}
 	if ( !vk_submit.thread ) {
@@ -693,6 +825,9 @@ void VK_StopSubmitThread( void ) {
 	}
 	if ( vk_submit.lock ) {
 		SDL_DestroyMutex( vk_submit.lock );
+	}
+	if ( vk_submit.queueLock ) {
+		SDL_DestroyMutex( vk_submit.queueLock );
 	}
 	if ( vk_submit.messageLock ) {
 		SDL_DestroyMutex( vk_submit.messageLock );

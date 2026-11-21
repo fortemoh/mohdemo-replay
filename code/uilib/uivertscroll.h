@@ -22,6 +22,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #pragma once
 
+// Changed: here, from the horizontal scrollbar's header (removed)
+typedef enum {
+    VS_NONE,
+    VS_UP_ARROW,
+    VS_DOWN_ARROW,
+    VS_THUMB,
+    VS_PAGE_DOWN,
+    VS_PAGE_UP
+} whatspressed;
+
 class unnamed_struct
 {
 public:
@@ -40,7 +50,6 @@ protected:
     UIRect2D       thumbRect;
     unnamed_struct m_dragThumbState;
     bool           m_frameinitted;
-    UColor         m_thumbcolor;
     UColor         m_solidbordercolor;
 
 public:
@@ -48,7 +57,6 @@ public:
 
 protected:
     int  getItemFromHeight(float height);
-    bool isEnoughItems(void);
 
 public:
     UIVertScroll();
@@ -69,7 +77,6 @@ public:
     int  getTopItem(void);
     int  getPageHeight(void);
     int  getNumItems(void);
-    void setThumbColor(const UColor& thumb);
     void setSolidBorderColor(const UColor& col);
     void InitFrameAlignRight(UIWidget *parent, float fWidthPadding, float fHeightPadding);
     void FrameInitialized() override;

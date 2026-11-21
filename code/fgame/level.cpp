@@ -783,7 +783,6 @@ void Level::Init(void)
     cinematic = false;
     ai_on     = true;
 
-    near_exit      = false;
     mission_failed = false;
 
     m_bAlarm       = false;
@@ -927,7 +926,6 @@ void Level::CleanUp(qboolean samemap, qboolean resetConfigStrings)
 
     cinematic = false;
     ai_on     = true;
-    near_exit = false;
 
     mission_failed = false;
     died_already   = false;

@@ -58,7 +58,6 @@ UIVertScroll::UIVertScroll()
     , m_topitem(0)
     , m_marlett("marlett")
     , thumbRect(0, 0, 0, 0)
-    , m_thumbcolor(0.15, 0.196, 0.278, 1.0)
     , m_solidbordercolor(0.075, 0.098, 0.139, 1.0)
     , m_pressed(VS_NONE)
     , m_frameinitted(false)
@@ -71,11 +70,6 @@ int UIVertScroll::getItemFromHeight(float height)
 {
     return (int)((height - 16.0 * uid.scaleRes[1]) * (float)this->m_numitems
                  / (m_frame.size.height - 32.0 * uid.scaleRes[1]));
-}
-
-bool UIVertScroll::isEnoughItems(void)
-{
-    return m_numitems > m_pageheight;
 }
 
 void UIVertScroll::Draw(void)
@@ -369,11 +363,6 @@ int UIVertScroll::getPageHeight(void)
 int UIVertScroll::getNumItems(void)
 {
     return m_numitems;
-}
-
-void UIVertScroll::setThumbColor(const UColor& thumb)
-{
-    m_thumbcolor = thumb;
 }
 
 void UIVertScroll::setSolidBorderColor(const UColor& col)

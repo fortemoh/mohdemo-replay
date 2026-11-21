@@ -1557,6 +1557,125 @@ void R_MarkTerrainPatch(cTerraPatchUnpacked_t *pPatch)
 R_AddTerrainSurfaces
 ================
 */
+/*
+================
+R_TerrainSnapshotChanges
+
+r_smp: the slots the tessellation changed since the last snapshot, for the
+render thread (RB_TerrainPool reads its copy of them, not g_pVert, which
+the next frame's tessellation changes meanwhile); too many for the
+frame's room, and the thread's shadow of the pool is refreshed in full
+with the thread idle
+================
+*/
+void R_TerrainSnapshotChanges(void)
+{
+    int w, count = 0;
+
+    if (!glConfig.smpActive || !g_pVert || !g_bVertChanged || !g_pVertChanged) {
+        return;
+    }
+    for (w = 0; w < (g_nVerts + 63) >> 6; w++) {
+        uint64_t bits = g_pVertChanged[w];
+
+        while (bits) {
+            bits &= bits - 1;
+            count++;
+        }
+    }
+    if (backEndData->numTerrainChanges + count > MAX_TERRAIN_CHANGES) {
+        R_FrontEndSync();
+        vk_terrain_shadow_all(g_pVert[0].xyz, g_pVert[0].texCoords[0], sizeof(terrainVert_t), g_nVerts);
+        backEndData->terrainChangesAll = qtrue;
+    } else {
+        terrainSlotChange_t *out = backEndData->terrainChanges + backEndData->numTerrainChanges;
+
+        for (w = 0; w < (g_nVerts + 63) >> 6; w++) {
+            uint64_t bits = g_pVertChanged[w];
+
+            while (bits) {
+                int b, slot;
+
+                for (b = 0; !(bits & ((uint64_t)1 << b)); b++) {
+                }
+                bits &= ~((uint64_t)1 << b);
+                slot = (w << 6) + b;
+                if (slot >= g_nVerts) {
+                    continue;
+                }
+                out->slot = slot;
+                VectorCopy(g_pVert[slot].xyz, out->xyz);
+                out->st[0][0] = g_pVert[slot].texCoords[0][0];
+                out->st[0][1] = g_pVert[slot].texCoords[0][1];
+                out->st[1][0] = g_pVert[slot].texCoords[1][0];
+                out->st[1][1] = g_pVert[slot].texCoords[1][1];
+                out++;
+                backEndData->numTerrainChanges++;
+            }
+        }
+    }
+    Com_Memset(g_pVertChanged, 0, ((g_nVerts + 63) >> 6) * sizeof(uint64_t));
+    g_bVertChanged = qfalse;
+}
+
+/*
+================
+R_TerrainFrameSurface
+
+The frame's copy of what the back end draws of a patch (terrainPatchFrame_t):
+the render thread draws the frame while the next frame's tessellation
+changes the patch's lists, so the slots of its drawn triangles are taken
+now, into the frame's data (the patch's cached list when there is one,
+RB_TerrainPatchIndexes). With the frame's pools full the patch's own lists
+are drawn, as before
+================
+*/
+static surfaceType_t *R_TerrainFrameSurface(cTerraPatchUnpacked_t *patch)
+{
+    terrainPatchFrame_t *f;
+    const glIndex_t     *kept;
+    glIndex_t           *out;
+    int                  n = 0, i;
+
+    if (backEndData->numTerrainSurfs >= MAX_TERRAIN_FRAME_PATCHES) {
+        return (surfaceType_t *)&patch->drawinfo;
+    }
+    f              = &backEndData->terrainSurfs[backEndData->numTerrainSurfs++];
+    f->surfaceType = SF_TERRAIN_PATCH;
+    f->live        = &patch->drawinfo;
+    f->nVerts      = patch->drawinfo.nVerts;
+    f->nTris       = patch->drawinfo.nTris;
+    f->dlightBits  = patch->drawinfo.dlightBits;
+    f->dlightMap   = patch->drawinfo.dlightMap;
+    f->indexes     = NULL;
+    f->numIndexes  = 0;
+
+    out  = backEndData->terrainIndexes + backEndData->numTerrainIndexes;
+    kept = RB_TerrainPatchIndexes(&patch->drawinfo, &n);
+    if (kept) {
+        if (backEndData->numTerrainIndexes + n > MAX_TERRAIN_FRAME_INDEXES) {
+            return (surfaceType_t *)f;
+        }
+        Com_Memcpy(out, kept, n * sizeof(glIndex_t));
+    } else {
+        for (i = patch->drawinfo.iTriHead; i; i = g_pTris[i].iNext) {
+            if (g_pTris[i].byConstChecks & 4) {
+                if (backEndData->numTerrainIndexes + n + 3 > MAX_TERRAIN_FRAME_INDEXES) {
+                    return (surfaceType_t *)f;
+                }
+                out[n]     = g_pTris[i].iPt[0];
+                out[n + 1] = g_pTris[i].iPt[1];
+                out[n + 2] = g_pTris[i].iPt[2];
+                n += 3;
+            }
+        }
+    }
+    f->indexes    = out;
+    f->numIndexes = n;
+    backEndData->numTerrainIndexes += n;
+    return (surfaceType_t *)f;
+}
+
 void R_AddTerrainSurfaces()
 {
     int                    i;
@@ -1570,6 +1689,7 @@ void R_AddTerrainSurfaces()
     if (!ter_lock->integer) {
         R_TessellateTerrain();
     }
+    R_TerrainSnapshotChanges();
 
     if (ter_count->integer || ter_lock->integer == 2) {
         for (i = 0; i < tr.world->numTerraPatches; i++) {
@@ -1579,7 +1699,7 @@ void R_AddTerrainSurfaces()
                 assert(patch->shader);
 
                 dlight = R_CheckDlightTerrain(patch, DLIGHTS_ALL(tr.refdef.num_dlights));
-                R_AddDrawSurf((surfaceType_t *)&patch->drawinfo, patch->shader, R_DlightSortKey(dlight));
+                R_AddDrawSurf(R_TerrainFrameSurface(patch), patch->shader, R_DlightSortKey(dlight));
             }
 
             if (ter_count->integer && (g_nSplit || g_nMerge)) {
@@ -1603,7 +1723,7 @@ void R_AddTerrainSurfaces()
             assert(patch->shader);
 
             dlight = R_CheckDlightTerrain(patch, DLIGHTS_ALL(tr.refdef.num_dlights));
-            R_AddDrawSurf((surfaceType_t *)&patch->drawinfo, patch->shader, R_DlightSortKey(dlight));
+            R_AddDrawSurf(R_TerrainFrameSurface(patch), patch->shader, R_DlightSortKey(dlight));
         }
     }
 }
@@ -1982,6 +2102,11 @@ qboolean RB_TerrainPool(void)
 
     if (!g_pVert || !r_staticTerrain->integer) {
         return qfalse;
+    }
+    // r_smp: from the render thread's copy of the slots, which each scene's
+    // snapshot of the changed slots brought up to date (RB_DrawSurfs)
+    if (glConfig.smpActive) {
+        return vk_sync_terrain_pool_smp();
     }
 
     ok = vk_sync_terrain_pool(

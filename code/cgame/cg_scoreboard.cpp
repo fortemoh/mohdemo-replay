@@ -163,6 +163,21 @@ const char *CG_GetColumnName_ver_6(int iColumnNum, int *iColumnWidth)
     return pszReturnString;
 }
 
+// Added: the scoreboard as the Competitive HUD wants it (cg_hudstyle 1, the
+// client's cl_uicomp.cpp): ui_hud_sb "<Allies' score> <Axis' score> <a 0 or
+// 1 a client: dead>"
+static int  cg_sbScore[2];
+static char cg_sbDead[MAX_CLIENTS + 1];
+
+static void CG_HudScoreEntry(int clientNum, int team, qboolean dead, const char *score)
+{
+    if (clientNum == -1 && (team == TEAM_ALLIES || team == TEAM_AXIS)) {
+        cg_sbScore[team == TEAM_AXIS] = atoi(score);
+    } else if (clientNum >= 0 && clientNum < MAX_CLIENTS) {
+        cg_sbDead[clientNum] = dead ? '1' : '0';
+    }
+}
+
 void CG_ParseScores_ver_15()
 {
     int      i;
@@ -340,6 +355,7 @@ void CG_ParseScores_ver_15()
             Q_strncpyz(szString5, cgi.Argv(3 + iCurrentEntry + iDatumCount * i), sizeof(szString5));
             Q_strncpyz(szString6, cgi.Argv(4 + iCurrentEntry + iDatumCount * i), sizeof(szString6));
             Q_strncpyz(szString7, cgi.Argv(5 + iCurrentEntry + iDatumCount * i), sizeof(szString7));
+            CG_HudScoreEntry(iClientNum, iClientTeam, bIsDead, szString4);
 
             if (cgs.gametype >= GT_TEAM_ROUNDS && iClientNum == -1
                 && (iClientTeam == TEAM_ALLIES || iClientTeam == TEAM_AXIS)) {
@@ -563,6 +579,8 @@ void CG_ParseScores_ver_6()
             Q_strncpyz(szString4, cgi.Argv(3 + iCurrentEntry + iDatumCount * i), sizeof(szString4));
             Q_strncpyz(szString5, cgi.Argv(4 + iCurrentEntry + iDatumCount * i), sizeof(szString5));
             Q_strncpyz(szString6, cgi.Argv(5 + iCurrentEntry + iDatumCount * i), sizeof(szString6));
+            // (a round mode's team line has the wins in a row, then the wins: fgame's BuildTeamInfo_ver6)
+            CG_HudScoreEntry(iClientNum, iClientTeam, bIsDead, iClientNum == -1 && cgs.gametype >= GT_TEAM_ROUNDS ? szString4 : szString3);
 
             if (iClientNum == cg.snap->ps.clientNum) {
                 pItemTextColor = vThisClientTextColor;
@@ -641,11 +659,15 @@ void CG_ParseScores_ver_6()
 
 void CG_ParseScores()
 {
+    cg_sbScore[0] = cg_sbScore[1] = -1;
+    memset(cg_sbDead, '0', MAX_CLIENTS);
+    cg_sbDead[MAX_CLIENTS] = 0;
     if (cg_protocol >= PROTOCOL_MOHTA_MIN) {
         CG_ParseScores_ver_15();
     } else {
         CG_ParseScores_ver_6();
     }
+    cgi.Cvar_Set("ui_hud_sb", va("%d %d %s", cg_sbScore[0], cg_sbScore[1], cg_sbDead));
 }
 
 void CG_InitScoresAPI(clientGameExport_t *cge)

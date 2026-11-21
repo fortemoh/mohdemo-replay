@@ -1,0 +1,21 @@
+// The Reloaded Esc menu, shown for dm_main (cl_uimenus.cpp)
+menu "reloaded_esc" 640 480 NONE 0
+align left top
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle NONE
+virtualres 1
+drawcache 1
+
+resource
+ReloadedMenu
+{
+name "front"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen esc
+}
+
+end.

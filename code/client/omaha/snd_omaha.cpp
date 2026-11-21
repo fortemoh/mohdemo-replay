@@ -93,9 +93,6 @@ static void S_OMAHA_TriggeredMusic_Volume(void);
 static void S_OMAHA_TriggeredMusic_Pause(void);
 static void S_OMAHA_TriggeredMusic_Unpause(void);
 static void S_OMAHA_TriggeredMusic_PlayIntroMusic(void);
-static void S_OMAHA_StopMovieAudio(void);
-static void S_OMAHA_SetupMovieAudio(const char *pszMovieName);
-static int S_OMAHA_CurrentMoviePosition(void);
 
 static bool  s_bFading             = false;
 static float s_fFadeVolume         = 1.f;
@@ -144,6 +141,10 @@ static constexpr int OM_STREAM_REFILL_MAX = 8;
 static constexpr float s_fVolumeGain = 1.f; // = 84.f;
 /* Miles sample volume was 0–127 after ×84; full-knob content ceiling = 127/84. */
 static constexpr float OM_CONTENT_VOLUME_MAX = 127.f / 84.f;
+/* Added in MoHAA Reloaded: the most one of its own sounds (OM_OWN_SOUNDS) may ask for, past that ceiling. */
+static constexpr float OM_OWN_VOLUME_MAX = 8.f;
+/* Added in MoHAA Reloaded: its own sounds' folder (the hitmarker's three, shipped beside the client), none of the game's. */
+static const char OM_OWN_SOUNDS[] = "sound/prom/hitmarkers/";
 
 static cvar_t *s_milesdriver;
 static cvar_t *s_show_cpu;
@@ -720,6 +721,28 @@ static float S_OMAHA_ClampContentVolume(float fVolume)
         return OM_CONTENT_VOLUME_MAX;
     }
     return fVolume;
+}
+
+/*
+==============
+S_OMAHA_ClampSfxVolume
+
+Added in MoHAA Reloaded: a one-shot's content volume. The game's sounds stay at
+the Miles ceiling (S_OMAHA_ClampContentVolume); MoHAA Reloaded's own
+(OM_OWN_SOUNDS) may ask for up to OM_OWN_VOLUME_MAX, so the hitmarker's 10 dB
+over the stock dings' is heard over the player's own shot (as the metal
+branch's driver lets its own sounds past the ceiling, SNM_VolumeOwn).
+==============
+*/
+static float S_OMAHA_ClampSfxVolume(const sfx_t *pSfx, float fVolume)
+{
+    if (Q_stricmpn(pSfx->name, OM_OWN_SOUNDS, sizeof(OM_OWN_SOUNDS) - 1)) {
+        return S_OMAHA_ClampContentVolume(fVolume);
+    }
+    if (fVolume < 0.f) {
+        return 1.f;
+    }
+    return fVolume < OM_OWN_VOLUME_MAX ? fVolume : OM_OWN_VOLUME_MAX;
 }
 
 /*
@@ -1780,8 +1803,9 @@ static void S_OMAHA_Start2DSound(
     }
     pChannel->force_free();
 
-    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. */
-    fVolume = S_OMAHA_ClampContentVolume(fVolume);
+    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. Changed in MoHAA Reloaded:
+     * its own sounds up to OM_OWN_VOLUME_MAX. */
+    fVolume = S_OMAHA_ClampSfxVolume(pSfx, fVolume);
 
     /* Added in Omaha: category mix multipliers; the category also feeds the music duck. */
     pChannel->iCategory = (int)S_OMAHA_ResolveCategory(pSfx, iEntChannel);
@@ -2285,8 +2309,9 @@ void S_OMAHA_StartSound(
         fMaxDist = fMinDist * 64;
     }
 
-    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. */
-    fVolume = S_OMAHA_ClampContentVolume(fVolume);
+    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. Changed in MoHAA Reloaded:
+     * its own sounds up to OM_OWN_VOLUME_MAX. */
+    fVolume = S_OMAHA_ClampSfxVolume(pSfx, fVolume);
 
     /* Added in Omaha: category mix multipliers (local/other for FIRE). */
     cat = S_OMAHA_ResolveCategory(pSfx, iEntChannel);
@@ -5608,56 +5633,6 @@ void S_OMAHA_TriggeredMusic_PlayIntroMusic()
 
 /*
 ==============
-S_OMAHA_StopMovieAudio
-==============
-*/
-void S_OMAHA_StopMovieAudio()
-{
-    omaha.chan_movie.stop();
-}
-
-/*
-==============
-S_OMAHA_SetupMovieAudio
-==============
-*/
-void S_OMAHA_SetupMovieAudio(const char *pszMovieName)
-{
-    char filename[MAX_QPATH];
-
-    S_OMAHA_StopMovieAudio();
-
-    COM_StripExtension(pszMovieName, filename, sizeof(filename));
-    Q_strcat(filename, sizeof(filename), ".mp3");
-
-    if (!omaha.chan_movie.queue_stream(filename)) {
-        COM_StripExtension(pszMovieName, filename, sizeof(filename));
-        Q_strcat(filename, sizeof(filename), ".wav");
-
-        if (!omaha.chan_movie.queue_stream(filename)) {
-            Com_DPrintf("Can't find any matching audio file for movie: %s\n", pszMovieName);
-            return;
-        }
-    }
-
-    omaha.chan_movie.set_gain(S_OMAHA_GetBaseVolume() * 1.5f);
-    omaha.chan_movie.play();
-
-    Com_DPrintf("Movie Audio setup: %s\n", filename);
-}
-
-/*
-==============
-S_OMAHA_CurrentMoviePosition
-==============
-*/
-int S_OMAHA_CurrentMoviePosition()
-{
-    return omaha.chan_movie.sample_ms_offset();
-}
-
-/*
-==============
 omaha_channel::update
 ==============
 */
@@ -5854,8 +5829,17 @@ bool omaha_channel_two_d_stream::set_sfx(sfx_t *pSfx)
     this->pSfx = pSfx;
     Q_strncpyz(this->fileName, pSfx->name, sizeof(this->fileName));
 
+    // Added in the Metal port
+    //  A missing stream was searched for again on every start (every codec in every search path,
+    //  0.25-0.4 ms on the main thread, and a warning each time): remember the failure
+    if (pSfx->iFlags & SFX_FLAG_STREAM_FAILED) {
+        Com_DPrintf("Sound: Failed to load sound file.\n");
+        return false;
+    }
+
     streamHandle = S_CodecLoad(pSfx->name, NULL);
     if (!streamHandle) {
+        pSfx->iFlags |= SFX_FLAG_STREAM_FAILED;
         Com_DPrintf("Sound: Failed to load sound file.\n");
         return false;
     }
@@ -6475,9 +6459,6 @@ const sndHost_t s_sndHostOmaha = {
     S_OMAHA_TriggeredMusic_SetupHandle,
     S_OMAHA_TriggeredMusic_PlayIntroMusic,
     S_OMAHA_TriggeredMusic_Stop,
-    S_OMAHA_SetupMovieAudio,
-    S_OMAHA_StopMovieAudio,
-    S_OMAHA_CurrentMoviePosition,
     S_OMAHA_LoadData,
     S_OMAHA_SaveData,
     S_OMAHA_ReLoad,

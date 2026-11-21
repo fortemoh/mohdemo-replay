@@ -43,7 +43,6 @@ protected:
     void Draw2D(void);
     void DrawFPS(void);
     void DrawProf(void);
-    void PrintSound(int channel, const char *name, float vol, int rvol, float pitch, float base, int& line);
     void DrawSoundOverlay(void);
     void CenterPrint(void);
     void LocationPrint(void);
@@ -64,13 +63,4 @@ public:
     void         InitSubtitle(void);
     void         FrameInitialized(void) override;
     virtual void Pressed(Event *ev);
-};
-
-class ConsoleView : public UIWidget
-{
-public:
-    CLASS_PROTOTYPE(ConsoleView);
-
-protected:
-    void Draw(void) override;
 };

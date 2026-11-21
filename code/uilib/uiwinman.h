@@ -22,14 +22,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #pragma once
 
-class Binding
-{
-public:
-    str binding;
-    int key1;
-    int key2;
-};
-
 class UIWindowManager : public UIWidget
 {
     unsigned int                  m_lastbuttons;
@@ -37,14 +29,16 @@ class UIWindowManager : public UIWidget
     SafePtr<UIWidget>             m_oldview;
     SafePtr<UIWidget>             m_firstResponder;
     class UIWidget               *m_activeControl;
-    class UIWidget               *m_backgroundwidget;
     class UIReggedMaterial       *m_cursor;
     str                           m_cursorname;
     bool                          m_showcursor;
+    // Added: the picture the system's cursor was last set from
+    // (ui_cursorPicture's, NULL the stock one), its size
+    const byte                   *m_cursorPic;
+    int                           m_cursorW, m_cursorH;
     Container<UIReggedMaterial *> m_materiallist;
     bool                          m_amidead;
     class UIWidget               *m_bindactive;
-    Container<Binding *>          bindings;
 
 public:
     CLASS_PROTOTYPE(UIWindowManager);
@@ -58,41 +52,40 @@ public:
     ~UIWindowManager();
 
     void              Init(const UIRect2D& frame, const char *fontname);
-    void              setBackgroundWidget(UIWidget *widget);
     void              UpdateViews(void);
     void              ServiceEvents(void);
     void              setFirstResponder(UIWidget *responder);
     UIWidget         *getFirstResponder(void);
     UIWidget         *ActiveControl(void);
+    // Added: what a left click at pos goes to (ServiceEvents': the key capture's widget, else the one under it)
+    UIWidget         *ClickTarget(UIPoint2D& pos);
     void              ActivateControl(UIWidget *control);
     void              DeactivateCurrentControl(void);
-    UIWidget         *FindNextControl(UIWidget *control);
-    UIWidget         *FindPrevControl(UIWidget *control);
     void              setCursor(const char *string);
     void              showCursor(bool show);
     virtual void      CharEvent(int ch) override;
     virtual qboolean  KeyEvent(int key, unsigned int time) override;
     void              CreateMenus(void);
     UIReggedMaterial *RegisterShader(const str& name);
-    UIReggedMaterial *RefreshShader(const str& name);
     void              CleanupShadersFromList(void);
     void              RefreshShadersFromList(void);
     void              DeactivateCurrentSmart(void);
     bool              IsDead(void);
-    int               AddBinding(str binding);
-    str               GetKeyStringForCommand(str command, int index, qboolean alternate, int *key1, int *key2);
-    void              BindKeyToCommand(str command, int key, int index, qboolean alternate);
     UIWidget         *BindActive(void);
     void              SetBindActive(UIWidget *w);
     virtual void      Shutdown(void) override;
     void              DeactiveFloatingWindows(void);
-    bool              DialogExists(void);
-    void              RemoveAllDialogBoxes(void);
 
 private:
     // Added in OPM
     void refreshCursor();
 };
+
+// Added: the cursor's picture in place of the stock one (the Reloaded UI's,
+// cl_uimenus.cpp): RGBA texels w x h, the hot spot their top-left, and their
+// 2D shader (shader NULL: the texels alone, nothing registered). NULL: the
+// stock picture
+extern const byte *(*ui_cursorPicture)(int *w, int *h, uihandle_t *shader);
 
 extern Event W_MouseExited;
 extern Event W_MouseEntered;

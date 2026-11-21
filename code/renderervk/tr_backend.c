@@ -22,8 +22,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 
 backEndData_t	*backEndData;
+backEndData_t	*backEndDataArray[2];	// r_smp: the render thread reads one, the front end fills the other
 backEndState_t	backEnd;
-
 
 static float	s_flipMatrix[16] = {
 	// convert from our coordinate system (looking down X)
@@ -55,7 +55,8 @@ void R_Bind( image_t *image ) {
 		ri.Printf( PRINT_WARNING, "R_Bind: NULL image\n" );
 		bound = tr.defaultImage;
 	} else {
-		bound = image;
+		// an image in a 2D atlas page is drawn from the page
+		bound = image->atlas ? image->atlas : image;
 		image->UseCount++;
 	}
 
@@ -106,11 +107,16 @@ void R_EnableTexture( qboolean enable ) {
 ** R_Cull
 */
 void R_Cull( int cullType ) {
-	if ( glState.faceCulling == cullType ) {
+	// a mirror view, or a mirrored first-person entity (the left-handed view
+	// weapon) in a view that isn't: the other faces are the front ones
+	qboolean mirror = ( backEnd.viewParms.isMirror != 0 ) != ( backEnd.entityMirrored != 0 );
+
+	if ( glState.faceCulling == cullType && glState.faceCullingMirror == mirror ) {
 		return;
 	}
 
 	glState.faceCulling = cullType;
+	glState.faceCullingMirror = mirror;
 
 	if ( cullType == CT_TWO_SIDED ) 
 	{
@@ -120,7 +126,7 @@ void R_Cull( int cullType ) {
 	{
 		if ( cullType == CT_BACK_SIDED )
 		{
-			if ( backEnd.viewParms.isMirror )
+			if ( mirror )
 			{
 				vk_set_cull( CULL_FRONT );
 			}
@@ -131,7 +137,7 @@ void R_Cull( int cullType ) {
 		}
 		else
 		{
-			if ( backEnd.viewParms.isMirror )
+			if ( mirror )
 			{
 				vk_set_cull( CULL_BACK );
 			}
@@ -492,6 +498,9 @@ qboolean RB_ShaderDepthClamp( const shader_t *shader ) {
 
 // the batch being drawn is of sprites (RB_RenderSpriteSurfList, SF_SPRITE)
 static qboolean rb_spriteBatch;
+// the flares drawn in a 3D view: reactive whatever entity came before
+// (RB_TemporalReactive)
+static qboolean rb_flareDraws;
 
 /*
 ** RB_DrawClamped
@@ -533,9 +542,12 @@ static void RB_SubmitElements( int numVertexes, int numIndexes, const glIndex_t 
 void RB_DrawElements( int numVertexes, int numIndexes, const glIndex_t *indexes ) {
 	// the view weapon's depth hack turns it off in vk_draw
 	vk_set_depth_clamp( RB_DrawClamped() );
+	// the temporal path's reactive effects (sprites included)
+	vk_set_reactive( RB_TemporalReactive( rb_flareDraws || rb_spriteBatch ) );
 	RB_SubmitElements( numVertexes, numIndexes, indexes );
 	// not for the immediate mode draws
 	vk_set_depth_clamp( qfalse );
+	vk_set_reactive( qfalse );
 }
 
 static void RB_SubmitElements( int numVertexes, int numIndexes, const glIndex_t *indexes ) {
@@ -611,6 +623,44 @@ static void RB_Hyperspace( void ) {
 }
 
 
+/*
+=================
+RB_DepthHackProjection
+
+The draws with the depth hack (the first-person weapon, its flash) have the
+weapon's own projection when the view has one (viewParms.vmProjection), and
+its last frame's for the motion vectors; the others the view's
+=================
+*/
+static void RB_DepthHackProjection( qboolean depthHack ) {
+	if ( !backEnd.viewParms.vmProjection ) {
+		return;
+	}
+	RB_SetProjection( depthHack ? backEnd.viewParms.vmProjectionMatrix : backEnd.viewParms.projectionMatrix );
+	if ( backEnd.temporalScene ) {
+		vk_set_prev_projection( depthHack ? RB_TemporalPrevVmProjection() : NULL );
+	}
+}
+
+/*
+=================
+RB_EntityMirrored
+
+Whether the current entity is a first-person one with a mirrored axis (the
+left-handed view weapon, cg_righthand 0): R_Cull turns its culling around.
+Only first-person ones: mirrored effects (splash drops) are drawn as before
+=================
+*/
+static qboolean RB_EntityMirrored( const trRefEntity_t *ent ) {
+	vec3_t c;
+
+	if ( !( ent->e.renderfx & RF_FIRST_PERSON ) ) {
+		return qfalse;
+	}
+	CrossProduct( ent->e.axis[0], ent->e.axis[1], c );
+	return DotProduct( c, ent->e.axis[2] ) < 0;
+}
+
 static void SetViewportAndScissor( void ) {
 	RB_SetProjection( backEnd.viewParms.projectionMatrix );
 
@@ -663,7 +713,7 @@ void RB_BeginDrawingView (void) {
 
 	if (!( backEnd.refdef.rdflags & RDF_NOWORLDMODEL))
 	{
-		if ((backEnd.viewParms.farplane_distance && !tr.skyRendered && !tr.portalRendered) || tr.farclip)
+		if ((backEnd.viewParms.farplane_distance && !backEnd.viewParms.skyRendered && !backEnd.viewParms.portalRendered) || backEnd.viewParms.farclip)
 		{
 			clearBits |= CLEAR_COLOR;
 			Vector4Copy(glState.fFogColor, clearColor);
@@ -825,6 +875,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		//
 		if ( entityNum != oldEntityNum || bStaticModel != oldbStaticModel ) {
 			depthRange = qfalse;
+			backEnd.entityMirrored = qfalse;
 
 			if (bStaticModel) {
 				backEnd.shaderStartTime = 0.0;
@@ -851,6 +902,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 						// hack the depth range to prevent view model from poking into walls
 						depthRange = qtrue;
 					}
+					backEnd.entityMirrored = RB_EntityMirrored( backEnd.currentEntity );
 				}
 				else {
 					backEnd.currentEntity = &tr.worldEntity;
@@ -873,6 +925,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 				} else {
 					vk_set_depth_range (0, 1.0);
 				}
+				RB_DepthHackProjection( depthRange );
 				oldDepthRange = depthRange;
 			}
 
@@ -901,7 +954,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 			}
 			else if (shader->needsLSpherical)
 			{
-				if (tr.refdef.rdflags & RDF_HUD)
+				if (backEnd.refdef.rdflags & RDF_HUD)
 				{
 					backEnd.currentSphere = &backEnd.hudSphere;
 					backEnd.hudSphere.TessFunction = 0;
@@ -948,7 +1001,9 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	RB_SetModelview( backEnd.viewParms.world.modelMatrix );
 	if ( depthRange ) {
 		vk_set_depth_range (0, 1.0);
+		RB_DepthHackProjection( qfalse );
 	}
+	backEnd.entityMirrored = qfalse;
 
 	// the ambient occlusion of a view without blended surfaces
 	if ( backEnd.temporalPrimary ) {
@@ -957,8 +1012,10 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	RB_ShadowFinish();
 	if (!(backEnd.refdef.rdflags & RDF_HUD)) {
+		rb_flareDraws = qtrue;
 		RB_RenderFlares();
 		R_DrawLensFlares();
+		rb_flareDraws = qfalse;
 	}
 
 	if (g_bInfoworldtris)
@@ -974,7 +1031,9 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	RB_ShadowFinish();		
 
 	// add light flares on lights that aren't obscured
+	rb_flareDraws = qtrue;
 	RB_RenderFlares();
+	rb_flareDraws = qfalse;
 }
 
 /*
@@ -1024,6 +1083,7 @@ void RB_RenderSpriteSurfList(drawSurf_t* drawSurfs, int numDrawSurfs) {
 			} else {
                 vk_set_depth_range(0.0, 1.0);
 			}
+			RB_DepthHackProjection( depthRange );
 
             oldDepthRange = depthRange;
         }
@@ -1045,6 +1105,7 @@ void RB_RenderSpriteSurfList(drawSurf_t* drawSurfs, int numDrawSurfs) {
 	// go back to the previous depth range
 	if (depthRange) {
 		vk_set_depth_range(0.0, 1.0);
+		RB_DepthHackProjection( qfalse );
 	}
 }
 
@@ -1131,6 +1192,7 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, int componen
 
 void RE_UploadCinematic (int w, int h, int cols, int rows, const byte *data, int client, qboolean dirty) {
 	// the open 2D batch is drawn with the contents it was made with
+	R_FrontEndSync();
 	R_End2DBatch();
 
 	R_Bind( &tr.scratchImage[client] );
@@ -1275,8 +1337,17 @@ const void	*RB_DrawSurfs( const void *data ) {
 
 	cmd = (const drawSurfsCommand_t *)data;
 
+	// a scene: not 2D (RE_RenderScene sets it without the render thread)
+	backEnd.in2D = qfalse;
 	backEnd.refdef = cmd->refdef;
 	backEnd.viewParms = cmd->viewParms;
+	// r_smp: the terrain slots this scene changed go to the thread's copy of
+	// the pool now, whether it draws terrain or not: the sky portal's scene
+	// draws none and comes first, made within the main view's after its
+	// tessellation (R_Sky_Render), so it carries the main view's slots
+	if ( glConfig.smpActive ) {
+		vk_terrain_shadow_changes( cmd->terrainChanges, cmd->numTerrainChanges, cmd->terrainChangesAll );
+	}
 
 	// the temporal path's scene (tr_temporal.c)
 	RB_TemporalBeginView();
@@ -1294,6 +1365,7 @@ RB_DrawSurfs
 =============
 */
 const void* RB_SpriteSurfs(const void* data) {
+	backEnd.in2D = qfalse;
     const drawSurfsCommand_t* cmd;
 
     // finish any 2D drawing if needed
@@ -1324,6 +1396,9 @@ const void	*RB_DrawBuffer( const void *data ) {
 	const drawBufferCommand_t	*cmd;
 
 	cmd = (const drawBufferCommand_t *)data;
+
+	// a new frame (RE_BeginFrame did this before the render thread)
+	glState.finishCalled = qfalse;
 
 	// only the back buffer can be drawn to
 	vk_begin_frame();
@@ -1469,25 +1544,24 @@ const void	*RB_SwapBuffers( const void *data ) {
 	cmd = (const swapBuffersCommand_t *)data;
 
 	// we measure overdraw by reading back the stencil buffer and
-	// counting up the number of increments that have happened
+	// counting up the number of increments that have happened: recorded
+	// here, summed by the readback writer once the GPU has done it
+	// (tr_init.c), nothing waits for it
+	vk_probe_input( cmd->inputUs );
+	vk_frame_token( cmd->frameToken );
+
 	if ( r_measureOverdraw->integer ) {
-		int i;
-		long sum = 0;
-		unsigned char *stencilReadback;
+		int size[2] = { glConfig.vidWidth, glConfig.vidHeight };
 
-		stencilReadback = ri.Hunk_AllocateTempMemory( glConfig.vidWidth * glConfig.vidHeight );
-		vk_read_pixels( 0, 0, glConfig.vidWidth, glConfig.vidHeight, READ_STENCIL8, stencilReadback );
-
-		for ( i = 0; i < glConfig.vidWidth * glConfig.vidHeight; i++ ) {
-			sum += stencilReadback[i];
-		}
-
-		backEnd.pc.c_overDraw += sum;
-		ri.Hunk_FreeTempMemory( stencilReadback );
+		vk_read_pixels_async( 0, 0, size[0], size[1], READ_STENCIL8, READBACK_OVERDRAW, size, sizeof( size ) );
 	}
 
 
-	if ( !glState.finishCalled ) {
+	// r_finish 1 waits for the GPU once a frame: at the first view, or here
+	// in a frame without one. GL1 waited here in every frame without a view
+	// (menus, loading screens, the console) to keep the driver from queuing
+	// frames; the frame slots' fences bound that already (2 frames in flight)
+	if ( r_finish->integer && !glState.finishCalled ) {
 		vk_finish();
 	}
 
@@ -1514,9 +1588,19 @@ void RB_ExecuteRenderCommands( const void *data ) {
 	t1 = ri.Milliseconds ();
 
 	while ( 1 ) {
-		data = PADP(data, sizeof(void *));
+		int id;
 
-		switch ( *(const int *)data ) {
+		data = PADP(data, sizeof(void *));
+		id = *(const int *)data;
+
+		// r_smp: the 2D draws recorded as commands can leave a batch open
+		// between the commands of the list; the commands below always ran
+		// with it drawn (R_IssueRenderCommands ended it before the list)
+		if ( id != RC_END_OF_LIST && id < RC_END_2D_BATCH ) {
+			R_End2DBatch();
+		}
+
+		switch ( id ) {
 		case RC_SET_COLOR:
 			data = RB_SetColor( data );
 			break;
@@ -1546,6 +1630,27 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_CLEARDEPTH:
 			data = RB_ClearDepth(data);
+			break;
+		case RC_END_2D_BATCH:
+		case RC_2D_SET_COLOR:
+		case RC_2D_STRETCH_PIC:
+		case RC_2D_STRETCH_PIC2:
+		case RC_2D_TILE_PIC:
+		case RC_2D_TILE_PIC_OFFSET:
+		case RC_2D_TRIANGLE_PIC:
+		case RC_2D_STRING:
+		case RC_2D_ADD_BOX:
+		case RC_2D_DRAW_BOX:
+		case RC_2D_DRAW_BOXES:
+		case RC_2D_LINE_LOOP:
+		case RC_2D_WINDOW:
+		case RC_2D_SCISSOR:
+		case RC_2D_SHADER_TIME:
+		case RC_2D_LIST:
+		case RC_2D_POLYGON:
+		case RC_SET_RENDER_TIME:
+		case RC_2D_RADAR_HEIGHT:
+			data = RB_2DCommand( data );
 			break;
 		case RC_END_OF_LIST:
 		default:

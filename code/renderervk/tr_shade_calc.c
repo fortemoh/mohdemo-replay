@@ -1474,8 +1474,8 @@ void RB_CalcParallaxTexCoords( const float *rate, float *st )
 	int i;
 	float offsetS, offsetT;
 
-    offsetS = tr.refdef.vieworg[0] * rate[0];
-    offsetT = tr.refdef.vieworg[1] * rate[1];
+    offsetS = backEnd.refdef.vieworg[0] * rate[0];
+    offsetT = backEnd.refdef.vieworg[1] * rate[1];
     for (i = 0; i < tess.numVertexes; i++, st += 2) {
 		st[0] += offsetS;
 		st[1] += offsetT;
@@ -1750,7 +1750,7 @@ void RB_CalcAlphaFromDotView(unsigned char* colors, float alphaMin, float alphaM
             int i;
         } u;
 
-		VectorCopy(tr.refdef.viewaxis[0], viewInModel);
+		VectorCopy(backEnd.refdef.viewaxis[0], viewInModel);
 		VectorNormalizeFast(viewInModel);
 
         u.f = DotProduct(viewInModel, tess.normal[i]);
@@ -1776,7 +1776,7 @@ void RB_CalcAlphaFromOneMinusDotView(unsigned char* colors, float alphaMin, floa
             int i;
         } u;
 
-		VectorCopy(tr.refdef.viewaxis[0], viewInModel);
+		VectorCopy(backEnd.refdef.viewaxis[0], viewInModel);
 		VectorNormalizeFast(viewInModel);
 
         u.f = DotProduct(viewInModel, tess.normal[i]);
@@ -1923,7 +1923,9 @@ STATIC_FX_LIGHTING, FX_CONSTANT_COLOR, FX_OVERBRIGHT), the first word of
 the wave tables in the skin data, the first word of the light list in the
 frame data, at word 4 the view origin in the model's space,
 tr.overbrightMult, the eye position and the distances of distFade; at word
-16, 3 deforms of 8 words; at word 40, 2 units of 40 words: source, number
+16, 3 deforms of 8 words (with the temporal path's motion vectors, the
+values of the last frame in the words a deform leaves free: RB_FxDeformMotion);
+at word 40, 2 units of 40 words: source, number
 of modifiers, the vectors of tcGen vector, then 4 modifiers of 8 words; at
 word 120 the draw's constant color (FX_CONSTANT_COLOR: the draw has no
 colors per vertex). Light list: the number of lights, then from word 8 one
@@ -1935,6 +1937,7 @@ float-float, color.
 
 #define FX_WORDS			128
 #define FX_COLOR			120
+#define FX_TEX_SLOTS		124		// bindless textures: the slots of the two units (vk_bound_texture_slots)
 #define FX_CONSTANT_COLOR	( 1 << 11 )
 #define FX_OVERBRIGHT		( 1 << 17 )
 
@@ -2167,7 +2170,7 @@ static void RB_FxWaveParams( const waveForm_t *wf, const cvar_t *frequencyData, 
 	}
 }
 
-static void RB_FxDeform( uint32_t *w, const deformStage_t *ds ) {
+static void RB_FxDeform( uint32_t *w, const deformStage_t *ds, int time ) {
 	float *f = (float *)w;
 	float base, amplitude, phase, frequency;
 
@@ -2203,7 +2206,7 @@ static void RB_FxDeform( uint32_t *w, const deformStage_t *ds ) {
 		break;
 	case DEFORM_BULGE:
 		w[0] = FX_DEFORM_BULGE;
-		f[1] = backEnd.refdef.time * ds->bulgeSpeed * 0.001f;
+		f[1] = time * ds->bulgeSpeed * 0.001f;
 		f[2] = ds->bulgeWidth;
 		f[3] = ds->bulgeHeight;
 		break;
@@ -2219,6 +2222,51 @@ static void RB_FxDeform( uint32_t *w, const deformStage_t *ds ) {
 	default:
 		w[0] = 0;
 		break;
+	}
+}
+
+/*
+===============
+RB_FxDeformMotion
+
+A deform of the record (RB_FxDeform), and the values it has at the game
+time of the last frame (seconds and msec before this one) in the words it
+leaves free, which shaders/effects.vert reads for the vertex's last
+position (deformPrev): wave's time * frequency at word 7, flap's scale and
+bulge's phase at word 4, move's offset at words 4 to 6. Returns whether the
+deform moves the vertexes over time
+===============
+*/
+static qboolean RB_FxDeformMotion( uint32_t *w, const deformStage_t *ds, float seconds, int msec ) {
+	uint32_t prev[8];
+	float *f = (float *)w;
+	const float *pf = (const float *)prev;
+	const float shaderTime = tess.shaderTime;
+
+	RB_FxDeform( w, ds, backEnd.refdef.time );
+
+	// the same at the last frame's time (WAVEVALUE reads tess.shaderTime)
+	Com_Memset( prev, 0, sizeof( prev ) );
+	tess.shaderTime = shaderTime - seconds;
+	RB_FxDeform( prev, ds, backEnd.refdef.time - msec );
+	tess.shaderTime = shaderTime;
+
+	switch ( w[0] ) {
+	case FX_DEFORM_WAVE:
+		f[7] = pf[5];
+		return qtrue;
+	case FX_DEFORM_FLAP_S:
+	case FX_DEFORM_FLAP_T:
+	case FX_DEFORM_BULGE:
+		f[4] = pf[1];
+		return qtrue;
+	case FX_DEFORM_MOVE:
+		f[4] = pf[1];
+		f[5] = pf[2];
+		f[6] = pf[3];
+		return qtrue;
+	default:
+		return qfalse;
 	}
 }
 
@@ -2379,7 +2427,7 @@ static void RB_FxUnit( uint32_t *w, const textureBundle_t *bundle ) {
 			break;
 		}
 		case TMOD_PARALLAX:
-			RB_FxAdd( m, tr.refdef.vieworg[0] * tmi->rate[0], tr.refdef.vieworg[1] * tmi->rate[1] );
+			RB_FxAdd( m, backEnd.refdef.vieworg[0] * tmi->rate[0], backEnd.refdef.vieworg[1] * tmi->rate[1] );
 			break;
 		case TMOD_WAVETRANS:
 			RB_FxAdd( m, EvalWaveForm( &tmi->wave ), 0 );
@@ -2406,7 +2454,8 @@ per vertex): returns it (word / 8 in the frame data), -1 when the frame data
 is full (RB_StaticBatchAllowed made sure it isn't)
 ===============
 */
-int RB_StaticFxRecord( const shaderStage_t *pStage, int colorFx, const staticFxUnit_t units[NUM_TEXTURE_BUNDLES], const float *constantColor ) {
+int RB_StaticFxRecord( const shaderStage_t *pStage, int colorFx, const staticFxUnit_t units[NUM_TEXTURE_BUNDLES], const float *constantColor,
+	qboolean *motion ) {
 	uint32_t local[FX_WORDS];
 	uint32_t lightLocal[8 + 8 * MAX_SCENE_DLIGHTS];
 	uint32_t *w;
@@ -2418,6 +2467,9 @@ int RB_StaticFxRecord( const shaderStage_t *pStage, int colorFx, const staticFxU
 	Com_Memset( w, 0, FX_WORDS * sizeof( *w ) );
 	lightWords = 0;
 
+	// the textures bound for the draw (the record is compared whole below,
+	// so draws with other textures get records of their own)
+	w[FX_TEX_SLOTS] = vk_bound_texture_slots();
 	w[0] = colorFx;
 	w[1] = fxTables;
 	VectorCopy( backEnd.ori.viewOrigin, &f[4] );
@@ -2432,9 +2484,16 @@ int RB_StaticFxRecord( const shaderStage_t *pStage, int colorFx, const staticFxU
 
 	// the deforms of the generic stage iterator (RB_StaticBatchAllowed
 	// takes no others with deforms)
+	*motion = qfalse;
 	if ( tess.currentStageIteratorFunc == RB_StageIteratorGeneric ) {
+		float seconds;
+		int msec;
+
+		RB_TemporalDeformTime( &seconds, &msec );
 		for ( i = 0; i < tess.shader->numDeforms; i++ ) {
-			RB_FxDeform( &w[16 + i * 8], &tess.shader->deforms[i] );
+			if ( RB_FxDeformMotion( &w[16 + i * 8], &tess.shader->deforms[i], seconds, msec ) ) {
+				*motion = qtrue;
+			}
 		}
 		w[0] |= tess.shader->numDeforms;
 	}

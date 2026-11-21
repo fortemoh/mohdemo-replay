@@ -154,6 +154,15 @@ typedef struct glconfig_t;*/
         void (*Rend_FreeRawImage)(byte *pic);
 
         void (*Rend_Set2DStartTime)(float startTime);
+        // Added: an image made in memory (uibake.cpp)
+        qhandle_t (*Rend_RegisterImage2D)(const char *name, byte *rgba, int width, int height);
+        // Added: 2D lists, what widgets drew kept (the draw cache, uiwidget.cpp)
+        int (*Rend_Begin2DList)(int handle);
+        void (*Rend_End2DList)(void);
+        void (*Rend_Draw2DList)(int handle);
+        void (*Rend_Free2DList)(int handle);
+        // Added: Tab in the ~ console, the engine's completion of a whole line (cl_ui.cpp)
+        void (*Cmd_CompleteLine)(char *line, int size);
     } uiimport_t;
 
 #if 1
@@ -203,22 +212,13 @@ typedef struct uiexport_s {
     void        UI_Init(void);
     void        UI_Shutdown(void);
     void        UI_InitExports();
-    void        UI_StartStageKeyEvent(void);
-    void        UI_GetMouseState(int *mouseX, int *mouseY, int *flags);
     int         UI_GetCvarInt(const char *name, int def);
-    float       UI_GetCvarFloat(const char *name, float def);
     const char *UI_GetCvarString(const char *cvar, char *def);
     cvar_t     *UI_FindCvar(const char *cvar);
-    void        UI_SetCvarInt(const char *cvar, int value);
-    void        UI_SetCvarFloat(const char *cvar, float value);
-    void        UI_ListFiles(const char *filespec);
-    const char *UI_ConfigString(int index);
     void        UI_UpdateCenterPrint(const char *s, float alpha);
     void        UI_ClearCenterPrint(void);
     void        UI_UpdateLocationPrint(int x, int y, const char *s, float alpha);
-    void        UI_SetupFiles(void);
     void        UI_PrintConsole(const char *msg);
-    void        UI_PrintDeveloperConsole(const char *msg);
 
 #ifdef __cplusplus
 }

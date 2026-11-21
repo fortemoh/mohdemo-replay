@@ -85,6 +85,12 @@ void R_PerformanceCounters( void ) {
 		ri.Printf( PRINT_ALL, "flare adds:%i tests:%i renders:%i\n", 
 			backEnd.pc.c_flareAdds, backEnd.pc.c_flareTests, backEnd.pc.c_flareRenders );
 	}
+	else if (r_speeds->integer == 7 )
+	{
+		// the frame's draws, those of 2D (the HUD, the UI, the console) apart
+		ri.Printf( PRINT_ALL, "draws:%i 2d draws:%i 2d verts:%i\n",
+			backEnd.pc.c_draws, backEnd.pc.c_draws2D, backEnd.pc.c_vertexes2D );
+	}
 
 	Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
@@ -99,8 +105,11 @@ R_IssueRenderCommands
 void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
 	renderCommandList_t	*cmdList;
 
-	// the 2D draws made before come first
-	R_End2DBatch();
+	// the 2D draws made before come first (r_smp: the thread ends them, at
+	// RC_END_2D_BATCH or the swap)
+	if ( !glConfig.smpActive ) {
+		R_End2DBatch();
+	}
 
 	cmdList = &backEndData->commands;
 	assert(cmdList);
@@ -117,7 +126,26 @@ void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
 	// actually start the commands going
 	if ( !r_skipBackEnd->integer ) {
 		// let it start on the new batch
-		RB_ExecuteRenderCommands( cmdList->cmds );
+		if ( glConfig.smpActive ) {
+			// a list with a screenshot, a video frame or the overdraw
+			// readback uses the engine's temporary memory and files on the
+			// thread: the front end waits for it (R_QueueScreenshot)
+			qboolean wait = backEndData->syncAfterIssue;
+
+			backEndData->syncAfterIssue = qfalse;
+			if ( runPerformanceCounters ) {
+				// the frame's list (RE_EndFrame), and the waits before the
+				// next frame's input
+				R_IssueFrameThreaded( cmdList->cmds );
+			} else {
+				R_IssueRenderCommandsThreaded( cmdList->cmds );
+			}
+			if ( wait ) {
+				R_SyncRenderThread();
+			}
+		} else {
+			RB_ExecuteRenderCommands( cmdList->cmds );
+		}
 	}
 }
 
@@ -133,8 +161,28 @@ open 2D batch is drawn first (see tr_draw.c)
 ====================
 */
 void R_IssuePendingRenderCommands( void ) {
-	R_End2DBatch();
+	// a command's body on the render thread: the list runs in order, and the
+	// open 2D batch is drawn here as it was (R_End2DBatch below)
+	if ( R_OnRenderThread() ) {
+		R_End2DBatch();
+		return;
+	}
+	if ( glConfig.smpActive ) {
+		// the thread runs what is queued, the open 2D batch last, and the
+		// front end owns the back end's state until the next hand-over
+		if ( tr.registered && backEndData->commands.used ) {
+			end2DBatchCommand_t *cmd = R_GetCommandBufferReserved( sizeof( *cmd ), 0 );
 
+			if ( cmd ) {
+				cmd->commandId = RC_END_2D_BATCH;
+			}
+			R_IssueRenderCommands( qfalse );
+		}
+		R_SyncRenderThread();
+		R_End2DBatch();
+		return;
+	}
+	R_End2DBatch();
 	if ( !tr.registered || !backEndData->commands.used ) {
 		return;
 	}
@@ -201,6 +249,15 @@ void	R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	cmd->refdef = tr.refdef;
 	cmd->viewParms = tr.viewParms;
+	cmd->viewParms.skyRendered = tr.skyRendered;
+	cmd->viewParms.portalRendered = tr.portalRendered;
+	cmd->viewParms.farclip = tr.farclip;
+	// r_smp: the terrain slots this scene changed, for the thread's pool copy
+	cmd->terrainChanges = backEndData->terrainChanges + backEndData->firstTerrainChange;
+	cmd->numTerrainChanges = backEndData->numTerrainChanges - backEndData->firstTerrainChange;
+	cmd->terrainChangesAll = backEndData->terrainChangesAll;
+	backEndData->firstTerrainChange = backEndData->numTerrainChanges;
+	backEndData->terrainChangesAll = qfalse;
 }
 
 
@@ -224,6 +281,9 @@ void	R_AddSpriteSurfCmd(drawSurf_t* drawSurfs, int numDrawSurfs) {
 
     cmd->refdef = tr.refdef;
     cmd->viewParms = tr.viewParms;
+    cmd->terrainChanges = NULL;
+    cmd->numTerrainChanges = 0;
+    cmd->terrainChangesAll = qfalse;
 }
 
 
@@ -345,14 +405,26 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 	if ( !tr.registered ) {
 		return;
 	}
+	// the screenshots, video frames and overdraw sums the GPU has done
+	R_ProcessReadbacks();
+
 	// the UI also draws between frames (when a menu is pushed): drawn before
 	// the frame begins, as each of those draws was
-	R_End2DBatch();
-	glState.finishCalled = qfalse;
+	if ( glConfig.smpActive ) {
+		end2DBatchCommand_t *batchCmd;
+
+		// with vsync the frame before was waited for at its hand-over
+		// (R_IssueFrameThreaded), before this frame read its input
+		batchCmd = R_GetCommandBuffer( sizeof( *batchCmd ) );
+		if ( batchCmd ) {
+			batchCmd->commandId = RC_END_2D_BATCH;
+		}
+	} else {
+		R_End2DBatch();
+	}
 
 	tr.frameCount++;
 	tr.frameSceneNum = 0;
-	g_nStaticSurfaces = 0;
 
 	//
 	// do overdraw measurement
@@ -375,6 +447,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 		{
 			// for the stencil readback at the end of the frame
 			// (RB_SwapBuffers), before anything starts the frame
+			R_FrontEndSync();
 			vk_want_depth_reads();
 			R_IssuePendingRenderCommands();
 			vk_set_stencil_test( qtrue );
@@ -434,6 +507,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 			if(r_anaglyphMode->modified)
 			{
 				// clear the back buffer
+				R_FrontEndSync();
 				vk_set_color_mask(qtrue, qtrue, qtrue, qtrue);
 				vk_clear(CLEAR_COLOR, colorBlack);
 				
@@ -481,6 +555,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 
 			if(r_anaglyphMode->modified)
 			{
+				R_FrontEndSync();
 				vk_set_color_mask(qtrue, qtrue, qtrue, qtrue);
 				r_anaglyphMode->modified = qfalse;
 			}
@@ -514,8 +589,12 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 		return;
 	}
 	cmd->commandId = RC_SWAP_BUFFERS;
+	cmd->inputUs = vk_probe_input_time();
+	cmd->frameToken = ri.FrameToken();
 
 	R_IssueRenderCommands( qtrue );
+	vk_probe_frame_end();
+	R_2DListsEndFrame();
 
 	R_InitNextFrame();
 
@@ -524,9 +603,11 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 	}
 	tr.frontEndMsec = 0;
 	if ( backEndMsec ) {
-		*backEndMsec = backEnd.pc.msec;
+		*backEndMsec = glConfig.smpActive ? R_RenderThreadBackEndMsec() : backEnd.pc.msec;
 	}
-	backEnd.pc.msec = 0;
+	if ( !glConfig.smpActive ) {
+		backEnd.pc.msec = 0;
+	}
 }
 
 /*
@@ -549,8 +630,6 @@ void RE_TakeVideoFrame( int width, int height,
 	}
 
 	cmd->commandId = RC_VIDEOFRAME;
-	// HDR output: the video gets the SDR frame
-	vk_sdr_frame();
 
 	cmd->width = width;
 	cmd->height = height;

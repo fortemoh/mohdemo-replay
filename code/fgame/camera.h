@@ -38,7 +38,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define AUTOMATIC         (1 << 2)
 #define NO_TRACE          (1 << 3)
 #define NO_WATCH          (1 << 4)
-#define LEVEL_EXIT        (1 << 5)
 
 extern Event EV_Camera_CameraThink;
 extern Event EV_Camera_StartMoving;
@@ -287,7 +286,6 @@ public:
     float    AutomaticStart(Entity *player);
     float    AutomaticStop(Entity *player);
     qboolean IsAutomatic(void);
-    qboolean IsLevelExit(void);
     void     SetAutoStateEvent(Event *ev);
     void     SetAutoRadiusEvent(Event *ev);
     void     SetAutoStartTimeEvent(Event *ev);

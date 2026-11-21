@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "g_local.h"
 #include "bg_local.h"
+#include "bg_speed.h"
 #include "g_spawn.h"
 #include "g_phys.h"
 #include "entity.h"
@@ -65,76 +66,6 @@ ScriptDelegate Player::scriptDelegate_spawned("player_spawned", "The player has 
 ScriptDelegate Player::scriptDelegate_damage("player_damaged", "The player got hit");
 ScriptDelegate Player::scriptDelegate_kill("player_killed", "The player got killed");
 ScriptDelegate Player::scriptDelegate_textMessage("player_textMessage", "The player just sent a text message");
-
-//
-// mohaas 2.0 and above
-//
-const char *pInstantMsgEng[6][9] = {
-    {"Good job team!",
-     "Alright!", "We've done it!",
-     "Wooohoo!", "Objective achieved.",
-     "We've completed an objective.", "We've lost an objective!",
-     "The enemy has overrun our objective!", NULL},
-    {"Squad, move in!",
-     "Squad, fall back!", "Squad, attack right flank!",
-     "Squad, attack left flank!", "Squad, hold this position!",
-     "Squad, covering fire!", "Squad, regroup!",
-     "Squad, split up!", NULL},
-    {"Cover me!",
-     "I'll cover you!", "Follow me!",
-     "You take point.", "Taking Fire!  Need some help!",
-     "Get ready to move in on my signal.", "Attack!",
-     "Open fire!", NULL},
-    {"Yes sir!",
-     "No sir!", "Enemy Spotted.",
-     "Sniper!", "Grenade! Take Cover!",
-     "Area Clear.", "Thanks.",
-     "I owe you one.", NULL},
-    {"Who wants more?!",
-     "Never send boys to do a man's job.", "This is too easy!",
-     "You mess with the best, you die like the rest.", "Watch that friendly fire!",
-     "Hey!  I'm on your team!", "Come on out you cowards!",
-     "Where are you hiding?", NULL},
-    // Added in 2.30
-    {"Guard our jail!",
-     "Capture the enemy jail!", "I'm defending our jail!",
-     "I'm attacking the enemy jail!", "Rescue the Prisoners!",
-     "The enemy is attacking our jail!"}
-};
-
-//
-// for mohaa version 1.11 and below
-//
-const char *pInstantMsgEng_ver6[5][9] = {
-    {"Squad, move in!",
-     "Squad, fall back!", "Squad, attack right flank!",
-     "Squad, attack left flank!", "Squad, hold this position!",
-     "Squad, covering fire!", "Squad, regroup!",
-     "", ""},
-    {
-     "Cover me!", "I'll cover you!",
-     "Follow me!", "You take point.",
-     "You take the lead.", "Taking Fire!  Need some help!",
-     "Charge!", "Attack!",
-     "Open fire!", },
-    {
-     "Yes sir!", "No sir!",
-     "Enemy Spotted.", "Sniper!",
-     "Grenade! Take Cover!", "Area Clear.",
-     "Great Shot!", "Thanks.",
-     "I owe you one.", },
-    {
-     "Is that all you've got?", "I think they are all out of real men!",
-     "Go on and run, you yellow-bellies!", "They're a bunch of cowards!",
-     "Come back when you've had some target practice!", "Come prepared next time!",
-     "Try again!", "I've seen French school girls shoot better!",
-     "That made a mess.", },
-    {"He's going to get us killed!",
-     "A lot of good men are going to die because of his poor leadership", "Good riddance!",
-     "That guy is going to get us all killed!", "Hey buddy, get down!",
-     "Stay out of my foxhole, pal!", "Find your own hiding place!",
-     "Get out of my way!", ""}
-};
 
 Event EV_Player_DumpState
 (
@@ -827,6 +758,17 @@ Event EV_Player_Spectator
     NULL,
     NULL,
     "Become a spectator",
+    EV_NORMAL
+);
+Event EV_Player_SpectateMode
+(
+    "spectatemode",
+    EV_CONSOLE,
+    "I",
+    "firstperson",
+    "Added in Reloaded. Sets how a followed player is viewed while spectating:\n"
+    "1 = through their eyes (first person), 0 = from behind (third person).\n"
+    "Without an argument, toggles between the two.",
     EV_NORMAL
 );
 Event EV_Player_JoinArena
@@ -1958,6 +1900,7 @@ CLASS_DECLARATION(Sentient, Player, "player") {
     {&EV_Player_SetStateFile,             &Player::SetStateFile                 },
     {&EV_Player_ShowEnt,                  &Player::ShowEntity                   },
     {&EV_Player_Spectator,                &Player::Spectator                    },
+    {&EV_Player_SpectateMode,             &Player::SpectateMode                 },
     {&EV_Player_StopLocalSound,           &Player::StopLocalSound               },
     {&EV_Player_Userinfo,                 &Player::Userinfo                     },
 #ifdef OPM_FEATURES
@@ -2023,6 +1966,10 @@ Player::Player()
     m_bAllowFighting           = false;
     m_bReady                   = false;
     m_iPlayerSpectating        = 0;
+    m_iSpectateFollowMode      = -1;
+    m_fSpectateBobPhase        = 0;
+    m_fSpectateBobAmp          = 0;
+    m_iSpectateBobClient       = -1;
     dm_team                    = TEAM_NONE;
     m_fTeamSelectTime          = -30;
     votecount                  = 0;
@@ -4084,7 +4031,7 @@ void Player::ClientMove(usercmd_t *ucmd)
         }
 
         if (m_iMovePosFlags & MPF_POSITION_CROUCHING) {
-            client->ps.speed = (float)client->ps.speed * sv_crouchspeedmult->value;
+            client->ps.speed = BG_SpeedTimes(client->ps.speed, sv_crouchspeedmult->value);
         }
 
         pWeap = GetActiveWeapon(WEAPON_MAIN);
@@ -4093,15 +4040,15 @@ void Player::ClientMove(usercmd_t *ucmd)
             // Also use the weapon movement speed
             //
             if (!IsZoomed()) {
-                client->ps.speed = (float)client->ps.speed * pWeap->GetMovementSpeed();
+                client->ps.speed = BG_SpeedTimes(client->ps.speed, pWeap->GetMovementSpeed());
             } else {
-                client->ps.speed = (float)client->ps.speed * pWeap->GetZoomMovement();
+                client->ps.speed = BG_SpeedTimes(client->ps.speed, pWeap->GetZoomMovement());
             }
         }
     }
 
     if (g_gametype->integer != GT_SINGLE_PLAYER) {
-        client->ps.speed = (int)((float)client->ps.speed * sv_dmspeedmult->value);
+        client->ps.speed = BG_SpeedTimes(client->ps.speed, sv_dmspeedmult->value);
     }
 
     //====
@@ -7179,16 +7126,22 @@ void Player::FinishMove(void)
 
 void Player::CopyStats(Player *player)
 {
-    gentity_t *ent;
-    int        i;
-
     origin = player->origin;
+    // Changed in Reloaded
+    //  The delta angles are kept relative to our own input instead of being copied,
+    //  so leaving first-person spectate keeps looking where the followed player was looking
     SetViewAngles(player->GetViewAngles());
 
     client->ps.bobCycle = player->client->ps.bobCycle;
 
     client->ps.pm_flags |=
         player->client->ps.pm_flags & (PMF_DUCKED | PMF_VIEW_DUCK_RUN | PMF_VIEW_JUMP_START | PMF_VIEW_PRONE);
+
+    // Added in Reloaded
+    //  See exactly what the followed player sees when they are on a turret,
+    //  in a vehicle or in a scripted camera
+    client->ps.pm_flags &= ~(PMF_CAMERA_VIEW | PMF_TURRET);
+    client->ps.pm_flags |= player->client->ps.pm_flags & (PMF_CAMERA_VIEW | PMF_TURRET);
 
     memcpy(&client->ps.stats, &player->client->ps.stats, sizeof(client->ps.stats));
     memcpy(&client->ps.activeItems, &player->client->ps.activeItems, sizeof(client->ps.activeItems));
@@ -7198,6 +7151,9 @@ void Player::CopyStats(Player *player)
 
     VectorCopy(player->client->ps.origin, client->ps.origin);
     VectorCopy(player->client->ps.velocity, client->ps.velocity);
+    // Added in Reloaded
+    //  The server culls snapshot entities from the eye position
+    VectorCopy(player->client->ps.vEyePos, client->ps.vEyePos);
 
     client->ps.iViewModelAnim        = player->client->ps.iViewModelAnim;
     client->ps.iViewModelAnimChanged = player->client->ps.iViewModelAnimChanged;
@@ -7205,20 +7161,18 @@ void Player::CopyStats(Player *player)
     client->ps.gravity = player->client->ps.gravity;
     client->ps.speed   = player->client->ps.speed;
 
-    // copy angles
-    memcpy(&client->ps.delta_angles, &player->client->ps.delta_angles, sizeof(client->ps.delta_angles));
-
     memcpy(&client->ps.blend, &player->client->ps.blend, sizeof(client->ps.blend));
     memcpy(&client->ps.damage_angles, &player->client->ps.damage_angles, sizeof(client->ps.damage_angles));
-    memcpy(&client->ps.viewangles, &player->client->ps.viewangles, sizeof(client->ps.delta_angles));
+    VectorCopy(player->client->ps.viewangles, client->ps.viewangles);
 
-    // copy camera stuff
-    //memcpy( &client->ps.camera_origin, &player->client->ps.camera_origin, sizeof( client->ps.camera_origin ) );
-    //memcpy( &client->ps.camera_angles, &player->client->ps.camera_angles, sizeof( client->ps.camera_angles ) );
-    //memcpy( &client->ps.camera_offset, &player->client->ps.camera_offset, sizeof( client->ps.camera_offset ) );
-    //memcpy( &client->ps.camera_posofs, &player->client->ps.camera_posofs, sizeof( client->ps.camera_posofs ) );
-    //client->ps.camera_time = player->client->ps.camera_time;
-    //client->ps.camera_flags = player->client->ps.camera_flags;
+    // Added in Reloaded
+    //  copy camera stuff
+    VectorCopy(player->client->ps.camera_origin, client->ps.camera_origin);
+    VectorCopy(player->client->ps.camera_angles, client->ps.camera_angles);
+    VectorCopy(player->client->ps.camera_offset, client->ps.camera_offset);
+    VectorCopy(player->client->ps.camera_posofs, client->ps.camera_posofs);
+    client->ps.camera_time  = player->client->ps.camera_time;
+    client->ps.camera_flags = player->client->ps.camera_flags;
 
     client->ps.fLeanAngle = player->client->ps.fLeanAngle;
     client->ps.fov        = player->client->ps.fov;
@@ -7229,48 +7183,118 @@ void Player::CopyStats(Player *player)
     client->ps.groundEntityNum = player->client->ps.groundEntityNum;
     memcpy(&client->ps.groundTrace, &player->client->ps.groundTrace, sizeof(trace_t));
 
-    edict->s.eFlags &= ~EF_UNARMED;
-    edict->r.svFlags &= ~SVF_NOCLIENT;
-    edict->s.renderfx &= ~RF_DONTDRAW;
+    // Changed in Reloaded
+    //  Only prediction is turned off. The cgame also takes the frozen and no-move flags
+    //  as standing still, with no view bob or weapon sway, so they come from the followed player
+    client->ps.pm_flags &= ~(PMF_FROZEN | PMF_NO_MOVE);
+    client->ps.pm_flags |= player->client->ps.pm_flags & (PMF_FROZEN | PMF_NO_MOVE);
+    client->ps.pm_flags |= PMF_NO_PREDICTION;
 
-    player->edict->r.svFlags |= SVF_NOTSINGLECLIENT;
-    player->edict->r.singleClient = client->ps.clientNum;
+    // Added in Reloaded
+    //  Show who is being watched, through the HUD's player info (name and health)
+    client->ps.stats[STAT_INFOCLIENT] = player->edict - g_entities;
+    if (player->max_health > 0) {
+        float percent = player->health / player->max_health * 100.0f;
 
-    edict->r.svFlags |= SVF_SINGLECLIENT;
-    edict->r.singleClient = client->ps.clientNum;
-
-    client->ps.pm_flags |= PMF_FROZEN | PMF_NO_MOVE | PMF_NO_PREDICTION;
-
-    memcpy(&edict->s.frameInfo, &player->edict->s.frameInfo, sizeof(edict->s.frameInfo));
-
-    DetachAllChildren(NULL);
-
-    for (i = 0; i < MAX_MODEL_CHILDREN; i++) {
-        Entity *dest;
-
-        if (player->children[i] == ENTITYNUM_NONE) {
-            continue;
+        if (percent > 0.0f && percent < 1.0f) {
+            percent = 1.0f;
         }
 
-        ent = g_entities + player->children[i];
-
-        if (!ent->inuse || !ent->entity) {
-            continue;
-        }
-
-        dest = new Entity;
-
-        CloneEntity(dest, ent->entity);
-
-        dest->edict->s.modelindex   = ent->entity->edict->s.modelindex;
-        dest->edict->tiki           = ent->entity->edict->tiki;
-        dest->edict->s.actionWeight = ent->entity->edict->s.actionWeight;
-        memcpy(&dest->edict->s.frameInfo, &ent->entity->edict->s.frameInfo, sizeof(dest->edict->s.frameInfo));
-        dest->CancelPendingEvents();
-        dest->attach(entnum, ent->entity->edict->s.tag_num);
-
-        dest->PostEvent(EV_DetachAllChildren, level.frametime);
+        client->ps.stats[STAT_INFOCLIENT_HEALTH] = percent;
+    } else {
+        client->ps.stats[STAT_INFOCLIENT_HEALTH] = 0;
     }
+
+    // Changed in Reloaded
+    //  The followed player's own entity and weapons used to be mirrored on this player
+    //  (cloning every attached weapon each frame, and hiding their body from a single spectator).
+    //  Instead, the server presents this client's snapshots as the followed player's:
+    //  their entity becomes the first-person model, with their real weapons attached,
+    //  for any number of spectators. See SVF_VIEWCLIENT.
+    edict->r.svFlags |= SVF_VIEWCLIENT;
+    edict->r.viewClient = player->edict - g_entities;
+
+    // Added in Reloaded
+    AddStockClientViewBob(player);
+}
+
+/*
+====================
+AddStockClientViewBob
+
+Added in Reloaded
+The original cgame only bobs the view of a player it predicts the movement of:
+it learns they are walking from its own prediction, which is off when spectating.
+Our cgame works it out from the ground entity, so it bobs on its own. For original
+clients, the bob of CG_OffsetFirstPersonView is worked out here from the followed
+player's movement and added to the view origin sent to this client.
+====================
+*/
+void Player::AddStockClientViewBob(Player *player)
+{
+    const playerState_t *ps = &player->client->ps;
+    int                  iClient = player->edict - g_entities;
+    vec3_t               vVelocity;
+    vec3_t               vAngles;
+    vec3_t               vLeft;
+    float                fVel;
+    float                fPhase;
+
+    if (!g_spectatefollow_stockbob->integer || *Info_ValueForKey(client->pers.userinfo, "shortversion")) {
+        // our clients send their version, and bob on their own
+        m_iSpectateBobClient = -1;
+        return;
+    }
+
+    if (iClient != m_iSpectateBobClient) {
+        m_iSpectateBobClient = iClient;
+        m_fSpectateBobPhase  = 0;
+        m_fSpectateBobAmp    = 0;
+    }
+
+    if (ps->walking && (ps->pm_flags & (PMF_FROZEN | PMF_NO_MOVE))) {
+        VectorClear(vVelocity);
+    } else {
+        VectorCopy(ps->velocity, vVelocity);
+    }
+
+    if (ps->walking) {
+        fVel   = VectorLength(vVelocity);
+        fPhase = fVel * 0.0015 + 0.9;
+        m_fSpectateBobPhase = fmod(m_fSpectateBobPhase + level.frametime * 2 * M_PI * fPhase, 2 * M_PI);
+
+        if (m_fSpectateBobAmp) {
+            m_fSpectateBobAmp = fVel;
+        } else {
+            m_fSpectateBobAmp = fVel * 0.5;
+        }
+
+        if (ps->fLeanAngle) {
+            m_fSpectateBobAmp *= 0.75;
+        }
+
+        m_fSpectateBobAmp *= (1.0 - fabs(AngleNormalize180(ps->viewangles[0])) * (1.0 / 90.0) * 0.5) * 0.5;
+    } else if (m_fSpectateBobAmp > 0) {
+        m_fSpectateBobAmp -= level.frametime * m_fSpectateBobAmp * 2;
+        if (m_fSpectateBobAmp < 0.1) {
+            m_fSpectateBobAmp = 0;
+        }
+    }
+
+    if (m_fSpectateBobAmp <= 0) {
+        return;
+    }
+
+    VectorSet(vAngles, ps->viewangles[0], ps->viewangles[1], 0);
+    AngleVectorsLeft(vAngles, NULL, vLeft, NULL);
+
+    // side to side
+    fPhase = Q_clamp_float(sin(m_fSpectateBobPhase) * m_fSpectateBobAmp * 0.03, -16, 16);
+    VectorMA(client->ps.origin, fPhase, vLeft, client->ps.origin);
+
+    // up and down
+    fPhase = Q_clamp_float((fabs(sin(m_fSpectateBobPhase - 0.94)) - 0.5) * m_fSpectateBobAmp * 0.06, -16, 16);
+    client->ps.origin[2] += fPhase;
 }
 
 void Player::UpdateStats(void)
@@ -7284,17 +7308,14 @@ void Player::UpdateStats(void)
     // Health
     //
 
-    if (g_spectatefollow_firstperson->integer && IsSpectator() && m_iPlayerSpectating != 0) {
-        //
-        // Added in OPM
-        //  First-person spectate
-        //
-        gentity_t *ent = g_entities + (m_iPlayerSpectating - 1);
-
-        if (ent->inuse && ent->entity && ent->entity->deadflag <= DEAD_DYING) {
-            CopyStats((Player *)ent->entity);
-            return;
-        }
+    //
+    // Added in OPM
+    //  First-person spectate
+    //
+    Player *pFirstPersonTarget = GetFirstPersonSpectateTarget();
+    if (pFirstPersonTarget) {
+        CopyStats(pFirstPersonTarget);
+        return;
     }
 
     if (g_gametype->integer == GT_SINGLE_PLAYER) {
@@ -7774,20 +7795,6 @@ void Player::UpdateReverb(void)
 void Player::UpdateMisc(void)
 {
     //
-    // clear out the level exit flag
-    //
-    client->ps.pm_flags &= ~PMF_LEVELEXIT;
-
-    //
-    // see if our camera is the level exit camera
-    //
-    if (camera && camera->IsLevelExit()) {
-        client->ps.pm_flags |= PMF_LEVELEXIT;
-    } else if (level.near_exit) {
-        client->ps.pm_flags |= PMF_LEVELEXIT;
-    }
-
-    //
     // do anything special for respawns
     //
     if (client->ps.pm_flags & PMF_RESPAWNED) {
@@ -7810,20 +7817,18 @@ and right after spawning
 */
 void Player::EndFrame(void)
 {
+    // Added in Reloaded
+    //  Set again by CopyStats() if this player is spectating someone in first person
+    edict->r.svFlags &= ~SVF_VIEWCLIENT;
+
     FinishMove();
     UpdateStats();
     UpdateMusic();
     UpdateReverb();
     UpdateMisc();
 
-    if (!g_spectatefollow_firstperson->integer || !IsSpectator() || !m_iPlayerSpectating) {
+    if (!(edict->r.svFlags & SVF_VIEWCLIENT)) {
         SetupView();
-    } else {
-        gentity_t *ent = g_entities + m_iPlayerSpectating - 1;
-
-        if (!ent->inuse || !ent->entity || ent->entity->deadflag >= DEAD_DEAD) {
-            SetupView();
-        }
     }
 }
 
@@ -9471,37 +9476,122 @@ void Player::GetSpectateFollowOrientation(Player *pPlayer, Vector& vPos, Vector&
     Vector  start;
     trace_t trace;
 
-    if (!g_spectatefollow_firstperson->integer) {
-        // spectating a player
-        vAng = pPlayer->GetVAngles();
+    // Changed in Reloaded
+    //  This is only the third-person view now,
+    //  first-person spectate doesn't go through the camera (see CopyStats)
 
-        AngleVectors(vAng, forward, right, up);
+    // spectating a player
+    vAng = pPlayer->GetVAngles();
 
-        vCamOfs = pPlayer->origin;
-        vCamOfs[2] += pPlayer->viewheight;
+    AngleVectors(vAng, forward, right, up);
 
-        vCamOfs += forward * g_spectatefollow_forward->value;
-        vCamOfs += right * g_spectatefollow_right->value;
-        vCamOfs += up * g_spectatefollow_up->value;
+    vCamOfs = pPlayer->origin;
+    vCamOfs[2] += pPlayer->viewheight;
 
-        if (pPlayer->client->ps.fLeanAngle != 0.0f) {
-            vCamOfs += pPlayer->client->ps.fLeanAngle * 0.65f * right;
-        }
+    vCamOfs += forward * g_spectatefollow_forward->value;
+    vCamOfs += right * g_spectatefollow_right->value;
+    vCamOfs += up * g_spectatefollow_up->value;
 
-        start = pPlayer->origin;
-        start[2] += pPlayer->maxs[2] - 2.0;
+    if (pPlayer->client->ps.fLeanAngle != 0.0f) {
+        vCamOfs += pPlayer->client->ps.fLeanAngle * 0.65f * right;
+    }
 
-        Vector vMins = Vector(-2, -2, 2);
-        Vector vMaxs = Vector(2, 2, 2);
+    start = pPlayer->origin;
+    start[2] += pPlayer->maxs[2] - 2.0;
 
-        trace =
-            G_Trace(start, vMins, vMaxs, vCamOfs, pPlayer, MASK_SHOT, false, "Player::GetSpectateFollowOrientation");
+    Vector vMins = Vector(-2, -2, 2);
+    Vector vMaxs = Vector(2, 2, 2);
 
-        vAng[0] += g_spectatefollow_pitch->value * trace.fraction;
-        vPos = trace.endpos;
+    trace = G_Trace(start, vMins, vMaxs, vCamOfs, pPlayer, MASK_SHOT, false, "Player::GetSpectateFollowOrientation");
+
+    vAng[0] += g_spectatefollow_pitch->value * trace.fraction;
+    vPos = trace.endpos;
+}
+
+/*
+====================
+IsSpectateFollowFirstPerson
+
+Added in Reloaded
+Whether followed players are viewed through their eyes
+====================
+*/
+bool Player::IsSpectateFollowFirstPerson() const
+{
+    if (m_iSpectateFollowMode >= 0) {
+        return m_iSpectateFollowMode != 0;
+    }
+
+    return g_spectatefollow_firstperson->integer != 0;
+}
+
+/*
+====================
+GetFirstPersonSpectateTarget
+
+Added in Reloaded
+Returns the player seen through their eyes, or NULL
+====================
+*/
+Player *Player::GetFirstPersonSpectateTarget()
+{
+    gentity_t *ent;
+    Player    *pPlayer;
+
+    if (g_gametype->integer == GT_SINGLE_PLAYER || !IsSpectator() || !m_iPlayerSpectating) {
+        return NULL;
+    }
+
+    if (!IsSpectateFollowFirstPerson()) {
+        return NULL;
+    }
+
+    if (level.intermissiontime || camera) {
+        // let the intermission or scripted camera take over
+        return NULL;
+    }
+
+    ent = g_entities + (m_iPlayerSpectating - 1);
+    if (!ent->inuse || !ent->client || !ent->entity || ent->entity == this) {
+        return NULL;
+    }
+
+    if (!ent->entity->IsSubclassOfPlayer() || ent->entity->deadflag >= DEAD_DEAD) {
+        return NULL;
+    }
+
+    pPlayer = static_cast<Player *>(ent->entity);
+    if (pPlayer->IsSpectator()) {
+        return NULL;
+    }
+
+    return pPlayer;
+}
+
+/*
+====================
+SpectateMode
+
+Added in Reloaded
+"spectatemode [0|1]": third or first person view of the followed player
+====================
+*/
+void Player::SpectateMode(Event *ev)
+{
+    if (g_gametype->integer == GT_SINGLE_PLAYER) {
+        return;
+    }
+
+    if (ev->NumArgs() > 0) {
+        m_iSpectateFollowMode = ev->GetInteger(1) ? 1 : 0;
     } else {
-        vAng = pPlayer->angles;
-        vPos = pPlayer->origin;
+        m_iSpectateFollowMode = IsSpectateFollowFirstPerson() ? 0 : 1;
+    }
+
+    if (m_iSpectateFollowMode) {
+        gi.SendServerCommand(edict - g_entities, "print \"Spectate mode: first person\n\"");
+    } else {
+        gi.SendServerCommand(edict - g_entities, "print \"Spectate mode: third person\n\"");
     }
 }
 

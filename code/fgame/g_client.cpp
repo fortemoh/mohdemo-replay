@@ -919,8 +919,11 @@ const char *G_ClientConnect(int clientNum, qboolean firstTime, qboolean differen
     if ((strcmp(ip, "localhost") != 0)) {
         // check for a password
         value = Info_ValueForKey(userinfo, "password");
-        if (strcmp(sv_privatePassword->string, value) != 0 && *password->string
-            && strcmp(password->string, value) != 0) {
+        // Fixed in Reloaded
+        //  sv_privatePassword only counts when it's set: empty (the default),
+        //  it matched a client sending no password, so anyone got past "password"
+        if (*password->string && strcmp(password->string, value) != 0
+            && (!*sv_privatePassword->string || strcmp(sv_privatePassword->string, value) != 0)) {
             return "Invalid password";
         }
     }

@@ -57,11 +57,14 @@ set(RENDERER_VULKAN_SOURCES
     ${SOURCE_DIR}/renderervk/vk_framelog.c
     ${SOURCE_DIR}/renderervk/vk_image.c
     ${SOURCE_DIR}/renderervk/vk_instance.c
+    ${SOURCE_DIR}/renderervk/tr_smp.c
     ${SOURCE_DIR}/renderervk/vk_output.c
     ${SOURCE_DIR}/renderervk/vk_pipeline.c
+    ${SOURCE_DIR}/renderervk/vk_radar.c
     ${SOURCE_DIR}/renderervk/vk_shaders.c
     ${SOURCE_DIR}/renderervk/vk_shaders_temporal.c
     ${SOURCE_DIR}/renderervk/vk_shaders_hdr.c
+    ${SOURCE_DIR}/renderervk/vk_shaders_radar.c
     ${SOURCE_DIR}/renderervk/vk_submit.c
     ${SOURCE_DIR}/renderervk/vk_temporal.c
 )
@@ -72,8 +75,7 @@ set(SDL_RENDERER_VULKAN_SOURCES
     ${SOURCE_DIR}/sdl/sdl_vkimp.c
 )
 
-set(RENDERER_VULKAN_BASENAME renderer_vulkan)
-set(RENDERER_VULKAN_BINARY ${RENDERER_VULKAN_BASENAME})
+set(RENDERER_VULKAN_BINARY renderer_vulkan)
 
 list(APPEND RENDERER_VULKAN_BINARY_SOURCES
     ${RENDERER_COMMON_SOURCES}
@@ -86,7 +88,7 @@ add_library(${RENDERER_VULKAN_BINARY} SHARED ${RENDERER_VULKAN_BINARY_SOURCES})
 
 target_link_libraries(      ${RENDERER_VULKAN_BINARY} PRIVATE ${RENDERER_LIBRARIES} Vulkan::Headers)
 target_include_directories( ${RENDERER_VULKAN_BINARY} PRIVATE ${RENDERER_INCLUDE_DIRS})
-target_compile_definitions( ${RENDERER_VULKAN_BINARY} PRIVATE ${RENDERER_DEFINITIONS} USE_VULKAN)
+target_compile_definitions( ${RENDERER_VULKAN_BINARY} PRIVATE ${RENDERER_DEFINITIONS})
 target_compile_options(     ${RENDERER_VULKAN_BINARY} PRIVATE ${RENDERER_COMPILE_OPTIONS})
 target_link_options(        ${RENDERER_VULKAN_BINARY} PRIVATE ${RENDERER_LINK_OPTIONS})
 

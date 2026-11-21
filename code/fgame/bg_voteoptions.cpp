@@ -39,6 +39,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #    define VO_Cvar_Set(name, value)        cgi.Cvar_Set(name, value)
 #    define VO_Cvar_Get(name, value, flags) cgi.Cvar_Get(name, value, flags)
 #    define VO_LV_ConvertString(s)          cgi.LV_ConvertString(s)
+#elif defined(APP_MODULE)
+// Added: the client's (the Reloaded Esc menu's vote page, cl_uimain.cpp), the options the server sends read
+#    include "../qcommon/qcommon.h"
+#    define VO_FS_FreeFile                  FS_FreeFile
+#    define VO_FS_ReadFile(a, b)            FS_ReadFile(a, b)
 #else
 #    pragma error("VoteOptions can must be used with fgame or cgame")
 #endif
@@ -345,7 +350,7 @@ bool VoteOptions::GetVoteOptionSub(int index, int listIndex, str *outCommand) co
     }
 
     itemIndex = 1;
-    for (item = option->m_pListItem; itemIndex < listIndex && option != NULL; item = item->m_pNext) {
+    for (item = option->m_pListItem; itemIndex < listIndex && item != NULL; item = item->m_pNext) {
         itemIndex++;
     }
 
@@ -406,7 +411,7 @@ bool VoteOptions::GetVoteOptionSubName(int index, int listIndex, str *outName) c
     }
 
     itemIndex = 1;
-    for (item = option->m_pListItem; itemIndex < listIndex && option != NULL; item = item->m_pNext) {
+    for (item = option->m_pListItem; itemIndex < listIndex && item != NULL; item = item->m_pNext) {
         itemIndex++;
     }
 
@@ -538,7 +543,6 @@ void CG_PushCallVoteSubClient_f(void)
     str              command;
     str              name;
     int              index;
-    int              i;
     voteoptiontype_t type;
 
     index = atoi(cgi.Argv(1));
@@ -554,29 +558,6 @@ void CG_PushCallVoteSubClient_f(void)
     g_voteOptions.GetVoteOptionMainName(index, &name);
     VO_ExecuteCommand("forcemenu votesubclient\n");
     VO_Cvar_Set("ui_votesubtitle", name.c_str());
-    VO_ExecuteCommand("globalwidgetcommand voteclientlist deleteallitems\n");
-
-    for (i = 0; i < cgs.maxclients; i++) {
-        if (type == VOTE_OPTION_CLIENT_NOT_SELF && cg.snap && i == cg.snap->ps.clientNum) {
-            continue;
-        }
-
-        if (!strlen(cg.clientinfo[i].name)) {
-            continue;
-        }
-
-        VO_ExecuteCommand(
-            va("globalwidgetcommand voteclientlist additem \"%i: %s\" \"callvote %i %i;popmenu 0\"\n",
-               i,
-               cg.clientinfo[i].name,
-               index,
-               i)
-        );
-    }
-
-    VO_ExecuteCommand(
-        va("globalwidgetcommand voteclientlist additem \"%s\" \"popmenu 0\"\n", VO_LV_ConvertString("[Cancel Vote]"))
-    );
 }
 
 void CG_PushVote_f(void)
@@ -610,90 +591,17 @@ void CG_CallEntryVote_f(void)
 
 void VoteOptions::SetupMainOptionsList(void)
 {
-    SingleVoteOption *option;
-    int               count;
-
     VO_ExecuteCommand("forcemenu votemain\n");
-    VO_ExecuteCommand("globalwidgetcommand votelistmain deleteallitems\n");
 
     if (!IsSetup()) {
-        VO_ExecuteCommand(
-            va("globalwidgetcommand votelistmain additem \"%s\" \"popmenu 0\"\n",
-               VO_LV_ConvertString("Retrieving voting options from server..."))
-        );
         VO_SendRemoteCommand("gvo\n");
-        return;
     }
-
-    count = 1;
-
-    for (option = m_pHeadOption; option; option = option->m_pNext, count++) {
-        switch (option->m_optionType) {
-        case VOTE_NO_CHOICES:
-            VO_ExecuteCommand(
-                va("globalwidgetcommand votelistmain additem \"%s\" \"callvote %i;popmenu 0\"\n",
-                   option->m_sOptionName.c_str(),
-                   count)
-            );
-            break;
-        case VOTE_OPTION_LIST:
-            VO_ExecuteCommand(
-                va("globalwidgetcommand votelistmain additem \"%s\" \"popmenu 0;wait 100;pushcallvotesublist %i\"\n",
-                   option->m_sOptionName.c_str(),
-                   count)
-            );
-            break;
-        case VOTE_OPTION_TEXT:
-            VO_ExecuteCommand(
-                va("globalwidgetcommand votelistmain additem \"%s\" \"popmenu 0;wait 100;set ui_votetype "
-                   "%i;pushcallvotesubtext %i\"\n",
-                   option->m_sOptionName.c_str(),
-                   count,
-                   count)
-            );
-            break;
-        case VOTE_OPTION_INTEGER:
-            VO_ExecuteCommand(
-                va("globalwidgetcommand votelistmain additem \"%s\" \"popmenu 0;wait 100;set ui_votetype "
-                   "%i;pushcallvotesubinteger %i\"\n",
-                   option->m_sOptionName.c_str(),
-                   count,
-                   count)
-            );
-            break;
-        case VOTE_OPTION_FLOAT:
-            VO_ExecuteCommand(
-                va("globalwidgetcommand votelistmain additem \"%s\" \"popmenu 0;wait 100;set ui_votetype "
-                   "%i;pushcallvotesubfloat %i\"\n",
-                   option->m_sOptionName.c_str(),
-                   count,
-                   count)
-            );
-            break;
-        case VOTE_OPTION_CLIENT:
-        case VOTE_OPTION_CLIENT_NOT_SELF:
-            VO_ExecuteCommand(
-                va("globalwidgetcommand votelistmain additem \"%s\" \"popmenu 0;wait 100;set ui_votetype "
-                   "%i;pushcallvotesubclient %i\"\n",
-                   option->m_sOptionName.c_str(),
-                   count,
-                   count)
-            );
-            break;
-        }
-    }
-
-    VO_ExecuteCommand(
-        va("globalwidgetcommand votelistmain additem \"%s\" \"popmenu 0\"\n", VO_LV_ConvertString("[Cancel Vote]"))
-    );
 }
 
 void VoteOptions::SetupSubOptionsList(int index)
 {
-    SingleVoteOption   *option;
-    VoteOptionListItem *item;
-    int                 count;
-    int                 numItems;
+    SingleVoteOption *option;
+    int               count;
 
     if (index < 1) {
         return;
@@ -714,27 +622,8 @@ void VoteOptions::SetupSubOptionsList(int index)
 
     VO_ExecuteCommand("forcemenu votesublist\n");
     VO_Cvar_Set("ui_votesubtitle", option->m_sOptionName.c_str());
-    VO_ExecuteCommand("globalwidgetcommand votelistsub deleteallitems\n");
 
-    if (IsSetup()) {
-        numItems = 1;
-
-        for (item = option->m_pListItem; item; item = item->m_pNext, numItems++) {
-            VO_ExecuteCommand(
-                va("globalwidgetcommand votelistsub additem \"%s\" \"callvote %i %i;popmenu 0\"\n",
-                   item->m_sItemName.c_str(),
-                   index,
-                   numItems)
-            );
-        }
-
-        VO_ExecuteCommand(
-            va("globalwidgetcommand votelistsub additem \"%s\" \"popmenu 0\"\n", VO_LV_ConvertString("[Cancel Vote]"))
-        );
-    } else {
-        VO_ExecuteCommand(
-            "globalwidgetcommand votelistsub additem \"Retrieving voting options from server...\" \"popmenu 0\"\n"
-        );
+    if (!IsSetup()) {
         VO_SendRemoteCommand("gvo\n");
     }
 }

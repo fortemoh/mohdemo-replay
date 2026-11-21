@@ -32,10 +32,7 @@ typedef struct {
 //
 // cvars
 //
-extern cvar_t *ui_health_start;
-extern cvar_t *ui_health_end;
 extern cvar_t *sound_overlay;
-extern cvar_t *cl_movieaudio;
 
 //
 // initialization
@@ -47,8 +44,6 @@ void CL_ShutdownUI(void);
 //
 // general ui stuff
 //
-extern inventory_t  client_inv;
-extern bind_t       client_bind;
 extern cvar_t      *cl_greenfps;
 extern qboolean     server_loading;
 extern const UColor UWhiteChatMessageColor;
@@ -61,7 +56,6 @@ void        UI_ClearMessages(void);
 void        UI_DrawClipNumber(void);
 void        CL_BeginRegistration(void);
 void        CL_EndRegistration(void);
-float       UI_GetObjectivesTop(void);
 void        UI_GetHighResolutionScale(vec2_t scale);
 
 //
@@ -76,25 +70,12 @@ void     UI_PushMenu(const char *name);
 void     UI_PopMenu(qboolean restore_cvars);
 void     UI_ForceMenu(const char *name);
 qboolean UI_BindActive(void);
-void     UI_SetReturnMenuToCurrent(void);
 void     UI_ActivateView3D(void);
 void     UI_MenuEscape(const char *name);
-void     UI_CreateScoreboard(void);
 qboolean UI_MenuActive(void);
 qboolean UI_MenuUp(void);
 void     UI_FocusMenuIfExists(void);
 void     UI_DrawConnect(void);
-void     UI_CreateDialog(
-        const char *title,
-        char       *cvarname,
-        const char *command,
-        const char *cancelCommand,
-        int         width,
-        int         height,
-        const char *shader,
-        const char *okshader,
-        const char *cancelshader
-    );
 void UI_ToggleDMConsole(int iMode);
 void UI_ShowScoreboard_f(const char *pszMenuName);
 void UI_HideScoreboard_f(void);
@@ -119,7 +100,6 @@ void UI_DeleteScoreBoardItems(int iMaxIndex);
 //
 void     UI_BeginLoad(const char *pszMapName);
 void     UI_EndLoad(void);
-void     UI_AbortLoad(void);
 int      CL_FontStringWidth(fontheader_t *pFont, const char *pszString, int iMaxLen);
 void     UI_BeginLoadResource(void);
 void     UI_EndLoadResource(void);
@@ -128,6 +108,9 @@ qboolean UI_IsResourceLoaded(const char *name);
 void     UI_RegisterLoadResource(const char *name);
 void     UI_ClearResource(void);
 void     UI_LoadResource(const char *name);
+// Added: the load's progress (0 to 1, -1 not known: the map has no timing
+// file yet); *what: the start of the name of the resource loading
+float    UI_LoadProgress(const char **what);
 
 //
 // windows
@@ -144,9 +127,13 @@ void     UI_CloseConsole(void);
 void     UI_ToggleConsole(void);
 void     UI_OpenDMConsole(int iMode);
 void     UI_CloseDMConsole(void);
+// Added: the DM console open: its mode (100 all, 200 team, else a client's
+// number + 1), its line and caret (the Competitive HUD draws them as the chat's
+// typing line); closed when it isn't the active control (its window isn't drawn)
+qboolean UI_DMConsoleState(int *mode, const char **line, int *caret);
+// Added: a scoreboard is shown
+qboolean UI_ScoreboardShown(void);
 void     UI_ToggleDMConsole(int iMode);
-void     UI_OpenDeveloperConsole(void);
-void     UI_CloseDeveloperConsole(void);
 void     UI_PrintConsole(const char *msg);
 
 //

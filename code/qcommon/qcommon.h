@@ -799,6 +799,7 @@ long	FS_FOpenFileRead(const char* filename, fileHandle_t* file, qboolean uniqueF
 // file IO goes through FS_ReadFile, which Does The Right Thing already.
 
 int		FS_FileIsInPAK(const char *filename, int *pChecksum );
+qboolean	FS_FileInGamePak(const char *filename);
 // returns 1 if a file is in the PAK file, otherwise -1
 
 size_t	FS_Write( const void *buffer, size_t len, fileHandle_t f );
@@ -810,6 +811,15 @@ void	FS_FCloseFile( fileHandle_t f );
 // note: you can't just fclose from another DLL, due to MS libc issues
 
 long		FS_ReadFileEx(const char* qpath, void** buffer, qboolean quiet);
+
+// Added: files compiled in (the client's, cmake/utils/embed_files.cmake),
+// read when no file on disk or in a pak has the name, pure or not, and listed
+typedef struct builtinFile_s {
+	const char			*name;
+	const unsigned char	*data;
+	int					size;
+} builtinFile_t;
+void		FS_SetBuiltinFiles(const builtinFile_t *files);
 long		FS_ReadFile(const char* qpath, void** buffer);
 const char	*FS_Gamedir( void );
 // returns the length of the file
@@ -895,12 +905,10 @@ FILE *FS_PipeFile( fileHandle_t f );
 const char *FS_OSPath_HomeData( const char *filename );
 
 void	FS_FilenameCompletion( const char *dir, const char *ext,
-		qboolean stripExt, void(*callback)(const char *s), qboolean allowNonPureFilesOnDisk );
+		qboolean stripExt, void(*callback)(const char *s), qboolean allowNonPureFilesOnDisk, qboolean wantSubs );
 
 const char* FS_GetCurrentGameDir();
 void	FS_GetRelativeFilename( const char *currentDirectory, const char *absoluteFilename, char *out, size_t destlen );
-
-void FS_FileTime(const char* filename, char* date, char* size);
 
 void FS_CorrectCase(char* path);
 
@@ -927,7 +935,7 @@ void Field_Clear( field_t *edit );
 void Field_AutoComplete( field_t *edit );
 void Field_CompleteKeyname( void );
 void Field_CompleteFilename( const char *dir,
-		const char *ext, qboolean stripExt, qboolean allowNonPureFilesOnDisk );
+		const char *ext, qboolean stripExt, qboolean allowNonPureFilesOnDisk, qboolean wantSubs );
 void Field_CompleteCommand( char *cmd,
 		qboolean doCommands, qboolean doCvars );
 void Field_CompletePlayerName( const char **names, int count );
@@ -1026,6 +1034,12 @@ int QDECL	Com_strCompare( const void *a, const void *b );
 
 
 extern	float currentfps;
+// the frame limiter's present gate: the frame being built, as a token for
+// the renderer (its number), the hold before that frame's present and the
+// present itself (any thread; see Com_PresentGate in common.c)
+uint64_t Com_FrameToken( void );
+void	Com_PresentGate( uint64_t token );
+void	Com_PresentMark( uint64_t token );
 extern	cvar_t	*paused;
 extern	cvar_t	*config;
 extern	cvar_t	*fps;
@@ -1079,8 +1093,6 @@ extern	cvar_t* com_target_version;
 extern	cvar_t* com_target_extension;
 extern	cvar_t* com_target_demo;
 
-extern	cvar_t* com_updatecheck_enabled;
-extern	cvar_t* com_updatecheck_interval;
 
 extern	int		protocol_version_demo;
 extern	int		protocol_version_full;
@@ -1211,23 +1223,19 @@ void CL_InitKeyCommands( void );
 void CL_Init( void );
 void CL_Disconnect();
 void CL_AbnormalDisconnect();
+void SCR_AbortUpdate( void );	// Added: an error ended the frame (Com_Error)
 void CL_Shutdown(const char *finalmsg, qboolean disconnect, qboolean quit);
-qboolean CL_FinishedIntro(void);
 qboolean CL_CommandPerFrame(void);	// cl_movefps 0: frames of 1 ms or more (Com_Frame)
-void CL_FinishedStartStage(void);
 void CL_SetFrameNumber(int frameNumber);
 void CL_Frame( int msec );
 qboolean CL_GameCommand( void );
 void CL_KeyEvent (int key, qboolean down, unsigned time);
 
-void CL_Key_ForceCommand(int key, unsigned int time);
 
 void CL_CharEvent( int key );
 // char events are for field typing, not game control
 
 void CL_GetMouseState( int *x, int *y, unsigned int *buttons );
-
-void CL_SetMousePos( int x, int y );
 
 void CL_MouseEvent( int dx, int dy, int time );
 
@@ -1394,8 +1402,13 @@ void	Sys_Print( const char *msg );
 // Sys_Milliseconds should only be used for profiling purposes,
 // any game related timing information should come from event timestamps
 int		Sys_Milliseconds (void);
-// a monotonic clock in microseconds (the frame limiter's deadlines)
+// a monotonic clock in microseconds (the fps counter) and in nanoseconds
+// (the frame limiter's deadlines)
 int64_t	Sys_Microseconds (void);
+int64_t	Sys_Nanoseconds (void);
+// sleeps for about ns nanoseconds, as closely as the platform's timers can
+// (the frame limiter's wait on Windows, Com_FrameWait)
+void	Sys_SleepNs (int64_t ns);
 
 qboolean Sys_RandomBytes( byte *string, int len );
 
@@ -1426,9 +1439,7 @@ char	*Sys_SteamPath(void);
 char	*Sys_GogPath(void);
 char	*Sys_MicrosoftStorePath(void);
 
-#ifdef __APPLE__
-char    *Sys_DefaultAppPath(void);
-#endif
+char    *Sys_DefaultAppPath(void); // Changed: every platform (fs_apppath)
 
 char	*Sys_DefaultHomeConfigPath(void);
 char	*Sys_DefaultHomeDataPath(void);
@@ -1500,7 +1511,6 @@ qboolean Sys_OpenFolderInFileManager( const char *path, qboolean create );
 void Sys_RemovePIDFile( const char *gamedir );
 void Sys_InitPIDFile( const char *gamedir );
 
-void Sys_ProcessBackgroundTasks();
 
 /* This is based on the Adaptive Huffman algorithm described in Sayood's Data
  * Compression book.  The ranks are not actually stored, but implicitly defined

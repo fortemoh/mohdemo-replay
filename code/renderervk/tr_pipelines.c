@@ -52,6 +52,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //    r_fastdlights 1 the projected pass (ProjectDlightTexture) of opaque
 //    world shaders;
 //  - every image an animated bundle binds (RGB textures change the key);
+//  - with the temporal path, blended stages as reactive effects or not
+//    (vk_set_reactive);
 //  - the sky box and the immediate mode draws that come in every frame
 //    (the color clear drawn as a quad, the UI's boxes), after whatever cull
 //    the draw before left.
@@ -211,15 +213,15 @@ static qboolean R_StageMayBeConstant( const shaderStage_t *pStage ) {
 
 /*
 ===============
-R_StageMayBeEffects
+R_StageNeedsEffects
 
-Whether a stage can be drawn from the static geometry with the effects
-shader in some batch (RB_StaticBatchAllowed, RB_StaticDraw): the shader's
-deforms, the texture coordinates of a bundle, distFade, or the lighting of
-a static model with dynamic lights near it
+Whether a stage can need the effects shader to be drawn from the static
+geometry in some batch (RB_StaticBatchAllowed): the shader's deforms, the
+texture coordinates of a bundle, distFade, or the lighting of a static
+model with dynamic lights near it
 ===============
 */
-static qboolean R_StageMayBeEffects( const shader_t *shader, const shaderStage_t *pStage, qboolean vertexLit ) {
+static qboolean R_StageNeedsEffects( const shader_t *shader, const shaderStage_t *pStage, qboolean vertexLit ) {
 	int b;
 
 	if ( shader->numDeforms ) {
@@ -237,6 +239,30 @@ static qboolean R_StageMayBeEffects( const shader_t *shader, const shaderStage_t
 
 		if ( ( ( bundle->numTexMods && bundle->texMods[0].type != TMOD_NONE )
 			|| ( bundle->tcGen != TCGEN_TEXTURE && bundle->tcGen != TCGEN_LIGHTMAP ) ) && RB_StaticFxBundle( bundle, qtrue ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+===============
+R_StageMayBeEffects
+
+Whether a stage can be drawn with the effects shader: when it or another
+stage of its shader needs it, as every draw of such a batch is
+(RB_StaticDraw)
+===============
+*/
+static qboolean R_StageMayBeEffects( const shader_t *shader, const shaderStage_t *pStage, qboolean vertexLit ) {
+	int i;
+
+	// the vertex-lit iterator draws one stage
+	if ( vertexLit ) {
+		return R_StageNeedsEffects( shader, pStage, qtrue );
+	}
+	for ( i = 0; i < MAX_SHADER_STAGES && shader->unfoggedStages[i]; i++ ) {
+		if ( R_StageNeedsEffects( shader, shader->unfoggedStages[i], qfalse ) ) {
 			return qtrue;
 		}
 	}
@@ -290,6 +316,14 @@ static int R_PrebuildStage( const shader_t *shader, shaderStage_t *pStage, int w
 		// the generic iterator sets the shader's (the vertex-lit one is
 		// only chosen without it)
 		ds.polygonOffset = shader->polygonOffset && !vertexLit;
+		// the temporal path's reactive effects (RB_TemporalReactive): a
+		// blended stage of a 3D view whose shader changes over time always
+		// is; one of the world's is not (on a brush model entity it is: the
+		// draw creates that one); one of a model or an effect can be either
+		// (an entity's, a static model's)
+		if ( place != PB_2D && ( pStage->stateBits & ( GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS ) ) && !ds.polygonOffset ) {
+			ds.reactive = RB_ShaderAnimated( (shader_t *)shader ) ? 1 : R_ShaderIsWorld( shader ) ? 0 : 2;
+		}
 
 		if ( multitexture ) {
 			// DrawMultitextured: no GLS_DEPTHTEST_DISABLE in 2D
