@@ -2313,7 +2313,9 @@ void UIHudFollow::Draw(void)
     static cvar_t *const team    = Cvar_Get("ui_hud_follow_team", "", 0);
     static cvar_t *const corners = Cvar_Get("ui_hud_corners", "", 0);
     static const rlColor_t fill = {0.047f, 0.055f, 0.071f, 0.78f}, caption = {1.0f, 1.0f, 1.0f, 0.612f};
-    rlView_t               v;
+    // Fixed in OPM: the HUD's view, its font and small text set (they were
+    // left as the stack had them: no face, no SPECTATING nor name drawn)
+    rlView_t               v = Comp_HudView();
     rlColor_t              c = {1.0f, 1.0f, 1.0f, 1.0f};
 
     UI_DrawDep(name);
