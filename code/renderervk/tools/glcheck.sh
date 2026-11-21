@@ -39,6 +39,8 @@ allowed = [
 	(r"^misc/update-libs\.sh$", r"OpenGL( ES)?|opengl"),
 	(r"^code/thirdparty/miniaudio/miniaudio\.h$", r"OpenGL"),
 	(r"^code/thirdparty/jpeg-[^/]*/jmorecfg\.h$", r"QGLOBAL_H|qglobal\.h"),
+	# stb_truetype: the example in its comments, its fill-rule parameter
+	(r"^code/thirdparty/stb/stb_truetype\.h$", r".*"),
 	# shader script keywords of the retail .shader files (blendFunc GL_ONE
 	# GL_ZERO ...), also in the test shaders of the view lists
 	(r"^code/renderervk/tr_shader\.c$", r"\"GL_[A-Z_]+\"|substituting GL_ONE"),
@@ -48,6 +50,8 @@ allowed = [
 	(r"^code/renderervk/tr_image\.c$", r"\{\"GL_[A-Z_]+\", TEXFILTER_"),
 	(r"^code/renderervk/tr_init\.c$", r"\"gl_linear_mipmap_linear\"|\"GL_BACK\""),
 	(r"^code/renderervk/tr_cmds\.c$", r"\"GL_FRONT\""),
+	# and the Filtering values of the Options menu for r_textureMode
+	(r"^code/client/cl_uimain\.cpp$", r"\"GL_LINEAR_MIPMAP_(NEAREST|LINEAR)\""),
 	# GLSL built-ins of the Vulkan shaders (and comments naming them), and the
 	# glslang extension behind their #include lines
 	(r"^code/renderervk/", r"\bgl_(Position|ClipDistance|InstanceIndex|VertexIndex|FrontFacing|FragCoord|GlobalInvocationID|LocalInvocationID|LocalInvocationIndex|WorkGroupID)\b|\bGL_GOOGLE_include_directive\b"),
