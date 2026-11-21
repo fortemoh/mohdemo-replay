@@ -162,6 +162,21 @@ static qboolean VK_HasExtension( const VkExtensionProperties *list, uint32_t cou
 	return qfalse;
 }
 
+/*
+===============
+VK_HeadlessSurface
+
+Added in OPM
+Whether the window is SDL's offscreen driver's: a headless surface, whose
+frames nobody sees
+===============
+*/
+static qboolean VK_HeadlessSurface( void ) {
+	const char *driver = SDL_GetCurrentVideoDriver();
+
+	return driver && !Q_stricmp( driver, "offscreen" ) ? qtrue : qfalse;
+}
+
 static void VK_AddExtension( const char **list, uint32_t *count, const char *name ) {
 	uint32_t i;
 
@@ -713,7 +728,11 @@ static void VK_CreateLogicalDevice( void ) {
 	Com_Memset( &presentWaitFeatures, 0, sizeof( presentWaitFeatures ) );
 	presentWaitFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR;
 	vk.presentWait = qfalse;
-	if ( qvkGetPhysicalDeviceFeatures2 && VK_HasExtension( available, numAvailable, VK_KHR_PRESENT_ID_EXTENSION_NAME )
+	// Changed in OPM: not on SDL's offscreen driver, whose headless surface's
+	// swapchain (Mesa's) has the extension but no wait: vkWaitForPresentKHR
+	// called a null function there, with vsync, at the first frame shown
+	if ( qvkGetPhysicalDeviceFeatures2 && !VK_HeadlessSurface()
+		&& VK_HasExtension( available, numAvailable, VK_KHR_PRESENT_ID_EXTENSION_NAME )
 		&& VK_HasExtension( available, numAvailable, VK_KHR_PRESENT_WAIT_EXTENSION_NAME ) ) {
 		VK_GetExtensionFeatures( &presentIdFeatures );
 		VK_GetExtensionFeatures( &presentWaitFeatures );
