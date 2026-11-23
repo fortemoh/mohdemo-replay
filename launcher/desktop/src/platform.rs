@@ -4,9 +4,9 @@ use crate::logic::{plain_path, Resolution};
 use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
-pub const GAME_EXE: &str = "openmohaa.exe";
+pub const GAME_EXE: &str = "mohreloaded.exe";
 #[cfg(not(windows))]
-pub const GAME_EXE: &str = "openmohaa";
+pub const GAME_EXE: &str = "mohreloaded";
 
 fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from)

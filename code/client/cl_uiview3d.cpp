@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "cl_ui.h"
 #include "cl_uimenus.h"
 #include "cl_uiextras.h"
+#include "../uilib/uibake.h"
 #include "../qcommon/localization.h"
 
 #include "../server/server.h"
@@ -121,157 +122,22 @@ void View3D::OnDeactivate(Event *ev)
 
 void View3D::DrawFPS(void)
 {
-    char string[128];
+    // Changed: the frame rate alone and whole (Com_PresentMark counts it four times a second, slow enough to read), in
+    // the bottom left corner: on the Competitive HUD's left line, in the gap under the health's bar (32 in, 13 up to its
+    // middle, of 1920x1080). Any fps on draws this (no fps_location, no fps 2 counts, no fps 3 band); the font made
+    // once, not each frame (it loads itself again after a restart)
+    static UIFont font("verdana-14");
+    const float  *vs = getHighResScale();
+    const float   s  = UI_DesignScale(1920.0f, 1080.0f);
 
-    setFont("verdana-14");
-    // Changed in OPM
-    //  1 just shows simple FPS
-    //  2 displays the number of tris
-    //  3 displays a black box at the bottom to correctly see the FPS counter
-    if (fps->integer == 3) {
-        re.SetColor(UBlack);
-        re.DrawBox(
-            0.0,
-            m_frame.pos.y + m_frame.size.height - m_font->getHeight() * 4.0,
-            m_frame.pos.x + m_frame.size.width,
-            m_font->getHeight() * 4.0
-        );
-    }
-
-    Com_sprintf(string, sizeof(string), "FPS %4.1f", currentfps);
-    if (currentfps > 23.94) {
-        if (cl_greenfps->integer) {
-            m_font->setColor(UGreen);
-        } else {
-            m_font->setColor(UWhite);
-        }
-    } else if (currentfps > 18.0) {
-        m_font->setColor(UYellow);
-    } else {
-        // low fps
-        m_font->setColor(URed);
-    }
-
-    // Added in OPM (fps_location)
-    //  0 = default (bottom left)
-    //  1 = bottom right
-    //  2 = top right under the time limit
-    switch(fps_location->integer) {
-    case 0:
-    default:
-        m_font->Print(
-            m_font->getHeight(getHighResScale()) * 10.0 / getHighResScale()[0],
-            (m_frame.pos.y + m_frame.size.height - m_font->getHeight(getHighResScale()) * 3.0) / getHighResScale()[1],
-            string,
-            -1,
-            getHighResScale()
-        );
-        break;
-    case 1:
-        m_font->Print(
-            (m_frame.pos.x + m_frame.size.width - m_font->getWidth(string, -1) * getHighResScale()[0] - m_font->getHeight(getHighResScale())) / getHighResScale()[0],
-            (m_frame.pos.y + m_frame.size.height - m_font->getHeight(getHighResScale()) * 3.0) / getHighResScale()[1],
-            string,
-            -1,
-            getHighResScale()
-        );
-        break;
-    case 2:
-        m_font->Print(
-            (m_frame.pos.x + m_frame.size.width - m_font->getWidth(string, -1) * getHighResScale()[0] - m_font->getHeight(getHighResScale())) / getHighResScale()[0],
-            (m_frame.pos.y + 40.0 * getHighResScale()[0]) / getHighResScale()[1],
-            string,
-            -1,
-            getHighResScale()
-        );
-        break;
-    }
-
-    // Draw elements count
-    if (cl_greenfps->integer) {
-        m_font->setColor(UGreen);
-    } else {
-        m_font->setColor(UWhite);
-    }
-
-    if (fps->integer >= 2) {
-        Com_sprintf(string, sizeof(string), "wt%5d wv%5d cl%d", cls.world_tris, cls.world_verts, cls.character_lights);
-
-        // Added in OPM (fps_location)
-        switch(fps_location->integer) {
-        case 0:
-        default:
-            m_font->Print(
-                (m_font->getHeight(getHighResScale()) * 10.0) / getHighResScale()[0],
-                (m_frame.pos.y + m_frame.size.height - m_font->getHeight(getHighResScale()) * 2.0) / getHighResScale()[1],
-                string,
-                -1,
-                getHighResScale()
-            );
-            break;
-        case 1:
-            m_font->Print(
-                (m_frame.pos.x + m_frame.size.width - m_font->getWidth(string, -1) * getHighResScale()[0] - m_font->getHeight(getHighResScale())) / getHighResScale()[0],
-                (m_frame.pos.y + m_frame.size.height - m_font->getHeight(getHighResScale()) * 2.0) / getHighResScale()[1],
-                string,
-                -1,
-                getHighResScale()
-            );
-            break;
-        case 2:
-            m_font->Print(
-                (m_frame.pos.x + m_frame.size.width - m_font->getWidth(string, -1) * getHighResScale()[0] - m_font->getHeight(getHighResScale())) / getHighResScale()[0],
-                (m_frame.pos.y + 40 * getHighResScale()[0] + m_font->getHeight(getHighResScale())) / getHighResScale()[1],
-                string,
-                -1,
-                getHighResScale()
-            );
-            break;
-        }
-
-        Com_sprintf(
-            string,
-            sizeof(string),
-            "t%5d v%5d Mtex%5.2f",
-            cls.total_tris,
-            cls.total_verts,
-            (float)cls.total_texels * 0.00000095367432
-        );
-
-        // Added in OPM (fps_location)
-        switch(fps_location->integer) {
-        case 0:
-        default:
-            m_font->Print(
-                (m_font->getHeight(getHighResScale()) * 10.0) / getHighResScale()[0],
-                (m_frame.pos.y + m_frame.size.height - m_font->getHeight(getHighResScale())) / getHighResScale()[1],
-                string,
-                -1,
-                getHighResScale()
-            );
-            break;
-        case 1:
-            m_font->Print(
-                (m_frame.pos.x + m_frame.size.width - m_font->getWidth(string, -1) * getHighResScale()[0] - m_font->getHeight(getHighResScale())) / getHighResScale()[0],
-                (m_frame.pos.y + m_frame.size.height - m_font->getHeight(getHighResScale())) / getHighResScale()[1],
-                string,
-                -1,
-                getHighResScale()
-            );
-            break;
-        case 2:
-            m_font->Print(
-                (m_frame.pos.x + m_frame.size.width - m_font->getWidth(string, -1) * getHighResScale()[0] - m_font->getHeight(getHighResScale())) / getHighResScale()[0],
-                (m_frame.pos.y + 40.0 * getHighResScale()[0] + m_font->getHeight(getHighResScale()) * 2.0) / getHighResScale()[1],
-                string,
-                -1,
-                getHighResScale()
-            );
-            break;
-        }
-    }
-
-    m_font->setColor(UBlack);
+    font.setColor(currentfps > 23.94f ? (cl_greenfps->integer ? UGreen : UWhite) : currentfps > 18.0f ? UYellow : URed);
+    font.Print(
+        floorf(32.0f * s) / vs[0],
+        floorf(m_frame.pos.y + m_frame.size.height - 13.0f * s - font.getHeight(vs) * 0.5f) / vs[1],
+        va("FPS %d", (int)(currentfps + 0.5f)),
+        -1,
+        vs
+    );
 }
 
 /*
@@ -678,9 +544,17 @@ void View3D::DrawLetterbox(void)
 
 void View3D::DrawFades(void)
 {
-    if (cl.snap.ps.blend[3] > 0) {
-        re.SetColor(cl.snap.ps.blend);
-        if (cl.snap.ps.stats[STAT_ADDFADE]) {
+    // Changed in Reloaded
+    //  a followed player watched through their eyes: their red flash too (cg_followeyes.c)
+    const playerState_t *ps = CL_FollowEyesPlayerState();
+
+    if (!ps) {
+        ps = &cl.snap.ps;
+    }
+
+    if (ps->blend[3] > 0) {
+        re.SetColor(ps->blend);
+        if (ps->stats[STAT_ADDFADE]) {
             re.AddBox(0.0, 0.0, m_screenframe.size.width, m_screenframe.size.height);
         } else {
             re.DrawBox(0.0, 0.0, m_screenframe.size.width, m_screenframe.size.height);
@@ -695,8 +569,6 @@ void View3D::Draw(void)
     }
 
     set2D();
-
-    re.SavePerformanceCounters();
 
     Draw2D();
 }

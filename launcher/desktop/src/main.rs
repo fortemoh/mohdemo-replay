@@ -1,4 +1,4 @@
-//! MoHAA Launcher for Windows and Linux. It starts the game beside it (openmohaa.exe, openmohaa) for the game
+//! MoHAA Launcher for Windows and Linux. It starts the game beside it (mohreloaded.exe, mohreloaded) for the game
 //! picked at the top left, with the player's name, the server and the display set here (the crosshair is the game's:
 //! Options' HUD tab, or crosshair_import with a CS2 code). When the project's release has a newer build than that
 //! game, it offers to update the game's files (update.rs).

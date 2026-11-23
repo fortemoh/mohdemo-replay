@@ -83,6 +83,10 @@ static char          server_mapname[64];
 static Menu         *scoreboard_menu;
 // Added: the scoreboard is up (the Reloaded scoreboard)
 static qboolean      scoreboard_up;
+// Added: its cursor is on (UI_ScoreboardKey); the setting that allows it
+static qboolean      scoreboard_cursor;
+static cvar_t       *cl_scoreboardcursor;
+static void          UI_ScoreboardCursorOff(void);
 
 static const float maxWidthRes  = 1920;
 static const float maxHeightRes = 1080;
@@ -1048,7 +1052,7 @@ void UI_Update(void)
         UI_StopBind();
 
         if (clc.connectStartTime >= cls.realtime - 1000 * cl_connect_timeout->integer) {
-            // Changed: the menu looked up now (the Reloaded connect's box shown for its name)
+            // Changed: the menu looked up now (the Reloaded connect screen shown for its name)
             if (currentMenu != menuManager.FindMenu("connecting")) {
                 UI_ForceMenuOff(true);
                 UI_DeactiveFloatingWindows();
@@ -1116,6 +1120,14 @@ void UI_Update(void)
 
         UI_CompHud_Frame();
         UI_CompHuds(!messages, messages);
+    }
+
+    // Added: the scoreboard's cursor off once it's gone, or a menu, the console or the chat took the mouse, or it was
+    // turned off (cl_scoreboardcursor)
+    if (scoreboard_cursor
+        && (!UI_ScoreboardShown() || UI_MenuActive() || Key_GetCatcher() || !in_guimouse || clc.state != CA_ACTIVE
+            || !cl_scoreboardcursor->integer)) {
+        UI_ScoreboardCursorOff();
     }
 
     //
@@ -1214,8 +1226,9 @@ void UI_PushMenu(const char *name)
     Menu    *menu  = menuManager.CurrentMenu();
     qboolean bDiff = qfalse;
 
-    // Added: the Reloaded menus told what they are opened as (and the weapon
-    // menu the server pushes after a side picked in it not shown again)
+    // Added: the Reloaded menus told what they are opened as (the team and
+    // weapon pages' preview; F2's, F3's and F4's pages and the vote menus
+    // shown instead)
     if (!UI_Menus_Pushing(name)) {
         return;
     }
@@ -1536,60 +1549,6 @@ UI_ListMenus_f
 void UI_ListMenus_f()
 {
     menuManager.ListMenus();
-}
-
-// a widget for menustate: its class, its name, the menu it is in
-static const char *UI_WidgetDesc(UIWidget *w, char *buf, size_t size)
-{
-    Menu *const m = w ? menuManager.MenuOf(w) : NULL;
-
-    if (!w) {
-        return "nothing";
-    }
-    Com_sprintf(buf, size, "%s%s%s%s%s", w->getClassname(), w->getName()[0] ? " " : "", w->getName(), m ? " of " : "",
-                m ? m->m_name.c_str() : "");
-    return buf;
-}
-
-/*
-====================
-UI_MenuState_f
-
-Added: menustate, what the menus and the keys and mouse are doing, printed and added to menustate.txt in the home's
-game folder: typed in the console over a menu that takes no click or Esc
-====================
-*/
-void UI_MenuState_f(void)
-{
-    static const char *const teams[] = {"none", "spectator", "free-for-all", "allies", "axis"};
-    UIPoint2D                pos((float)uid.mouseX, (float)uid.mouseY);
-    const int                catcher = Key_GetCatcher();
-    const int                team    = cl.snap.valid ? cl.snap.ps.stats[STAT_TEAM] : -1;
-    char                     a[128], b[128], c[128];
-    qtime_t                  t;
-    str                      text;
-    fileHandle_t             f;
-
-    Com_RealTime(&t);
-    text = va("menustate %04d-%02d-%02d %02d:%02d:%02d\n", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
-    text += "  menus: ";
-    text += menuManager.DescribeState();
-    text += va("\n  keys: %s, key capture %s, catcher%s%s%s%s%s\n", UI_WidgetDesc(uWinMan.ActiveControl(), a, sizeof(a)),
-               uWinMan.BindActive() ? UI_WidgetDesc(uWinMan.BindActive(), b, sizeof(b)) : "none", catcher ? "" : " none",
-               catcher & KEYCATCH_CONSOLE ? " console" : "", catcher & KEYCATCH_UI ? " UI" : "", catcher & KEYCATCH_MESSAGE ? " message" : "",
-               catcher & KEYCATCH_CGAME ? " cgame" : "");
-    text += va("  mouse: %s, %s, at %d %d, buttons %u, a click goes to %s\n", in_guimouse ? "the UI's" : "the game's",
-               IN_IsCursorActive() ? "captured" : "free", uid.mouseX, uid.mouseY, cl.mouseButtons, UI_WidgetDesc(uWinMan.ClickTarget(pos), c, sizeof(c)));
-    text += va("  game: state %d, team %s, loading %s; %s\n", clc.state, team >= 0 && team < (int)ARRAY_LEN(teams) ? teams[team] : "unknown",
-               server_loading ? "yes" : "no", UI_Menus_State());
-    Com_Printf("%s", text.c_str());
-
-    f = FS_FOpenFileAppend_HomeData("menustate.txt");
-    if (f) {
-        FS_Write(text.c_str(), text.length(), f);
-        FS_FCloseFile(f);
-        Com_Printf("(added to menustate.txt)\n");
-    }
 }
 
 /*
@@ -1940,6 +1899,10 @@ UI_WantsKeyboard
 */
 void UI_WantsKeyboard()
 {
+    // Added: not a click with the scoreboard's cursor (the keys stay the game's)
+    if (scoreboard_cursor) {
+        return;
+    }
     Key_SetCatcher(Key_GetCatcher() | KEYCATCH_UI);
 }
 
@@ -2619,12 +2582,70 @@ qboolean UI_ScoreboardShown(void)
 
 /*
 ====================
+UI_ScoreboardCursor
+
+Added: the scoreboard's cursor, CS2's, with cl_scoreboardcursor 1 (Options:
+Gameplay, Scoreboard Cursor; off by default, the right button the game's):
+a right click while the scoreboard shows (nothing else open) puts a cursor
+on it, its columns' names then sort it (cl_uimenus.cpp). The mouse moves the cursor and clicks (the view
+stays, nothing fires), the keys still play (TAB, moving). Off with
+another right click or when the scoreboard goes; a menu, the console or
+the chat opened over it takes the mouse
+====================
+*/
+qboolean UI_ScoreboardCursor(void)
+{
+    return scoreboard_cursor;
+}
+
+static void UI_ScoreboardCursorOff(void)
+{
+    if (!scoreboard_cursor) {
+        return;
+    }
+    scoreboard_cursor = qfalse;
+    // (the mouse the game's again, unless what opened over it has it)
+    if (!UI_MenuActive() && !Key_GetCatcher()) {
+        IN_MouseOff();
+    }
+}
+
+qboolean UI_ScoreboardKey(int key, qboolean down, unsigned time)
+{
+    if (key != K_MOUSE2 || !down) {
+        return qfalse;
+    }
+    if (scoreboard_cursor) {
+        UI_ScoreboardCursorOff();
+        return qtrue;
+    }
+    if (!cl_scoreboardcursor || !cl_scoreboardcursor->integer || in_guimouse || Key_GetCatcher() || UI_MenuActive() || clc.state != CA_ACTIVE
+        || !UI_ScoreboardShown()) {
+        return qfalse;
+    }
+    // the other buttons held let go (a shot held stops), not the keys (IN_MouseOn's): TAB and moving go on
+    for (int k = K_MOUSE1; k <= K_MOUSE5; k++) {
+        if (k != key && keys[k].down) {
+            CL_KeyEvent(k, qfalse, time);
+        }
+    }
+    in_guimouse       = qtrue;
+    scoreboard_cursor = qtrue;
+    // (from the middle)
+    cl.mousex = cls.glconfig.vidWidth / 2;
+    cl.mousey = cls.glconfig.vidHeight / 2;
+    return qtrue;
+}
+
+/*
+====================
 UI_HideScoreboard_f
 ====================
 */
 void UI_HideScoreboard_f(void)
 {
     scoreboard_up = qfalse;
+    UI_ScoreboardCursorOff();
 
     if (scoreboard_menuname.length()) {
         // Fixed in 2.30 (scoreboard_menu check)
@@ -2786,7 +2807,6 @@ void CL_ShutdownUI(void)
     Cmd_RemoveCommand("showmenu");
     Cmd_RemoveCommand("widgetcommand");
     Cmd_RemoveCommand("listmenus");
-    Cmd_RemoveCommand("menustate");
     Cmd_RemoveCommand("togglemenu");
     Cmd_RemoveCommand("loadmenu");
     Cmd_RemoveCommand("ui_startdmmap");
@@ -2931,6 +2951,7 @@ void CL_InitializeUI(void)
     Cvar_Get("ui_compass", "1", 0); // (the Competitive HUD's compass, shown with no radar)
     ui_newvidmode          = Cvar_Get("ui_newvidmode", "-1", 0);
     ui_drawcoords          = Cvar_Get("ui_drawcoords", "0", 0);
+    cl_scoreboardcursor    = Cvar_Get("cl_scoreboardcursor", "0", CVAR_ARCHIVE);
     Cvar_Get("ui_health_start", "0", 0);
     Cvar_Get("ui_health_end", "0", 0);
     ui_GunneryEvaluation   = Cvar_Get("ui_GunneryEvaluation", "0", 0);
@@ -2982,7 +3003,6 @@ void CL_InitializeUI(void)
     Cmd_AddCommand("widgetcommand", UI_WidgetCommand_f);
     Cmd_AddCommand("globalwidgetcommand", UI_GlobalWidgetCommand_f);
     Cmd_AddCommand("listmenus", UI_ListMenus_f);
-    Cmd_AddCommand("menustate", UI_MenuState_f);
     Cmd_AddCommand("togglemenu", UI_ToggleMenu_f);
     Cmd_AddCommand("loadmenu", UI_LoadMenu_f);
     Cmd_AddCommand("ui_startdmmap", UI_StartDMMap_f);
@@ -3434,9 +3454,16 @@ bool UI_ArchiveLoadMapinfo(const char *mapname)
 UI_BeginLoad
 ====================
 */
-void UI_BeginLoad(const char *pszMapName)
+void UI_BeginLoad(const char *pszMapNameIn)
 {
-    str mapfile;
+    str  mapfile;
+    char pszMapName[MAX_QPATH];
+
+    // Added: a copy, taken first. The caller's is often Info_ValueForKey's, whose two buffers take turns: the load
+    // screen's own lookups below (UI_Menus_Loading: the game type, then the server's name) wrote the server's name
+    // over it, and its loading bar's file was saved as maps/<the server's name>.min (on Windows a fatal error when
+    // that name had | or :, as "[FORTE] FFA Arena | Discord: dsc.gg/ForteFFA")
+    Q_strncpyz(pszMapName, pszMapNameIn, sizeof(pszMapName));
 
     if (cls.loading != LOAD_PROGRESS_FALSE) {
         if (cls.loading == LOAD_PROGRESS_SAVE) {

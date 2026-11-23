@@ -99,10 +99,6 @@ public:
     void  Unlock(Event *ev);
     void  PassEventToWidget(str name, Event *ev);
     bool  ForceMenu(str name);
-    // Added: the console's menustate (cl_ui.cpp): the shown and the pushed menus (the top first), the visible ones,
-    // the lock; and the menu whose widgets hold w (NULL none)
-    str   DescribeState(void);
-    Menu *MenuOf(UIWidget *w);
 };
 
 extern MenuManager menuManager;

@@ -298,7 +298,8 @@ void SVCmd_WriteIP_f
 	byte	 b[ 4 ];
 	int	 i;
 
-	Com_sprintf( name, sizeof( name ), "%s/listip.cfg", GAMEVERSION );
+	// upstream's folder (GAMEVERSION was "OPENMOHAA"), so that a server keeps its bans
+	Q_strncpyz( name, "OPENMOHAA/listip.cfg", sizeof( name ) );
    gi.SendServerCommand( 0, "print \"Writing %s.\n\"", name );
 
 	f = fopen( name, "wb" );

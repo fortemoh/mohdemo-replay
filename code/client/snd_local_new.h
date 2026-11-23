@@ -35,6 +35,7 @@ extern cvar_t *s_loadas8bit;
 extern cvar_t *s_separation;
 extern cvar_t *s_musicVolume;
 extern cvar_t *s_ambientVolume;
+extern cvar_t *s_cinematic;
 extern cvar_t *s_soundtrackCache;
 extern cvar_t *s_loadBuffers;
 
@@ -182,6 +183,10 @@ enum sfx_flags_t {
     SFX_FLAG_PROMOTE_FAILED = 64,
     // Added in the Metal port
     SFX_FLAG_STREAM_FAILED = 128, // the stream couldn't be opened; not searched for again until the next registration
+    // Added in MoHAA Reloaded: one of the maps' cinematic sounds (S_IsCinematicSound), set with the name
+    SFX_FLAG_CINEMATIC = 256,
+    // Added in MoHAA Reloaded: registered silent, the file not read yet (S_ReadUnread)
+    SFX_FLAG_UNREAD = 512,
 };
 
 enum loopsound_flags_t {

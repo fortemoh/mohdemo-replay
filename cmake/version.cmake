@@ -52,7 +52,17 @@ if(NOT GIT_REVISION_BUILD_NUMBER)
 	set(GIT_REVISION_BUILD_NUMBER 0)
 endif()
 
-if(NOT PRODUCT_VERSION_STAGE)
+# A release build (CI's builds of a version tag): -DPRODUCT_RELEASE_TAG=v1.0.0, which must be v<PROJECT_VERSION>
+# (cmake/identity.cmake). Its version has no stage: 1.0.0+61.c2f07c2, not 1.0.0-unstable+61.c2f07c2. The run and the
+# commit stay, for the launcher, which tells by the commit whether an update is newer.
+set(PRODUCT_RELEASE_TAG "" CACHE STRING "The version tag of a release build (v${PROJECT_VERSION}); empty for other builds")
+
+if(PRODUCT_RELEASE_TAG)
+	if(NOT PRODUCT_RELEASE_TAG STREQUAL "v${PROJECT_VERSION}")
+		message(FATAL_ERROR "The release tag ${PRODUCT_RELEASE_TAG} isn't this version's, v${PROJECT_VERSION} (cmake/identity.cmake)")
+	endif()
+	set(PRODUCT_VERSION_STAGE "")
+elseif(NOT PRODUCT_VERSION_STAGE)
 	set(PRODUCT_VERSION_STAGE "unstable")
 endif()
 

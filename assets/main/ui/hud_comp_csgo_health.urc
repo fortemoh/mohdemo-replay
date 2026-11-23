@@ -19,6 +19,7 @@ enabledcvar ui_hud_health_on
 shape in 0 0.333 1 0.667 fill 1 1 1 1
 shape in 0.333 0 0.667 0.333 fill 1 1 1 1
 shape in 0.333 0.667 0.667 1 fill 1 1 1 1
+shadow
 colorcvar ui_hud_health_col
 }
 
@@ -45,6 +46,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_health_on
 shape fill $ui_hud_acc 0.3
+shadow
 }
 
 resource
@@ -56,6 +58,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_health_on
 shape fill 1 1 1 1
+shadow
 colorcvar ui_hud_health_col
 widthcvar ui_hud_health_frac left
 }

@@ -409,6 +409,11 @@ static float Bake_ShadowAt(const byte *m, int w, int h, int x, int y, float s)
     return 1.0f - keep;
 }
 
+int UI_ShadowMargin(float s)
+{
+    return (int)ceilf(1.5f * s) + 1;
+}
+
 /*
 ================
 UI_BakeFont
@@ -649,6 +654,25 @@ static void Bake_Mask(uiCanvas_t *cv, const byte *mask, const float *c)
     for (int i = 0; i < cv->w * cv->h; i++) {
         if (mask[i]) {
             Bake_Over(&cv->px[i * 4], c, mask[i] / 255.0f);
+        }
+    }
+}
+
+// the drop shadow under what the canvas has (its alpha the mask, so a faint
+// shape casts as faint a shadow), as a face's under its glyphs
+static void Bake_Shadow(uiCanvas_t *cv)
+{
+    std::vector<byte> mask(cv->w * cv->h);
+
+    for (int i = 0; i < cv->w * cv->h; i++) {
+        mask[i] = (byte)(Q_min(1.0f, cv->px[i * 4 + 3]) * 255.0f + 0.5f);
+    }
+    for (int y = 0; y < cv->h; y++) {
+        for (int x = 0; x < cv->w; x++) {
+            float *p = &cv->px[(y * cv->w + x) * 4];
+
+            // (black under it: premultiplied, only its alpha grows)
+            p[3] += Bake_ShadowAt(mask.data(), cv->w, cv->h, x, y, cv->scale) * (1.0f - p[3]);
         }
     }
 }
@@ -1306,6 +1330,8 @@ fractions of the box. The shapes:
   picture COLOR FILE [left|center|right] [mirror]
   svg COLOR FILE [left|center|right] [mirror] [grey]  (an outline, each part
                                 in its fill, or its fill's brightness, times COLOR)
+  shadow                        (the faces' drop shadow under the layers
+                                before it: the box leaves it room, UI_ShadowMargin)
 A layer can start with "in X0 Y0 X1 Y1": drawn in that part of the box
 (fractions, or design units with "px", from the right or bottom edge when
 negative: "in -2px 0 1 1" the box's 2 units at its right).
@@ -1314,6 +1340,11 @@ negative: "in -2px 0 1 1" the box's 2 units at its right).
 static void Bake_Layer(uiCanvas_t *cv, const char *text)
 {
     std::vector<std::string> t;
+
+    if (!strcmp(text, "shadow")) {
+        Bake_Shadow(cv);
+        return;
+    }
 
     // in X0 Y0 X1 Y1 <layer>: the layer in that part of the box, over the rest
     if (!strncmp(text, "in ", 3)) {
@@ -1583,7 +1614,8 @@ static void Bake_ShapeTexels(const std::vector<std::string>& layers, int w, int 
 static void Bake_Prepare(const char *text)
 {
     static const char *const kinds[] = {
-        "fill", "vgradient", "hgradient", "circle", "ring", "frame", "roundframe", "roundbox", "poly", "crescent", "text", "picture", "svg"
+        "fill", "vgradient", "hgradient", "circle", "ring", "frame", "roundframe", "roundbox", "poly", "crescent", "text", "picture", "svg",
+        "shadow"
     };
     std::vector<std::string> t;
     uiFontSpec_t             spec;

@@ -545,6 +545,10 @@ static void VK_BeginMainCommandBuffer( void ) {
 	// nothing is bound in a new command buffer
 	Com_Memset( &vkb, 0, sizeof( vkb ) );
 	vk_dirty = VK_DIRTY_ALL;
+	// and the one before is done: of the bindless sets, only the current one
+	// is the new one's (VK_TextureArrayMark)
+	vk.frame->textureArrayCount = 1;
+	vk.frame->textureArrayBound = qfalse;
 }
 
 // what is bound in the main command buffer is no longer known (compute
@@ -564,6 +568,10 @@ void VK_BeginFrameIfNeeded( void ) {
 	if ( vk.frame ) {
 		return;
 	}
+
+	// this frame's grade (r_contrast, r_vibrance) and whether it goes through
+	// the output pass for it, before its target is chosen
+	VK_OutputBeginFrame();
 
 	frame = &vk.frames[vk.frameIndex];
 
@@ -1274,7 +1282,8 @@ VkPipelineStageFlags VK_PresentCopyStage( void ) {
 	if ( vko.enabled ) {
 		return VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	}
-	// the HDR look: the blit, or the output pass while calibrating
+	// SDR: the blit, or the output pass (the HDR look's calibration, the
+	// grade)
 	return vko.sdrPass ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT;
 }
 
@@ -1329,8 +1338,9 @@ static int VK_SubmitPresentCopy( vkFrame_t *frame, const VkCommandBuffer *cmds, 
 
 	cmd = frame->presentCmd;
 	if ( VK_OutputPassAvailable() ) {
-		// the swapchain may have been made again above
-		VK_OutputFillPush( &frame->outputPush );
+		// the swapchain may have been made again above (the frame's grade
+		// stays: the next frame may be drawn already)
+		VK_OutputFillTarget( &frame->outputPush );
 	}
 	VK_CHECK( VK_RecordPresentCopy( frame, cmd, vk.swapchainImages[imageIndex] ) );
 
@@ -2129,8 +2139,9 @@ void VK_CreateSwapchainTargets( void ) {
 		VK_OutputCreateTargets();
 		return;
 	}
-	// the HDR look: the output pass for the calibration screens, the other
-	// frames drawn into the swapchain images as without it
+	// SDR: the output pass for the HDR look's calibration screens and the
+	// graded frames, the other frames drawn into the swapchain images
+	// as without it
 	if ( vko.sdrPass ) {
 		VK_OutputCreateTargets();
 	}
@@ -2212,7 +2223,6 @@ static void VK_DestroyRenderTargets( void ) {
 	VK_DestroyTargetImage( &vk.depthImage, &vk.depthMemory, &vk.depthView );
 	VK_DestroyTargetImage( &vk.msColorImage, &vk.msColorMemory, &vk.msColorView );
 	VK_DestroyTargetImage( &vk.msDepthImage, &vk.msDepthMemory, &vk.msDepthView );
-	VK_DestroyTargetImage( &vk.blurImage, &vk.blurMemory, &vk.blurView );
 }
 
 /*
@@ -2317,7 +2327,7 @@ static void VK_Info_f( void ) {
 
 #define VK_DELTA( field ) ( (unsigned long long)( s->field - r->field ) )
 	ri.Printf( PRINT_ALL, "vkinfo: frames=%llu renderPasses=%llu submits=%llu flushes=%llu draws=%llu staticDraws=%llu effectsDraws=%llu terrainDraws=%llu terrainSlots=%llu skinDraws=%llu pipelineBinds=%llu"
-		" descriptorBinds=%llu vertexBytes=%llu stagingBytes=%llu mainUploads=%llu textures=%llu pipelines=%llu allocations=%llu depthTargets=%llu"
+		" descriptorBinds=%llu textureArrayCopies=%llu vertexBytes=%llu stagingBytes=%llu mainUploads=%llu textures=%llu pipelines=%llu allocations=%llu depthTargets=%llu"
 		" swapchains=%llu vertexGrowth=%llu prebuiltPipelines=%llu skinUploads=%llu skinBytes=%llu"
 		" waitUs=%llu flushUs=%llu submitUs=%llu acquireUs=%llu acquireAheadUs=%llu frameToPresentUs=%llu presentUs=%llu pipelineUs=%llu prebuiltUs=%llu allocationUs=%llu textureUs=%llu"
 		" gpuFrames=%llu gpuMainUs=%llu gpuPresentUs=%llu gpuFrameUs=%llu"
@@ -2326,7 +2336,7 @@ static void VK_Info_f( void ) {
 		" vertexBinds=%llu indexBinds=%llu pushConstants=%llu dynamicStates=%llu\n",
 		VK_DELTA( frames ), VK_DELTA( renderPasses ), VK_DELTA( submits ), VK_DELTA( flushes ), VK_DELTA( draws ),
 		VK_DELTA( staticDraws ), VK_DELTA( effectsDraws ), (unsigned long long)( vk_terrain.draws - vk_terrain.reportedDraws ),
-		(unsigned long long)( vk_terrain.slots - vk_terrain.reportedSlots ), VK_DELTA( skinDraws ), VK_DELTA( pipelineBinds ), VK_DELTA( descriptorBinds ), VK_DELTA( vertexBytes ), VK_DELTA( stagingBytes ), VK_DELTA( mainUploads ),
+		(unsigned long long)( vk_terrain.slots - vk_terrain.reportedSlots ), VK_DELTA( skinDraws ), VK_DELTA( pipelineBinds ), VK_DELTA( descriptorBinds ), VK_DELTA( textureArrayCopies ), VK_DELTA( vertexBytes ), VK_DELTA( stagingBytes ), VK_DELTA( mainUploads ),
 		VK_DELTA( textures ), VK_DELTA( pipelines ), VK_DELTA( allocations ), VK_DELTA( depthTargets ), VK_DELTA( swapchains ), VK_DELTA( vertexGrowth ),
 		VK_DELTA( prebuiltPipelines ), VK_DELTA( skinUploads ), VK_DELTA( skinBytes ),
 		VK_DELTA( waitUs ), VK_DELTA( flushUs ), VK_DELTA( submitUs ),
@@ -2427,6 +2437,7 @@ void vk_initialize( void ) {
 	}
 	VK_InitTextures();
 	VK_RadarInit();
+	VK_FrameBlurInit();
 	VK_ReportCapabilities();
 
 	ri.Cmd_AddCommand( "vkinfo", VK_Info_f );
@@ -2459,6 +2470,7 @@ void vk_shutdown( void ) {
 			VK_ProcessDestroyList( &vk.frames[i] );
 		}
 		VK_RadarShutdownObjects();
+		VK_FrameBlurShutdown();
 		VK_ShutdownTextureObjects();
 		VK_DestroyBuffer( &vk_static.buffer );
 		Com_Memset( &vk_static, 0, sizeof( vk_static ) );
@@ -3967,6 +3979,8 @@ void vk_draw( primType_t prim, const drawGeometry_t *geometry, int numIndexes, c
 			qvkCmdBindDescriptorSets( cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkt.active ? vkt.pipelineLayout : vk.pipelineLayout, 0, 1,
 				&vk.frame->textureArraySet, 0, NULL );
 			vkb.sets[0] = vk.frame->textureArraySet;
+			// (from now on a changed slot goes in a copy: vk_image.c)
+			vk.frame->textureArrayBound = qtrue;
 			vk.stats.descriptorBinds++;
 		}
 		slots = VK_TextureArraySlots( textures[0], textures[1] );
@@ -5687,6 +5701,17 @@ qboolean vk_begin_scene( const vkSceneView_t *view ) {
 		if ( vkt.sceneSerial == vk.frameSerial ) {
 			return qfalse;
 		}
+		// nothing reads the scene (VK_TemporalSceneWanted): this frame's views
+		// are drawn as without the path, at its cost; the images readers left
+		// are freed first
+		if ( !VK_TemporalSceneWanted() ) {
+			vkt.sceneSerial = vk.frameSerial;
+			if ( vkt.groups ) {
+				VK_EndRenderPass();
+				VK_TemporalUpdateFeatures();
+			}
+			return qfalse;
+		}
 		VK_EndRenderPass();
 		// the other images hold the last scene's
 		vkt.current ^= 1;
@@ -5808,74 +5833,17 @@ void vk_end_scene( void ) {
 vk_frame_blur
 
 The frame as drawn so far, blurred into image (the Reloaded menus'
-backdrop, "*frameblur": RB_StretchPic, the first time a frame draws it).
-The render pass ends (with multisampling its color resolved into the
-target); the target is halved down the mip levels of vk.blurImage to a 32nd
-of its size, and the last scaled up into the image (a 16th), which is drawn
-stretched: a box filter's pyramid and bilinear steps up, a wide and soft
-blur for six blits. The next render pass loads what was drawn
+backdrop, "*frameblur": RB_StretchPic, the first time a frame draws it):
+the render pass ends (with multisampling its color resolved into the
+target), vk_blur.c records the blur from the target, and the next render
+pass loads what was drawn
 ===============
 */
-#define VK_BLUR_LEVELS		5
-
-qboolean vk_frame_blur_supported( void ) {
-	const VkFormatFeatureFlags want = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
-	VkFormatProperties color, texture;
-
-	if ( !vk.device ) {
-		return qfalse;
-	}
-	qvkGetPhysicalDeviceFormatProperties( vk.physicalDevice, vk.colorFormat, &color );
-	qvkGetPhysicalDeviceFormatProperties( vk.physicalDevice, VK_FORMAT_R8G8B8A8_UNORM, &texture );
-	return ( color.optimalTilingFeatures & want ) == want && ( texture.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT );
-}
-
-// a blit of src's whole level (its size w h) to dst's (dw dh), filtered
-static void VK_BlurBlit( VkCommandBuffer cmd, VkImage src, int srcLevel, int w, int h, VkImage dst, int dstLevel, int dw, int dh ) {
-	VkImageBlit blit;
-
-	Com_Memset( &blit, 0, sizeof( blit ) );
-	blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	blit.srcSubresource.mipLevel = srcLevel;
-	blit.srcSubresource.layerCount = 1;
-	blit.srcOffsets[1].x = w;
-	blit.srcOffsets[1].y = h;
-	blit.srcOffsets[1].z = 1;
-	blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	blit.dstSubresource.mipLevel = dstLevel;
-	blit.dstSubresource.layerCount = 1;
-	blit.dstOffsets[1].x = dw;
-	blit.dstOffsets[1].y = dh;
-	blit.dstOffsets[1].z = 1;
-	qvkCmdBlitImage( cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR );
-}
-
-// a level of vk.blurImage blitted to: read from now
-static void VK_BlurLevelDone( VkCommandBuffer cmd, int level ) {
-	VkImageMemoryBarrier barrier;
-
-	Com_Memset( &barrier, 0, sizeof( barrier ) );
-	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-	barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.image = vk.blurImage;
-	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	barrier.subresourceRange.baseMipLevel = level;
-	barrier.subresourceRange.levelCount = 1;
-	barrier.subresourceRange.layerCount = 1;
-	qvkCmdPipelineBarrier( cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier );
-}
-
 void vk_frame_blur( image_t *image ) {
 	vkTexture_t *dst;
 	VkCommandBuffer cmd;
-	int level, w, h;
 
-	if ( !vk.device ) {
+	if ( !vk_frame_blur_supported() ) {
 		return;
 	}
 	VK_BeginFrameIfNeeded();
@@ -5885,12 +5853,6 @@ void vk_frame_blur( image_t *image ) {
 		return;
 	}
 	vk.blurSerial = vk.frameSerial;
-	if ( !vk.blurImage ) {
-		// (sampled: what its view needs; never sampled)
-		VK_CreateImage( vk.colorFormat, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-			VK_IMAGE_ASPECT_COLOR_BIT, Q_max( vk.width / 2, 1 ), Q_max( vk.height / 2, 1 ), VK_BLUR_LEVELS, &vk.blurImage, &vk.blurMemory,
-			&vk.blurView );
-	}
 	vk_end_scene();
 	VK_EndRenderPass();
 	cmd = vk.frame->mainCmd;
@@ -5899,32 +5861,7 @@ void vk_frame_blur( image_t *image ) {
 		VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
 		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT );
-	// (its last contents not kept)
-	VK_ImageBarrier( cmd, vk.blurImage, VK_IMAGE_ASPECT_COLOR_BIT,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT );
-
-	w = vk.width;
-	h = vk.height;
-	for ( level = 0; level < VK_BLUR_LEVELS; level++ ) {
-		const int lw = Q_max( vk.width >> ( level + 1 ), 1 ), lh = Q_max( vk.height >> ( level + 1 ), 1 );
-
-		VK_BlurBlit( cmd, level ? vk.blurImage : vk.targetImage, level ? level - 1 : 0, w, h, vk.blurImage, level, lw, lh );
-		VK_BlurLevelDone( cmd, level );
-		w = lw;
-		h = lh;
-	}
-
-	VK_ImageBarrier( cmd, dst->image, VK_IMAGE_ASPECT_COLOR_BIT,
-		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT );
-	VK_BlurBlit( cmd, vk.blurImage, VK_BLUR_LEVELS - 1, w, h, dst->image, 0, dst->width, dst->height );
-	VK_ImageBarrier( cmd, dst->image, VK_IMAGE_ASPECT_COLOR_BIT,
-		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT );
+	VK_FrameBlurRecord( cmd, vk.targetImage, dst );
 	VK_ImageBarrier( cmd, vk.targetImage, VK_IMAGE_ASPECT_COLOR_BIT,
 		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 		VK_PIPELINE_STAGE_TRANSFER_BIT, 0,

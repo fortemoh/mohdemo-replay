@@ -31,6 +31,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_health_on
 shape fill $ui_hud_acc 1
+shadow
 }
 
 resource
@@ -42,6 +43,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_badge_on
 shape hgradient 0 1 $ui_hud_acc_line 0 $ui_hud_acc_line 0.702
+shadow
 }
 
 resource
@@ -53,6 +55,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_badge_on
 shape hgradient 0 1 $ui_hud_acc_line 0.702 $ui_hud_acc_line 0
+shadow
 }
 
 // the badge: a disc, the team's icon filling it, the ring over it
@@ -76,6 +79,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_allies
 shape svg 1 1 1 1 ui/outlines/team/allies.svg center
+shadow
 }
 
 resource
@@ -87,6 +91,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_axis
 shape svg 1 1 1 1 ui/outlines/team/axis.svg center
+shadow
 }
 
 resource
@@ -98,6 +103,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_badge_on
 shape ring 2 $ui_hud_acc_ring 1
+shadow
 }
 
 // the ammo, each after the one before
@@ -108,7 +114,7 @@ name "clip"
 rect 655 24 80 56
 bgcolor 0 0 0 0
 borderstyle NONE
-font oswald-medium-36
+font oswald-medium-36s
 textalign left
 linkcvar ui_hud_clip
 colorcvar ui_hud_acc
@@ -124,6 +130,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_ammo_on
 shape fill $ui_hud_acc_line 0.6
+shadow
 flowafter clip 24
 }
 
@@ -134,7 +141,7 @@ name "reserve"
 rect 714 24 80 56
 bgcolor 0 0 0 0
 borderstyle NONE
-font oswald-medium-21
+font oswald-medium-21s
 textalign left
 linkcvar ui_hud_ammo
 colorcvar ui_hud_acc
@@ -151,6 +158,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_ammo_on
 shape roundbox 2 $ui_hud_acc 1 5 17 -45
+shadow
 flowafter reserve 19.5
 }
 

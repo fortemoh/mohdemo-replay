@@ -961,6 +961,7 @@ below are done.
 | `vk_submit.c` | the submit thread (`r_vkSubmitThread 1`): submits and presents the frames, acquires the swapchain image of the next frame after each present, copies a frame drawn offscreen (see Implementation notes, Submit thread) |
 | `vk_output.c` | HDR output (`r_hdrOutput`): the window's HDR state (Vulkan surface formats, SDL), the swapchain's mode, paper white and peak, the 3D view's expansion parameters, the output pass (see Implementation notes, HDR output) |
 | `vk_radar.c` | the Competitive HUD radar's picture made on the GPU (`RE_RegisterRadar2D`, `RE_Radar2DHeight`): the floors' list copied to the GPU, the two kernels, the picture copied into its place in the 2D atlas as an upload (see Implementation notes, Radar picture) |
+| `vk_blur.c` | the Reloaded menus' blurred backdrop (`*frameblur`, `vk_frame_blur`): the frame halved twice by blits, a Gaussian there (two compute passes, `shaders/frame_blur.comp`), the quarter scaled into the image the menus stretch over the screen |
 | `vk_temporal.c` | the temporal path (`r_temporal 1`): the scene's images, render passes and pipeline layout, the depth pyramid, the composite into the frame (see Implementation notes, Temporal path) |
 | `tr_smp.c` | the render thread (`r_smp 1`): runs the back end's command lists handed over at `EndFrame`, the front end's waits for it (`R_FrontEndSync`), its start and stop with the renderer (see Implementation notes, Render thread) |
 | `tr_temporal.c` | the temporal path's views and history: the scene begins and ends, the camera's and the entities' last frame, the skinned entities' last bones (see Implementation notes, Temporal path) |
@@ -972,10 +973,11 @@ below are done.
 | `shaders/effects.vert` | the vertex shader of the static geometry's draws with effects (deforms, `tcGen` and `tcMod`, `distFade`, static models' dynamic lights; see Implementation notes, Effects shader), built with and without `gl_ClipDistance`; its outputs are `generic.vert`'s |
 | `shaders/hiz_build.comp`, `shaders/taa_resolve.comp`, `shaders/temporal_composite.*`, `shaders/temporal_common.glsl` | the temporal path's passes after the scene (`hiz_build.comp` built three times: `PREPARE`, the default, `TAIL`; `taa_resolve.comp` the anti-aliasing) and what they and the passes to come that read its buffers share (included); `generic.*`, `skinned.vert` and `effects.vert` are also built with `TEMPORAL` defined for its scene |
 | `shaders/radar.comp`, `shaders/radar.glsl` | the radar's picture for a height: the whole picture (a thread a texel) and, built with `CHANGING`, a storey's change (a thread a cell that can change); `radar.glsl` holds the floor's alphas, the UI's own bytes (`RM_Paint`) with the division by 56 rounded as the CPU's |
+| `shaders/frame_blur.comp` | the menus' backdrop's Gaussian at a quarter of the screen: across into a half-float image, and built with `VERTICAL` down back into the quarter |
 | `shaders/output.frag` | HDR output's pass: the frame into the swapchain image, SDR, HDR10 (PQ) or scRGB, and the calibration screens' patterns; its vertex shader is `temporal_composite.vert` |
-| `shaders/compile_shaders.sh` | regenerates `vk_shaders.c`, `vk_shaders_temporal.c`, `vk_shaders_hdr.c` and `vk_shaders_radar.c` with `glslc` (an argument, `main`, `temporal`, `hdr` or `radar`, writes only that one) |
+| `shaders/compile_shaders.sh` | regenerates `vk_shaders.c`, `vk_shaders_temporal.c`, `vk_shaders_hdr.c`, `vk_shaders_radar.c` and `vk_shaders_blur.c` with `glslc` (an argument, `main`, `temporal`, `hdr`, `radar` or `blur`, writes only that one) |
 | `shaders/glslang_as_glslc.sh` | glslang standing in for `glslc` (`GLSLC=shaders/glslang_as_glslc.sh shaders/compile_shaders.sh`): maps the options and writes the words as `-mfmt=c` does; the arrays since 2026-10-31 come from glslang 16.6.0 this way |
-| `vk_shaders.c`, `vk_shaders_temporal.c`, `vk_shaders_hdr.c`, `vk_shaders_radar.c` | generated SPIR-V as C arrays (committed, so builds don't need `glslc`; `vk_shaders_radar.c` from shaderc 2026.1's `glslc`) |
+| `vk_shaders.c`, `vk_shaders_temporal.c`, `vk_shaders_hdr.c`, `vk_shaders_radar.c`, `vk_shaders_blur.c` | generated SPIR-V as C arrays (committed, so builds don't need `glslc`; `vk_shaders_radar.c` and `vk_shaders_blur.c` from shaderc 2026.1's `glslc`) |
 | `tools/` | build-against-build screenshot comparison and performance scripts, view lists, the OpenGL check (see Testing) |
 | `WINDOWS_TESTING.md` | a tester's checklist for Windows: commands, cvars, what to send back |
 | `tr_immediate.c` | `glBegin`/`glEnd` emulation for debug and 2D drawing, emits indexed triangles or lines |
@@ -1078,7 +1080,7 @@ is needed for `r_vkValidation`.
 cmake -S . -B build-vk -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build-vk
 cd build-vk/RelWithDebInfo
-./openmohaa +set fs_basepath ~/Documents/moh \
+./mohreloaded +set fs_basepath ~/Documents/moh \
     +set fs_homepath /tmp/moh-home +set r_fullscreen 0 +set r_mode 3
 ```
 
@@ -1337,8 +1339,8 @@ code/renderervk/tools/glcheck.sh
 - `compare.sh`: writes the cfg (`shots.py`), runs it with two builds,
   `A` (the reference, default `base`: `renderer_base.so`, a copy of the
   build before) and `B` (default `vulkan`), with the engine binaries
-  `A_BIN` and `B_BIN` of `MOH_BINDIR` (default `openmohaa`; a wrapper
-  script `exec <dir>/openmohaa "$@"` runs a build with its own cgame.so,
+  `A_BIN` and `B_BIN` of `MOH_BINDIR` (default `mohreloaded`; a wrapper
+  script `exec <dir>/mohreloaded "$@"` runs a build with its own cgame.so,
   which is loaded from the binary's directory), through `run.sh`, then
   prints per channel the max and mean absolute difference and the number of
   differing pixels for every view (`tgadiff.py`), and writes PNG copies
@@ -1409,7 +1411,7 @@ the frames of a deterministic view are then identical to the bit, run
 after run, but for the lists that differ between two runs of the same
 build (snow, smoke, AI and vehicles, some near-camera pixels; the checks
 below name them). For an engine
-change, copy the old `openmohaa` under another name (`MOH_BIN=<name>
+change, copy the old `mohreloaded` under another name (`MOH_BIN=<name>
 run.sh vulkan <list>`, or the binary field of `cmplists.sh`); for a
 cgame change, give the old build its own directory and a wrapper.
 
@@ -3395,7 +3397,7 @@ The frame log of the Vulkan renderer records every frame with what
 happened in it. Off by default; `r_vkFrameLog` is latched, so:
 
 ```sh
-./openmohaa +set r_vkFrameLog 1 ...        # or in the console: r_vkFrameLog 1; vid_restart
+./mohreloaded +set r_vkFrameLog 1 ...      # or in the console: r_vkFrameLog 1; vid_restart
 ```
 
 then, in the console, `vkframelog clear` before what should be measured
@@ -7149,7 +7151,11 @@ thread, both and neither, vsync, the temporal path, the early submission
 levelshot, a resampled shot, the overdraw). With `r_smp 0` and bindless textures (`r_vkBindless 1`) a map load
 reports 84 messages (a descriptor set updated while a command buffer that
 binds it records): the same before this plan and before the merge
-(783b7414), none with `r_vkBindless 0`; not fixed here.
+(783b7414), none with `r_vkBindless 0`; not fixed here. Fixed since
+(2026-11-21, see Implementation notes, Bindless textures): the frame's
+bindless set was written after a draw bound it when the UI baked a font
+page mid-frame; the map load and the team page are clean under validation
+with `r_smp` 0 and 1.
 
 ### Coordinate conventions
 
@@ -8064,14 +8070,23 @@ selects the sample count (see Implementation notes).
   twice (`generic_bindless_frag`, `-DBINDLESS`), the vertex shaders write
   the slots either way. A set is written at its frame's begin, when that
   frame is done, for the slots that changed since it was last written (a
-  pending frame's set can't be written); the frame being recorded has its
-  set written at once, so a texture made in a frame is drawn in it. A
-  free slot holds the default texture, the last slot (which the table
-  never hands out) is the default's, and a slot freed in the frame being
-  recorded isn't handed out again in it, since the frame's earlier draws
-  read it. Two edges: a texture respecified in a frame (the ghost textures)
-  shows its new contents to the frame's earlier draws too, and the
-  per-texture sets are still made (the fallback's path stays whole).
+  pending frame's set can't be written); the frame being recorded gets a
+  change at once, so a texture made in a frame is drawn in it. Its set is
+  written in place only until a draw of the command buffer binds it:
+  writing a bound set makes the command buffer invalid (validation: "was
+  destroyed or updated without UPDATE_AFTER_BIND"; the UI baking a font
+  page the first time it draws a size did that on the team page and the
+  connect screen). After that the change goes in the next of the frame
+  slot's `VK_TEXTURE_ARRAY_SETS` (4) sets, a copy of the current one with
+  the change, which the draws after bind and the frame keeps as its set;
+  the earlier draws keep theirs (`textureArrayCopies` in `vkinfo`, 5 or 6 in a
+  map load and the team page). With all four bound in the command buffer
+  the frame so far is submitted and waited for (`VK_FlushAndWait`), which
+  begins a command buffer with none bound. A free slot holds the default
+  texture, the last slot (which the table never hands out) is the
+  default's, and a slot freed in the frame being recorded isn't handed out
+  again in it. The per-texture sets are still made (the fallback's path
+  stays whole).
   Without the limits, dynamic indexing or stride 0 bindings (the
   per-instance fallback would read `firstInstance`), or with `r_vkBindless
   0`, the sets per texture as before.
@@ -11771,3 +11786,116 @@ variable-length array, checked with clang's `-Wvla`).
     textures' validation messages at a map load (above); the plan numbers
     50 to 52 of the `vulkan` branch (the occlusion's work) and of this one
     (the render thread, each stage cheaper) overlap since the merge.
+54. What Omaha changed in the temporal and output passes since the fork
+    (2026-11-21, the owner's request: port Omaha's ambient occlusion, TAA,
+    motion blur and their settings). This renderer forked from Omaha's
+    `vulkan` branch at f4550a54 (Plan 43); Plans 44 to 52 reached both, so
+    the effects' shaders and passes are the same code (every shader but
+    `output.frag` byte for byte). Taken from Omaha since:
+    - time going back is a cut (Omaha's d243cc60): when the scene's time is
+      less than the last frame's (Omaha's demo seeking in place; a guard
+      here: a whole real objective match, rounds included, 54,517 frames
+      with TAA, never went back), the temporal path starts a new history
+      for the camera and the
+      entities (it kept the old one when the camera landed within
+      `r_temporalCutDist`, so TAA, ambient occlusion and motion blur smeared
+      the frame before into the one after); a light flare's fade that starts
+      in the future restarts (`tr_flares.c`: a visible flare stayed hidden,
+      a hidden one shown, until the time caught up); swipes and ghost
+      textures take no negative step.
+    - `r_hdrOutputActive` (Omaha's 70c35fc5, read only): 1 while HDR output
+      runs on an HDR swapchain, 2 while the HDR look runs (`r_hdrOutput 2`
+      with the temporal path), 0 otherwise, for the client's Options (its
+      CALIBRATE button); worked out by the back end, set on the front end
+      (`vk_output_publish` from `RE_BeginFrame`; Omaha's 76939284).
+      Calibration refused (`r_hdrOutputTest 1` without HDR or the HDR look)
+      sets `r_hdrOutputTest` back to 0 on the front end too, the refusal
+      printed once (Omaha's fea286f5): the back end set the cvar from the
+      render thread with `r_smp 1`.
+    - `r_contrast` (Omaha's 843a74c0, 789b59f4 and fea286f5; archived,
+      default 1, 0.5 to 2, live): contrast of the whole picture (the 3D
+      view, the HUD, the menus) around mid gray of the gamma-encoded frame,
+      as a monitor's contrast, in the output pass (`output.frag`). An SDR
+      swapchain now always has the output pass (it was the HDR look's only;
+      `vko.hdrLook` keeps that mode's own behavior) and its images are color
+      attachments wherever the surface allows (without TRANSFER_SRC too); a
+      frame goes through the pass, drawn offscreen, while `r_contrast` isn't
+      1, decided as the frame begins (`VK_OutputBeginFrame`) and kept to its
+      present (a swapchain made again at present fills only its own fields,
+      `VK_OutputFillTarget`). Not on the calibration screens; screenshots
+      are taken before it, without it. At 1 the frames are drawn and sent
+      as before. Not taken: Omaha's `r_colorblind` (the owner's choice).
+      `vk_shaders_hdr.c` was made with this machine's glslc (shaderc
+      2026.1): `compile_shaders.sh` with it gives the other three files
+      other bytes than the glslang that made them, so they were left alone.
+    - `r_vibrance` (ours, the owner's request: CS2-style colour without
+      Enhanced Rendering; archived, default 1, 0 to 2, live): the colour
+      saturation of the whole picture in the output pass beside
+      `r_contrast` (after it): about BT.709 luma in linear light, the
+      composite's `r_saturation` math, over the HUD and the menus too, as a
+      graphics driver's Digital Vibrance or Saturation. Omaha has none (its
+      `r_saturation` is the 3D view's, with the temporal path). The frame's
+      grade (`vko.contrast`, `vko.vibrance`, `vko.gradeFrame`): a frame goes
+      through the pass while either isn't 1.
+    - Enhanced Rendering's rules (Omaha's 70c35fc5, the client's
+      `cl_effects.cpp` and `cl_effects_logic.h`, unit tested by
+      `test_effects_logic`): `r_taa`, `r_ao`, `r_motionBlur` or `r_dof`
+      (not in Omaha's rules: its menu has no depth of field) on turns
+      `r_temporal` on (latched: it starts with the next `vid_restart`);
+      `r_temporal` turned off turns the four off, so it doesn't come back.
+      Whether they change in the console or a config (in Options their rows
+      are off until it is on); the rules also run before every renderer
+      start, so the renderer never starts with an effect on and the path
+      off. Omaha's third rule (`r_hdrOutput` turned on from 0 turned
+      `r_temporal` on) is left out: Enhanced Rendering is the one master
+      switch (notuern's advice), which HDR doesn't turn on (HDR output
+      works without it, the 3D view at paper white; the HDR look needs it).
+      `r_saturation` and `r_hdrExpand` play no part: their defaults would
+      turn the path on for everyone.
+    - Better than Omaha's: the path only while something reads it
+      (`VK_TemporalSceneWanted`, notuern's advice to the owner: "just turning
+      on r_temporal ... has a per pixel frame cost that is fairly big").
+      With `r_temporal 1` and no effect on (no `r_taa`, `r_ao`,
+      `r_motionBlur`, `r_dof`, `r_temporalShow`, `r_temporalJitter`, HDR
+      output on an HDR swapchain or the HDR look), a frame's 3D views are
+      drawn as without the path (`vk_begin_scene` declines them, as it does
+      a view after the scene), and the readers' images left are freed
+      first. `r_saturation` alone doesn't keep the path (its default 1.1
+      would): the colours are 10 % richer only while an effect runs. Frames
+      of the `dm/mohdm6` room with no effect on are `r_temporal 0`'s to the
+      bit (the build before: 39 % of the pixels off by up to 5). Frame time
+      medians (Radeon 780M, uncapped, the room; off, then on with no effect
+      the build before and now): 1920x1080 0.383, 1.019, 0.399 ms;
+      2560x1440 0.609, 1.704, 0.632; 3840x2160 1.268, 3.591, 1.269. With
+      the effects both builds the same: TAA 2.08, 3.64, 8.30; ambient
+      occlusion HIGH 2.48, 4.33, 9.58; motion blur (still) 1.41, 2.39, 5.62;
+      depth of field 2.36, 3.86, 9.21; TAA, occlusion and blur 3.93, 6.89,
+      16.07 ms at the three sizes.
+    - The settings (Omaha's ENHANCEMENTS, 70c35fc5, as rows of the client's
+      Options page, `cl_uimain.cpp`): VIDEO's new ENHANCED RENDERING
+      section: Enhanced Rendering (`r_temporal`), Anti-Aliasing (TAA),
+      Ambient Occlusion OFF LOW MEDIUM HIGH ULTRA (`r_ao` and
+      `r_aoQuality` in one row), Motion Blur and Depth of Field OFF LOW
+      MEDIUM HIGH (with `r_motionBlurQuality`, `r_dofQuality`), HDR OFF HDR
+      HDR LOOK (`r_hdrOutput`) and Calibrate HDR (`r_hdrOutputTest 1`, on
+      while `r_hdrOutputActive` isn't 0 and nothing waits for APPLY); under
+      PICTURE's Brightness, Contrast (`r_contrast`). APPLY restarts the
+      video for `r_temporal` and `r_hdrOutput`. Enhanced Rendering is the
+      master switch (notuern's advice, passed on by the owner): the four
+      effects' rows are off, greyed and unclickable, while it is off (as
+      APPLY will take it: `OF_UNDER`), where Omaha hides them. The owner's
+      choices: one row an effect with its levels (not Omaha's switch and
+      quality rows), the section on VIDEO, depth of field added, no
+      colorblind mode. Omaha's
+      Modern UI calibration menu is not taken: this client's own screens
+      (`DrawHdr`) stay.
+    - Measured on this branch's machine (Radeon 780M, RADV, 1920x1080,
+      uncapped, the `dm/mohdm6` room at 448 -160 108, frame time medians
+      of `vkframelog`; the GPU column reads 0.015 to 0.025 ms on RADV, not
+      usable): `r_temporal 0` 0.383 ms, 1 alone 1.02, with `r_taa`, `r_ao`
+      and `r_motionBlur` 3.91; `r_contrast` 1 0.383 ms on this branch and
+      the one before, 1.2 0.557 (each twice, the builds alternated in the
+      same minutes). The effects one by one (the build before, the same
+      code): anti-aliasing 2.52, ambient occlusion LOW to ULTRA 2.82, 2.55,
+      2.79, 3.63 (`r_aoAsync 0`; HIGH with it 2.61), motion blur still 1.53,
+      depth of field 2.49, over 1.09 with the path alone.

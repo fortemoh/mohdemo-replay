@@ -178,6 +178,7 @@ protected:
     float          m_color[4];
     str            m_widthCvar;  // the shape drawn this fraction wide
     bool           m_widthLeft;  // ... from its left, else about its middle
+    bool           m_shadow;     // the shapes with the faces' drop shadow under them (shadow)
     vec2_t         m_anchor;     // a menu's middle at these fractions of the screen (-1: its align)
     // the layout rules (flowafter flowbefore flowbelow fitbelow moveif):
     // applied in order to the URC's rect each frame, from
@@ -216,7 +217,7 @@ protected:
     bool         addChild(UIWidget *widget);
     bool         removeChild(UIWidget *widget);
     void         PropogateCoordinateSystem(void);
-    void         set2D(void);
+    void         set2D(float margin = 0.0f);
     virtual void Draw(void);
     virtual void FrameInitialized(void);
     void         DrawTitle(float x, float y);
@@ -266,6 +267,7 @@ public:
     void LayoutAlphaCvar(Event *ev);
     void LayoutColorCvar(Event *ev);
     void LayoutWidthCvar(Event *ev);
+    void LayoutShadow(Event *ev);
     void LayoutFlowAfter(Event *ev);
     void LayoutAnchor(Event *ev);
     void Flow(void);

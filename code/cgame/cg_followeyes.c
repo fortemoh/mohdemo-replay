@@ -20,581 +20,1763 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
-// Added in OPM
-//  cg_followeyes.c: with cg_followcamera 2, a demo shows the player its
-//  recorder follows from their own eyes. While followed, a snapshot's
-//  playerstate is theirs for where they are, look, crouch and zoom, but not
-//  for their gun, its animation, their lean or health; those come from
-//  their entity and the gun in its hand, and the snapshot is made as if
-//  they had recorded it, so that the first person view draws them as it
-//  draws a recorder: their arms and gun, firing, rechambering and
-//  reloading as their gun does, bobbing as they walk, and the scope.
-//  With cg_unspeccedcamera 2, a kill of a player it doesn't show
-//  (cl_demoBehind) is made from their eyes too, from their entity alone.
+// cg_followeyes.c -- Added in Reloaded: a followed player watched through
+// their eyes on any server (cg_spectatefirstperson)
+//
+// Every server (Allied Assault 1.11, Spearhead, Breakthrough, OpenMoHAA) sends
+// a spectator who follows a player a camera behind that player (fgame's
+// Player::SetPlayerView and GetSpectateFollowOrientation, the same code in the
+// original 1.11 game library):
+//
+//   ps.camera_angles = the player's view angles, the pitch plus
+//                      g_spectatefollow_pitch (2) x the trace's fraction
+//   ps.camera_origin = their eye + forward x -56 + up x 24 + right x 0.65 x
+//                      their lean (g_spectatefollow_forward / _up), pulled in
+//                      toward the top of their head when a wall is in the way
+//
+// Each snapshot read is rewritten into what a server of this code sends with
+// g_spectatefollow_firstperson 1: the playerstate under the followed player's
+// number, their origin, view angles, eye height and lean worked back from the
+// camera, their weapon from the gun in their hands, its first-person animation
+// from their upper body's (the server's state machine starts both together),
+// their death seen through their eyes, and the view kick of a hit made from
+// their health and the bullets the server sends for the effects. The rest of
+// the cgame then draws that player's entity as its first-person model, as for
+// our own player. What servers don't send to a spectator stays out: the ammo
+// and the red flash. A server of this code seen showing followers the
+// player's own view itself is asked for the view set here instead
+// (spectatemode), which has all of it.
 
 #include "cg_local.h"
+#include "../corepp/tiki.h"
+
+cvar_t *cg_spectatefirstperson;
+
+// the servers' follow camera (g_spectatefollow_forward, _up, _pitch defaults; the lean's share)
+#define FE_CAM_FORWARD -56.0f
+#define FE_CAM_UP      24.0f
+#define FE_CAM_PITCH   2.0f
+#define FE_CAM_LEAN    0.65f
+
+// the player's model's animation slots: the legs in 0 and 1, the upper body in 2 and 3
+#define FE_TORSO_SLOT 2
+
+// a stock server's frame (ms; they run 20 a second)
+#define FE_SERVER_FRAME 50
+
+// the hit's view kick, as the server's Player::DamageFeedback (g_viewkick_pitch, _yaw, _roll defaults),
+// worked once a server frame
+#define FE_KICK_PITCH 0.3f
+#define FE_KICK_YAW   0.3f
+#define FE_KICK_ROLL  0.15f
+
+// the number the turret's view model of a followed player on a turret takes in the snapshots (see FE_Turret): one
+// below the world's, which the servers leave to the last
+#define FE_TURRET_VIEWMODEL (ENTITYNUM_WORLD - 1)
+
+// the bullets and explosions the server sent lately, to tell where a hit came from
+#define FE_MAX_SHOTS 32
+#define FE_SHOT_TIME 300 // ms
+
+// the turrets seen, as last sent (see FE_KeepTurrets)
+#define FE_MAX_TURRETS 16
+
+// a turret not sent (see FE_Turret): the bullets that start this near it are its shots, and each one's "fire"
+// lasts this long
+#define FE_TURRET_MUZZLE 64
+#define FE_TURRET_FIRE   100 // ms
 
 typedef struct {
-    const char *model; // in their hand
-    const char *name;  // in CS_WEAPONS
-    int         weaponClass;
-} followedWeapon_t;
+    int   index;
+    float time;
+} feAnim_t;
 
-static const followedWeapon_t followedWeapons[] = {
-    {"models/weapons/colt45.tik",           "Colt 45",                WEAPON_CLASS_PISTOL },
-    {"models/weapons/p38.tik",              "Walther P38",            WEAPON_CLASS_PISTOL },
-    {"models/weapons/silencedpistol.tik",   "Hi-Standard Silenced",   WEAPON_CLASS_PISTOL },
-    {"models/weapons/m1_garand.tik",        "M1 Garand",              WEAPON_CLASS_RIFLE  },
-    {"models/weapons/kar98.tik",            "Mauser KAR 98K",         WEAPON_CLASS_RIFLE  },
-    {"models/weapons/kar98sniper.tik",      "KAR98 - Sniper",         WEAPON_CLASS_RIFLE  },
-    {"models/weapons/springfield.tik",      "Springfield '03 Sniper", WEAPON_CLASS_RIFLE  },
-    {"models/weapons/thompsonsmg.tik",      "Thompson",               WEAPON_CLASS_SMG    },
-    {"models/weapons/mp40.tik",             "MP40",                   WEAPON_CLASS_SMG    },
-    {"models/weapons/bar.tik",              "BAR",                    WEAPON_CLASS_MG     },
-    {"models/weapons/mp44.tik",             "StG 44",                 WEAPON_CLASS_MG     },
-    {"models/weapons/bazooka.tik",          "Bazooka",                WEAPON_CLASS_HEAVY  },
-    {"models/weapons/panzerschreck.tik",    "Panzerschreck",          WEAPON_CLASS_HEAVY  },
-    {"models/weapons/shotgun.tik",          "Shotgun",                WEAPON_CLASS_HEAVY  },
-    {"models/weapons/m2frag_grenade.tik",   "Frag Grenade",           WEAPON_CLASS_GRENADE},
-    {"models/weapons/steilhandgranate.tik", "Stielhandgranate",       WEAPON_CLASS_GRENADE},
-};
+typedef struct {
+    vec3_t   start, end;
+    int      time; // cgi.Milliseconds() when it came
+    qboolean blast;
+} feShot_t;
 
-// the gun's animations, by the names the first person ones end with
-static const struct {
-    const char *name;
-    int         vmAnim;
-} gunAnims[] = {
-    {"fire",           VM_ANIM_FIRE          },
-    {"fire_empty",     VM_ANIM_FIRE          },
-    {"fire_secondary", VM_ANIM_FIRE_SECONDARY},
-    {"secondaryfire",  VM_ANIM_FIRE_SECONDARY},
-    {"charge",         VM_ANIM_CHARGE        },
-    {"rechamber",      VM_ANIM_RECHAMBER     },
-    {"reload",         VM_ANIM_RELOAD        },
-    {"reload_single",  VM_ANIM_RELOAD_SINGLE },
-    {"reload_end",     VM_ANIM_RELOAD_END    },
-};
-
-// how long a weapon taken out is shown being taken out, in msec
-#define FOLLOWED_PULLOUT_TIME 700
-
-// the gun's animation (followed.gunAnim) while the player bashes with it
-#define FOLLOWED_BASH -2
-
-// what was made of the snapshots before, to tell what changes
 static struct {
-    int   serverTime;
-    int   client;
-    int   gunModel; // modelindex, 0 for none
-    int   gunAnim;
-    float gunAnimTime;
-    int   vmAnim;
-    int   vmAnimChanged;
-    int   vmAnimTime; // server time it began
-    int   pulloutTime;
-} followed;
+    int      follow;     // the player watched through their eyes in the last snapshot read, -1 none
+    int      serverTime; // that snapshot's
+    vec3_t   origin;     // their origin in it
+    float    lean;       // their lean, kept while the camera is pulled in onto their head
+    float    eyeHeight;  // their eye height worked out last, and the top of their box then
+    float    eyeBoxTop;
+    float    boxTop; // the top of their box in the last snapshot read
+    int      keptFrames; // snapshots in a row their view was kept as it was (see CG_FollowEyes_Snapshot)
+    int      weaponEnt; // the gun in their hands, and its animation
+    feAnim_t weaponAnim;
+    feAnim_t torsoAnim; // their upper body's newest animation, and its weight then
+    float    torsoWeight;
+    qboolean torsoKnown; // seen to start a first-person animation (the stock state machine's names)
+    int      vmAnim; // the first-person animation made from them
+    int      vmAnimChanged;
+    // their hits: their health in the last snapshot read, the kick and the damage it decays with, the red
+    // flash, the damage's direction for the HUD (see FE_HitFeedback)
+    int      health;
+    vec3_t   kick;
+    float    kickCount;
+    float    flash;
+    int      damageDir;
+    qboolean airborne; // off the ground in the snapshot read (see FE_Airborne), and the last one they were in
+    int      airTime;
+    // the turret they are on: its animation and the slot it is in, and the shake its shots give their view
+    // (see FE_Turret); for one not sent, the bullets read (fe_numShots then) and its last shot's slot and time
+    feAnim_t     turretAnim;
+    int          turretSlot;
+    float        turretJitter;
+    unsigned int turretShots;
+    int          turretFireSlot;
+    int          turretFireTime;
+    // the entity the cgame draws as its first-person model, and for each player
+    // what is added to their usageIndex (see FE_Salt)
+    int      viewEnt;
+    int      salt[MAX_CLIENTS];
+    // the server shows followers the player's own view itself (see CG_FollowEyes_Snapshot), and the
+    // spectatemode last asked of it (-1 none)
+    qboolean serverMode;
+    int      modeSent;
+} fe;
+
+static feShot_t     fe_shots[FE_MAX_SHOTS];
+static unsigned int fe_numShots;
+
+static entityState_t fe_turrets[FE_MAX_TURRETS];
+static int           fe_numTurrets;
 
 /*
 ===============
-CG_FollowedWeapon
-
-The weapon of a gun model, NULL for one not known
+CG_FollowEyes_Init
 ===============
 */
-static const followedWeapon_t *CG_FollowedWeapon(int modelindex)
+void CG_FollowEyes_Init(void)
 {
-    const char *model = CG_ConfigString(CS_MODELS + modelindex);
-    int         i;
+    cg_spectatefirstperson = cgi.Cvar_Get("cg_spectatefirstperson", "0", CVAR_ARCHIVE);
 
-    for (i = 0; i < (int)ARRAY_LEN(followedWeapons); i++) {
-        if (!Q_stricmp(model, followedWeapons[i].model)) {
-            return &followedWeapons[i];
-        }
-    }
-    return NULL;
+    memset(&fe, 0, sizeof(fe));
+    fe.follow    = -1;
+    fe.weaponEnt = -1;
+    fe.viewEnt   = -1;
+    fe.modeSent  = -1;
+    fe.health    = -1;
+
+    memset(fe_shots, 0, sizeof(fe_shots));
+    fe_numShots = 0;
+
+    memset(fe_turrets, 0, sizeof(fe_turrets));
+    fe_numTurrets = 0;
 }
 
 /*
 ===============
-CG_FollowedBodyTiki
+CG_FollowEyes_Shot
 
-The model of the body of the player followed, or the default one when
-theirs isn't in the game files: all have the same skeleton and animations
+A bullet the server sent, from its start to where it ended (CG_MakeBulletTracer)
 ===============
 */
-dtiki_t *CG_FollowedBodyTiki(const entityState_t *body)
+void CG_FollowEyes_Shot(const vec3_t start, const vec3_t end)
 {
-    dtiki_t *tiki = cgi.R_Model_GetHandle(cgs.model_draw[body->modelindex]);
+    feShot_t *shot;
 
-    if (!tiki) {
-        tiki = cgi.R_Model_GetHandle(cgi.R_RegisterModel(va("models/player/%s.tik", dm_playermodel->resetString)));
+    if (!cg_spectatefirstperson || !cg_spectatefirstperson->integer) {
+        return;
     }
-    return tiki;
+
+    shot = &fe_shots[fe_numShots++ % FE_MAX_SHOTS];
+    VectorCopy(start, shot->start);
+    VectorCopy(end, shot->end);
+    shot->time  = cgi.Milliseconds();
+    shot->blast = qfalse;
 }
 
 /*
 ===============
-CG_FollowedGun
+CG_FollowEyes_Blast
 
-Whether es is a gun in the hand of the player whose body is body
+An explosion the server sent (CG_MakeExplosionEffect)
 ===============
 */
-qboolean CG_FollowedGun(const entityState_t *es, const entityState_t *body)
+void CG_FollowEyes_Blast(const vec3_t origin)
 {
-    dtiki_t    *tiki;
-    const char *tag;
+    feShot_t *shot;
 
-    if (es->parent != body->number || !CG_FollowedWeapon(es->modelindex)) {
-        return qfalse;
+    if (!cg_spectatefirstperson || !cg_spectatefirstperson->integer) {
+        return;
     }
 
-    tiki = CG_FollowedBodyTiki(body);
-    if (!tiki) {
-        return qfalse;
-    }
-    tag = cgi.Tag_NameForNum(tiki, es->tag_num & TAG_MASK);
-    return tag && (!Q_stricmp(tag, "tag_weapon_right") || !Q_stricmp(tag, "tag_weapon_left"));
+    shot = &fe_shots[fe_numShots++ % FE_MAX_SHOTS];
+    VectorCopy(origin, shot->start);
+    VectorCopy(origin, shot->end);
+    shot->time  = cgi.Milliseconds();
+    shot->blast = qtrue;
 }
 
 /*
 ===============
-CG_FollowedGunAnim
+CG_FollowEyes_PlayerState
 
-The first person animation of what the gun does, and the animation and its
-time
+The playerstate the view is drawn from while a followed player is watched through their eyes here (the snapshot's
+as rewritten), for what the client draws of it itself: the red flash over the view, the HUD's health and damage
+arrows. NULL otherwise, a server of this code showing them itself too (the client's own snapshot has it all).
 ===============
 */
-static int CG_FollowedGunAnim(const entityState_t *gun, int *anim, float *time)
+const playerState_t *CG_FollowEyes_PlayerState(void)
 {
-    dtiki_t    *tiki = cgi.R_Model_GetHandle(cgs.model_draw[gun->modelindex]);
-    const char *name;
-    int         best = -1;
-    int         i;
-
-    for (i = 0; i < MAX_FRAMEINFOS; i++) {
-        if (gun->frameInfo[i].weight > 0 && (best < 0 || gun->frameInfo[i].weight > gun->frameInfo[best].weight)) {
-            best = i;
-        }
-    }
-    if (best < 0 || !tiki) {
-        *anim = -1;
-        *time = 0;
-        return VM_ANIM_IDLE;
+    if (!cg.snap || fe.serverMode || !(cg.snap->ps.pm_flags & PMF_SPECTATING) || cg.snap->ps.clientNum == cg.clientNum) {
+        return NULL;
     }
 
-    *anim = gun->frameInfo[best].index;
-    *time = gun->frameInfo[best].time;
-    name  = cgi.Anim_NameForNum(tiki, *anim);
-    for (i = 0; name && i < (int)ARRAY_LEN(gunAnims); i++) {
-        if (!Q_stricmp(name, gunAnims[i].name)) {
-            return gunAnims[i].vmAnim;
-        }
-    }
-    return VM_ANIM_IDLE;
+    return &cg.snap->ps;
 }
 
 /*
 ===============
-CG_FollowedBash
+FE_ServerInitArg
 
-Whether the player followed bashes with their gun (pistol_butt), and how
-long ago it began (time): their body shows it, with the same animation as
-the first person one, but their gun only for its first snapshot
+An argument of the model's server init commands ("name", "weapontype"), read from the client's copy
 ===============
 */
-static qboolean CG_FollowedBash(const entityState_t *body, float *time)
-{
-    dtiki_t    *tiki = CG_FollowedBodyTiki(body);
-    const char *name;
-    int         i;
-
-    for (i = 0; tiki && i < MAX_FRAMEINFOS; i++) {
-        if (body->frameInfo[i].weight > 0) {
-            name = cgi.Anim_NameForNum(tiki, body->frameInfo[i].index);
-            if (name && strstr(name, "_butt")) {
-                *time = body->frameInfo[i].time;
-                return qtrue;
-            }
-        }
-    }
-    return qfalse;
-}
-
-/*
-===============
-CG_FollowedWeaponItem
-
-The item number of a weapon's name (CS_WEAPONS), -1 if it has none yet
-===============
-*/
-static int CG_FollowedWeaponItem(const char *name)
+static const char *FE_ServerInitArg(dtiki_t *tiki, const char *key)
 {
     int i;
 
-    for (i = 0; i < MAX_WEAPONS; i++) {
+    if (!tiki || !tiki->a) {
+        return NULL;
+    }
+
+    for (i = 0; i < tiki->a->num_server_initcmds; i++) {
+        const dtikicmd_t *cmd = &tiki->a->server_initcmds[i];
+
+        if (cmd->num_args >= 2 && !Q_stricmp(cmd->args[0], key)) {
+            return cmd->args[1];
+        }
+    }
+
+    return NULL;
+}
+
+static int FE_WeaponClass(const char *type)
+{
+    static const struct {
+        const char *name;
+        int         wclass;
+    } classes[] = {
+        {"pistol",  WEAPON_CLASS_PISTOL },
+        {"rifle",   WEAPON_CLASS_RIFLE  },
+        {"smg",     WEAPON_CLASS_SMG    },
+        {"mg",      WEAPON_CLASS_MG     },
+        {"grenade", WEAPON_CLASS_GRENADE},
+        {"heavy",   WEAPON_CLASS_HEAVY  },
+        {"cannon",  WEAPON_CLASS_CANNON },
+        {"item",    WEAPON_CLASS_ITEM   },
+        {"item1",   WEAPON_CLASS_ITEM1  },
+        {"item2",   WEAPON_CLASS_ITEM2  },
+        {"item3",   WEAPON_CLASS_ITEM3  },
+        {"item4",   WEAPON_CLASS_ITEM4  },
+    };
+    int i;
+
+    for (i = 0; type && i < (int)ARRAY_LEN(classes); i++) {
+        if (!Q_stricmp(type, classes[i].name)) {
+            return classes[i].wclass;
+        }
+    }
+
+    return 0;
+}
+
+/*
+===============
+FE_Crosshair
+
+Whether the player sees a crosshair with that gun, as the server works it out (Player::UpdateStats,
+Weapon::GetUseCrosshair): not through a scope, nor with an item; always in Allied Assault; in Spearhead
+and Breakthrough the gun's own setting (dmcrosshair over crosshair, off when not given), and off while
+moving faster than the gun can be fired at (maxfiremovement x movementspeed of the run speed)
+===============
+*/
+static int FE_Crosshair(dtiki_t *tiki, const playerState_t *ps)
+{
+    const char *arg;
+    float       maxFire, moveSpeed;
+
+    if (ps->stats[STAT_INZOOM] && ps->stats[STAT_INZOOM] <= 30) {
+        return 0;
+    }
+
+    arg = FE_ServerInitArg(tiki, "classname");
+    if (arg && !Q_stricmp(arg, "InventoryItem")) {
+        return 0;
+    }
+
+    if (cg_protocol < PROTOCOL_MOHTA_MIN) {
+        return 1;
+    }
+
+    arg = FE_ServerInitArg(tiki, "dmcrosshair");
+    if (!arg) {
+        arg = FE_ServerInitArg(tiki, "crosshair");
+    }
+    if (!arg || !atoi(arg)) {
+        return 0;
+    }
+
+    arg     = FE_ServerInitArg(tiki, "maxfiremovement");
+    maxFire = arg ? atof(arg) : 1;
+    arg     = FE_ServerInitArg(tiki, "dmmovementspeed");
+    if (!arg) {
+        arg = FE_ServerInitArg(tiki, "movementspeed");
+    }
+    moveSpeed = arg ? atof(arg) : 1;
+
+    // (of Spearhead's and Breakthrough's run speed, sv_runspeed 287)
+    if (maxFire < 1 && sqrt(ps->velocity[0] * ps->velocity[0] + ps->velocity[1] * ps->velocity[1]) / 287.0f > maxFire * moveSpeed) {
+        return 0;
+    }
+
+    return 1;
+}
+
+/*
+===============
+FE_ItemIndex
+
+The weapon's item number (playerState_t activeItems), from the names the server registered
+===============
+*/
+static int FE_ItemIndex(const char *name)
+{
+    int i;
+
+    for (i = 1; CS_WEAPONS + i < CS_SOUNDTRACK; i++) {
         if (!Q_stricmp(CG_ConfigString(CS_WEAPONS + i), name)) {
             return i;
         }
     }
+
     return -1;
 }
 
 /*
 ===============
-CG_FollowedKill
+FE_AnimChanged
 
-Prints the "You killed <victim>" the server tells the killer only, for the
-player followed from their eyes, when a kill message (text) is theirs: it
-begins with the victim's name, and theirs comes after as a whole word (a
-teamkill too, not a suicide)
+Whether an animation started since it was last read (another one, or the same one again)
 ===============
 */
-void CG_FollowedKill(const char *text)
+static qboolean FE_AnimChanged(feAnim_t *last, int index, float time)
 {
-    char        killer[MAX_STRING_CHARS];
-    const char *name, *s;
-    size_t      len, best = 0;
-    int         i, victim = -1;
+    qboolean changed = index != last->index || time + 0.01f < last->time;
 
-    if (!cg.snap || !(cg.snap->snapFlags & SNAPFLAG_FOLLOWED_FROM_EYES) || text[0] != HUD_MESSAGE_CHAT_RED[0]) {
-        return;
-    }
-    text++;
-
-    for (i = 0; i < MAX_CLIENTS; i++) {
-        name = Info_ValueForKey(CG_ConfigString(CS_PLAYERS + i), "name");
-        len  = strlen(name);
-        if (len > best && !strncmp(text, name, len) && text[len] == ' ') {
-            best   = len;
-            victim = i;
-        }
-    }
-    if (victim < 0 || victim == cg.snap->ps.clientNum) {
-        return;
-    }
-
-    Q_strncpyz(killer, Info_ValueForKey(CG_ConfigString(CS_PLAYERS + cg.snap->ps.clientNum), "name"), sizeof(killer));
-    len = strlen(killer);
-    if (!len) {
-        return;
-    }
-    for (s = strstr(text + best, killer); s; s = strstr(s + 1, killer)) {
-        if (s[-1] == ' ' && !isalnum((unsigned char)s[len])) {
-            cgi.Printf(
-                HUD_MESSAGE_WHITE "You killed %s\n", Info_ValueForKey(CG_ConfigString(CS_PLAYERS + victim), "name")
-            );
-            return;
-        }
-    }
+    last->index = index;
+    last->time  = time;
+    return changed;
 }
 
 /*
 ===============
-CG_SnapshotBody
+FE_WeaponVMAnim
 
-The entity of client in snap, NULL if it isn't in it
+The first-person animation for a gun's own (Weapon::SetWeaponAnim), -1 for none; used only where the
+upper body's animations aren't the stock state machine's (see FE_TorsoVMAnim)
 ===============
 */
-static entityState_t *CG_SnapshotBody(snapshot_t *snap, int client)
+static int FE_WeaponVMAnim(const char *anim)
+{
+    if (!Q_stricmpn(anim, "secondaryfire", 13)) {
+        return VM_ANIM_FIRE_SECONDARY;
+    }
+    if (!Q_stricmpn(anim, "secondarycharge", 15) || !Q_stricmpn(anim, "charge", 6)) {
+        return VM_ANIM_CHARGE;
+    }
+    if (!Q_stricmpn(anim, "fire", 4)) {
+        return VM_ANIM_FIRE;
+    }
+    if (!Q_stricmp(anim, "reload_single")) {
+        return VM_ANIM_RELOAD_SINGLE;
+    }
+    if (!Q_stricmp(anim, "reload_end")) {
+        return VM_ANIM_RELOAD_END;
+    }
+    if (!Q_stricmpn(anim, "reload", 6)) {
+        return VM_ANIM_RELOAD;
+    }
+    if (!Q_stricmp(anim, "raise")) {
+        return VM_ANIM_PULLOUT;
+    }
+    if (!Q_stricmp(anim, "putaway")) {
+        return VM_ANIM_PUTAWAY;
+    }
+    if (!Q_stricmpn(anim, "idle", 4)) {
+        return VM_ANIM_IDLE;
+    }
+
+    return -1;
+}
+
+static qboolean FE_EndsWith(const char *s, const char *end)
+{
+    const size_t len = strlen(s), endLen = strlen(end);
+
+    return len >= endLen && !Q_stricmp(s + len - endLen, end);
+}
+
+/*
+===============
+FE_TorsoVMAnim
+
+The first-person animation for the upper body's, -1 for none. The server's state machine (global/mike_torso.st)
+sets the first-person animation as it enters a state, and the state's upper body animation starts with it:
+"smg_stand_fire" fire (each shot), "grenade_crouch_charge" charge, "kar98_stand_rechamber" rechamber,
+"rifle_reload" / "springfield_reload_start" reload, "shotgun_reload_loop" reload_single (each shell),
+"shotgun_reload_end" reload_end, "pistol_butt" fire_secondary, "smg_crouch_lower" putaway, "pistol_stand_raise"
+pullout. With none it is back to idle (see CG_FollowEyes_Snapshot); a ladder's steps come from the animations'
+own frame commands (FE_FrameVMAnim).
+===============
+*/
+static int FE_TorsoVMAnim(const char *anim)
+{
+    if (strstr(anim, "rechamber")) {
+        return VM_ANIM_RECHAMBER;
+    }
+    if (strstr(anim, "reload_end")) {
+        return VM_ANIM_RELOAD_END;
+    }
+    if (strstr(anim, "reload_loop") || strstr(anim, "reload_single")) {
+        return VM_ANIM_RELOAD_SINGLE;
+    }
+    if (strstr(anim, "reload")) {
+        return VM_ANIM_RELOAD;
+    }
+    if (strstr(anim, "_charge")) {
+        return VM_ANIM_CHARGE;
+    }
+    if (strstr(anim, "_butt")) {
+        return VM_ANIM_FIRE_SECONDARY;
+    }
+    if (strstr(anim, "_fire")) {
+        return VM_ANIM_FIRE;
+    }
+    if (FE_EndsWith(anim, "_lower")) {
+        return VM_ANIM_PUTAWAY;
+    }
+    if (FE_EndsWith(anim, "_raise")) {
+        return VM_ANIM_PULLOUT;
+    }
+
+    return -1;
+}
+
+/*
+===============
+FE_VMAnimForName
+
+The first-person animation a "viewmodelanim" names (Player::ViewModelAnim), -1 for none
+===============
+*/
+static int FE_VMAnimForName(const char *name)
+{
+    static const struct {
+        const char *name;
+        int         anim;
+    } anims[] = {
+        {"charge",         VM_ANIM_CHARGE        },
+        {"fire",           VM_ANIM_FIRE          },
+        {"fire_secondary", VM_ANIM_FIRE_SECONDARY},
+        {"rechamber",      VM_ANIM_RECHAMBER     },
+        {"reload",         VM_ANIM_RELOAD        },
+        {"reload_single",  VM_ANIM_RELOAD_SINGLE },
+        {"reload_end",     VM_ANIM_RELOAD_END    },
+        {"pullout",        VM_ANIM_PULLOUT       },
+        {"putaway",        VM_ANIM_PUTAWAY       },
+        {"ladderstep",     VM_ANIM_LADDERSTEP    },
+        {"idle",           VM_ANIM_IDLE          },
+    };
+    int i;
+
+    for (i = 0; i < (int)ARRAY_LEN(anims); i++) {
+        if (!Q_stricmp(name, anims[i].name)) {
+            return anims[i].anim;
+        }
+    }
+
+    return -1;
+}
+
+/*
+===============
+FE_FrameVMAnim
+
+The first-person animation an animation's own frame commands set after its time from and up to to (its server
+commands "viewmodelanim ladderstep" at a frame or its last: the ladders' in models/player/base/anims_misc.txt),
+-1 for none
+===============
+*/
+static int FE_FrameVMAnim(dtiki_t *tiki, int anim, float from, float to)
+{
+    const dtikianimdef_t *def;
+    float                 frameTime, t;
+    int                   i, frames, vm = -1;
+
+    if (!tiki || !tiki->a || anim < 0 || anim >= tiki->a->num_anims) {
+        return -1;
+    }
+
+    def       = tiki->a->animdefs[anim];
+    frameTime = cgi.Anim_Frametime(tiki, anim);
+    frames    = cgi.Anim_NumFrames(tiki, anim);
+
+    for (i = 0; def && i < def->num_server_cmds; i++) {
+        const dtikicmd_t *cmd = &def->server_cmds[i];
+
+        if (cmd->num_args < 2 || Q_stricmp(cmd->args[0], "viewmodelanim")) {
+            continue;
+        }
+
+        if (cmd->frame_num >= 0) {
+            t = cmd->frame_num * frameTime;
+        } else if (cmd->frame_num == TIKI_FRAME_LAST || cmd->frame_num == TIKI_FRAME_END) {
+            t = (frames - 1) * frameTime;
+        } else {
+            continue;
+        }
+        // the server runs it that long after the animation began (Animate::NewAnim posts it), and the time
+        // snapshots show is a frame further on (the first shows a frame's)
+        t += FE_SERVER_FRAME / 1000.0f;
+
+        if (t > from && t <= to && FE_VMAnimForName(cmd->args[1]) != -1) {
+            vm = FE_VMAnimForName(cmd->args[1]);
+        }
+    }
+
+    return vm;
+}
+
+/*
+===============
+FE_IsClass
+
+Whether a model's server class is the one named
+===============
+*/
+static qboolean FE_IsClass(dtiki_t *tiki, const char *classname)
+{
+    const char *arg = FE_ServerInitArg(tiki, "classname");
+
+    return arg && !Q_stricmp(arg, classname);
+}
+
+/*
+===============
+FE_FindWeapon
+
+The gun in the player's hands: an entity on them whose model is a weapon, or Spearhead's packed MG42
+(CarryableTurret, an item with no weapon type)
+===============
+*/
+static const entityState_t *FE_FindWeapon(const snapshot_t *snap, int follow, dtiki_t **tikiOut)
 {
     int i;
 
     for (i = 0; i < snap->numEntities; i++) {
-        if (snap->entities[i].number == client) {
-            return &snap->entities[i];
+        const entityState_t *es = &snap->entities[i];
+        dtiki_t             *tiki;
+
+        if (es->parent != follow || !es->modelindex) {
+            continue;
+        }
+
+        tiki = cgi.R_Model_GetHandle(cgs.model_draw[es->modelindex]);
+        if (FE_ServerInitArg(tiki, "name")
+            && (FE_ServerInitArg(tiki, "weapontype") || FE_IsClass(tiki, "CarryableTurret"))) {
+            *tikiOut = tiki;
+            return es;
         }
     }
+
     return NULL;
 }
 
 /*
 ===============
-CG_FromEyes
+FE_EyeHeightOff
 
-Makes snap as if client, whose body is body, had recorded it: their gun and
-what it does, their lean, crosshair and team. Where they are and look, their
-health and their zoom (STAT_INZOOM) are set before
+How far an eye height worked out is from the nearest of the player's own (no prone in multiplayer)
 ===============
 */
-static void CG_FromEyes(snapshot_t *snap, int client, entityState_t *body)
+static float FE_EyeHeightOff(float vh, float *nearest)
 {
-    playerState_t          *ps  = &snap->ps;
-    const entityState_t    *gun = NULL;
-    const followedWeapon_t *weapon;
-    int                     anim, vmAnim, item;
-    float                   time;
-    int                     i;
+    // not static: the four are static const variables (bg_public.h), which C doesn't count as constants (MSVC's
+    // C2099)
+    const float heights[] = {
+        DEFAULT_VIEWHEIGHT, CROUCH_RUN_VIEWHEIGHT, JUMP_START_VIEWHEIGHT, CROUCH_VIEWHEIGHT
+    };
+    float best = 1000;
+    int   i;
+
+    for (i = 0; i < (int)ARRAY_LEN(heights); i++) {
+        if (fabs(vh - heights[i]) < best) {
+            best     = fabs(vh - heights[i]);
+            *nearest = heights[i];
+        }
+    }
+
+    return best;
+}
+
+/*
+===============
+FE_SolveCamera
+
+The follow camera worked back for a top of their box (see FE_Camera); solved is whether the eye height was
+worked out too, not taken from theirs (the guess, the last one, unless the camera fits another clearly better).
+Returns qfalse when the camera isn't one behind them.
+===============
+*/
+static qboolean FE_SolveCamera(
+    const playerState_t *ps,
+    const vec3_t         origin,
+    float                boxTop,
+    float                guess,
+    float               *fracOut,
+    float               *vhOut,
+    float               *lnOut,
+    qboolean            *solvedOut,
+    float               *fitOut
+)
+{
+    float    heights[] = {0, DEFAULT_VIEWHEIGHT, CROUCH_RUN_VIEWHEIGHT, JUMP_START_VIEWHEIGHT, CROUCH_VIEWHEIGHT};
+    vec3_t   start, d, ang, fwd, right, up, a, g, zr, cross;
+    float    frac, vh, ln, det, gr, dr, gg, bestResid, fit, nearest;
+    qboolean solved;
+    int      i, j;
+
+    heights[0] = guess;
+
+    VectorCopy(origin, start);
+    start[2] += boxTop - 2;
+    VectorSubtract(ps->camera_origin, start, d);
+
+    frac   = 1;
+    vh     = guess;
+    ln     = fe.lean;
+    solved = qfalse;
+    fit    = 0;
+    VectorClear(g);
+    VectorClear(right);
+
+    // the pitch depends on f: three rounds settle it
+    for (i = 0; i < 3; i++) {
+        VectorCopy(ps->camera_angles, ang);
+        ang[ROLL] = 0;
+        ang[PITCH] -= FE_CAM_PITCH * frac;
+        AngleVectors(ang, fwd, right, up);
+
+        VectorScale(fwd, FE_CAM_FORWARD, a);
+        VectorMA(a, FE_CAM_UP, up, a);
+        a[2] += 2 - boxTop;
+
+        // Cramer's rule on the columns a, z and right (right is level: z x right is level forward)
+        VectorSet(zr, -right[1], right[0], 0);
+        det = DotProduct(a, zr);
+
+        solved = qfalse;
+        if (fabs(det) > 12) {
+            float f = DotProduct(d, zr) / det;
+
+            if (f > 0.3f) {
+                CrossProduct(d, right, cross);
+                vh = DotProduct(a, cross) / det / f;
+                VectorSet(cross, -d[1], d[0], 0); // z x d
+                ln = DotProduct(a, cross) / det / (f * FE_CAM_LEAN);
+
+                if (vh > 4 && vh < 100 && fabs(ln) < 50) {
+                    frac   = f;
+                    solved = qtrue;
+                    continue;
+                }
+            }
+        }
+
+        // the eye height one of theirs, the one the camera lies nearest the line of (the guess unless another
+        // is clearly nearer): f from the camera's offset off the lean's line, the lean from the rest
+        bestResid = 1000;
+        for (j = 0; j < (int)ARRAY_LEN(heights); j++) {
+            vec3_t gj, r;
+            float  fj, resid;
+
+            VectorCopy(a, gj);
+            gj[2] += heights[j];
+            gr = DotProduct(gj, right);
+            dr = DotProduct(d, right);
+            gg = DotProduct(gj, gj) - gr * gr;
+            if (gg < 1) {
+                continue;
+            }
+
+            fj = (DotProduct(d, gj) - dr * gr) / gg;
+            VectorMA(d, -fj, gj, r);
+            VectorMA(r, -(dr - fj * gr), right, r);
+            resid = VectorLength(r) + (heights[j] == guess ? 0 : 0.5f);
+            if (resid < bestResid) {
+                bestResid = resid;
+                fit       = VectorLength(r);
+                VectorCopy(gj, g);
+                frac = fj;
+                vh   = heights[j];
+                ln   = fj > 0.15f ? (dr - fj * gr) / (fj * FE_CAM_LEAN) : fe.lean;
+            }
+        }
+        if (bestResid >= 1000) {
+            return qfalse;
+        }
+    }
+
+    if (frac < -0.02f || frac > 1.02f || fabs(ln) > 50) {
+        // not a camera behind them (another g_spectatefollow_forward or _up)
+        return qfalse;
+    }
+
+    if (!solved) {
+        // the camera must lie near the line the guess gives (a wrong guess of the eye height puts it off by
+        // f x the difference)
+        VectorScale(g, frac, a);
+        VectorMA(a, frac * FE_CAM_LEAN * ln, right, a);
+        VectorSubtract(d, a, a);
+        if (VectorLength(a) > 32) {
+            return qfalse;
+        }
+    }
+
+    *fracOut   = Com_Clamp(0, 1, frac);
+    *vhOut     = vh;
+    *lnOut     = ln;
+    *solvedOut = solved;
+    // how far off the camera lies: the eye height's from one of theirs, or the camera's from the line
+    *fitOut = solved ? frac * FE_EyeHeightOff(vh, &nearest) : fit;
+    return qtrue;
+}
+
+/*
+===============
+FE_Camera
+
+Works the followed player's view angles, eye height and lean back from the follow camera. The server traces it
+from the top of their head (h) toward where it would be in the open, and puts it the trace's fraction f of the
+way there, the pitch raised 2 x f:
+
+  camera - h = f x (forward x -56 + up x 24 + (0, 0, 2 - box top)) + (f x eye height) x z + (f x 0.65 x lean) x right
+
+three equations in f, the eye height and the lean, solved anywhere the camera isn't pulled in almost onto
+their head; there (or while they look steeply down, where the eye height and f can't be told apart) the eye
+height is the last one worked out (their box's when it changed) and the lean as it was when f is too small
+to show it. The box sent can be a server frame off the camera's as it changes (crouching, jumping, landing),
+which puts the eye height off by the change x (1 - f) / f: when the camera doesn't fit the box sent, the last
+box and the player's other boxes are tried too, and the one it fits best kept. Returns qfalse when the camera
+isn't one behind them.
+===============
+*/
+static qboolean
+FE_Camera(const playerState_t *ps, const entityState_t *pl, vec3_t viewangles, float *viewheight, float *lean)
+{
+    vec3_t   mins, maxs;
+    float    tops[5], top, guess, frac, vh, ln, fit, bestFrac, bestVh, bestLn, bestTop, bestFit, nearest;
+    qboolean solved, found, any;
+    int      i, j;
+
+    IntegerToBoundingBox(pl->solid, mins, maxs);
+    tops[0]   = maxs[2];
+    tops[1]   = fe.boxTop;
+    tops[2]   = MAXS_Z;
+    tops[3]   = CROUCH_RUN_MAXS_Z;
+    tops[4]   = CROUCH_MAXS_Z;
+    fe.boxTop = maxs[2];
+    if (maxs[2] < 8) {
+        return qfalse;
+    }
+
+    found    = qfalse;
+    any      = qfalse;
+    bestFit  = 1000;
+    bestFrac = bestVh = bestLn = bestTop = 0;
+
+    for (i = 0; i < (int)ARRAY_LEN(tops); i++) {
+        top = tops[i];
+        for (j = 0; j < i && tops[j] != top; j++) {}
+        if (top < 8 || j < i) {
+            continue;
+        }
+
+        // the eye height when it can't be worked out
+        if (fe.eyeHeight > 0 && fe.eyeBoxTop == top) {
+            guess = fe.eyeHeight;
+        } else {
+            guess = top < (CROUCH_MAXS_Z + MAXS_Z) / 2 ? CROUCH_VIEWHEIGHT : DEFAULT_VIEWHEIGHT;
+        }
+
+        if (!FE_SolveCamera(ps, pl->origin, top, guess, &frac, &vh, &ln, &solved, &fit)) {
+            continue;
+        }
+
+        // the box sent unless another fits clearly better
+        if (!any || fit < bestFit - 1) {
+            any      = qtrue;
+            found    = solved;
+            bestFit  = fit;
+            bestFrac = frac;
+            bestVh   = vh;
+            bestLn   = ln;
+            bestTop  = top;
+        }
+
+        if (i == 0 && fit < 1) {
+            break;
+        }
+    }
+
+    if (!any) {
+        return qfalse;
+    }
+
+    // on the player's own eye height when that near one (the crouched weapon pose and the footsteps look for them)
+    if (FE_EyeHeightOff(bestVh, &nearest) < 3) {
+        bestVh = nearest;
+    }
+
+    if (found) {
+        fe.eyeHeight = bestVh;
+        fe.eyeBoxTop = bestTop;
+    }
+
+    VectorCopy(ps->camera_angles, viewangles);
+    viewangles[PITCH] -= FE_CAM_PITCH * bestFrac;
+    viewangles[ROLL] = 0;
+    *viewheight      = bestVh;
+    *lean            = bestLn;
+    return qtrue;
+}
+
+/*
+===============
+FE_Airborne
+
+Whether they are off the ground, from their legs' animations (the state machine's global/mike_legs.st: the
+newest "smg_jump_takeoff" or "smg_fall" in the air, "smg_land_hard" in either slot landed): the servers never
+set a player's ground in what they send (0, the first player, for each)
+===============
+*/
+static qboolean FE_Airborne(const entityState_t *pl)
+{
+    const frameInfo_t *fi = NULL;
+    dtiki_t           *tiki;
+    const char        *anim;
+    int                i;
+
+    tiki = cgi.R_Model_GetHandle(cgs.model_draw[pl->modelindex]);
+    if (!tiki) {
+        return qfalse;
+    }
+
+    for (i = 0; i < FE_TORSO_SLOT; i++) {
+        if (pl->frameInfo[i].weight <= 0) {
+            continue;
+        }
+        // landing (the fall still blending out)
+        anim = cgi.Anim_NameForNum(tiki, pl->frameInfo[i].index);
+        if (anim && strstr(anim, "_land")) {
+            return qfalse;
+        }
+        if (!fi || pl->frameInfo[i].time < fi->time) {
+            fi = &pl->frameInfo[i];
+        }
+    }
+    if (!fi) {
+        return qfalse;
+    }
+
+    anim = cgi.Anim_NameForNum(tiki, fi->index);
+    return anim && Q_stricmpn(anim, "death", 5) && (strstr(anim, "_fall") || strstr(anim, "_takeoff"));
+}
+
+/*
+===============
+FE_Shooter
+
+A player in the snapshot who has just fired facing them (their upper body's fire animation started lately),
+not of their team; the way from them to the player, the one facing them most squarely
+===============
+*/
+static qboolean FE_Shooter(const snapshot_t *snap, const entityState_t *pl, const vec3_t center, vec3_t dir)
+{
+    float best = cos(DEG2RAD(30));
+    int   i, j;
 
     for (i = 0; i < snap->numEntities; i++) {
-        if (CG_FollowedGun(&snap->entities[i], body)) {
-            gun = &snap->entities[i];
+        const entityState_t *es = &snap->entities[i];
+        const frameInfo_t   *fi = NULL;
+        dtiki_t             *tiki;
+        const char          *anim;
+        vec3_t               to, facing;
+        float                len, facingCos;
+
+        if (es->eType != ET_PLAYER || es->number == pl->number || es->number >= MAX_CLIENTS || (es->eFlags & EF_DEAD)
+            || (es->eFlags & pl->eFlags & EF_ANY_TEAM)) {
+            continue;
+        }
+
+        for (j = FE_TORSO_SLOT; j < FE_TORSO_SLOT + 2; j++) {
+            if (es->frameInfo[j].weight > 0 && (!fi || es->frameInfo[j].time < fi->time)) {
+                fi = &es->frameInfo[j];
+            }
+        }
+        tiki = cgi.R_Model_GetHandle(cgs.model_draw[es->modelindex]);
+        if (!fi || !tiki || fi->time > 0.3f) {
+            continue;
+        }
+        anim = cgi.Anim_NameForNum(tiki, fi->index);
+        if (!anim || !strstr(anim, "_fire")) {
+            continue;
+        }
+
+        // their aim from their body's facing (level)
+        VectorSubtract(center, es->origin, to);
+        to[2] = 0;
+        len = VectorNormalize(to);
+        if (len < 1) {
+            continue;
+        }
+        YawToAxis(es->angles[YAW], facing);
+        facingCos = to[0] * facing[0] + to[1] * facing[1];
+        if (facingCos > best) {
+            best = facingCos;
+            // from their eye
+            VectorSubtract(center, es->origin, dir);
+            dir[2] -= DEFAULT_VIEWHEIGHT;
+            VectorNormalize(dir);
         }
     }
 
-    // another player, back in time or a jump (a seek, the next clip of
-    // demoonly, a new round or demo, as CG_ProcessSnapshots tells): nothing to
-    // go on from
-    if (client != followed.client || snap->serverTime < followed.serverTime || !cg.snap
-        || cg.snap->serverTime <= cgi.GetServerStartTime()) {
-        memset(&followed, 0, sizeof(followed));
-        followed.client  = client;
-        followed.gunAnim = -1;
-    }
-    followed.serverTime = snap->serverTime;
+    return best > cos(DEG2RAD(30));
+}
 
-    ps->clientNum = client;
-    ps->pm_flags &= ~(PMF_CAMERA_VIEW | PMF_SPECTATING);
-    // on the ground, as their entity is: the view and the gun bob as they walk
-    ps->groundEntityNum = body->groundEntityNum;
-    ps->walking         = body->groundEntityNum != ENTITYNUM_NONE;
-    // the pelvis (bone controller 3) rolls by 0.8 times the lean
-    ps->fLeanAngle             = AngleNormalize180(body->bone_angles[3][2]) / 0.8f;
-    ps->stats[STAT_INFOCLIENT] = -1;
-    // as a server has it: with a gun in hand, so not dead, nor with the scope on
-    ps->stats[STAT_CROSSHAIR]  = !ps->stats[STAT_INZOOM] && !(body->eFlags & EF_DEAD);
-    if (body->eFlags & EF_AXIS) {
-        ps->stats[STAT_TEAM] = TEAM_AXIS;
-    } else if (body->eFlags & EF_ALLIES) {
-        ps->stats[STAT_TEAM] = TEAM_ALLIES;
-    }
+/*
+===============
+FE_HitDirection
 
-    weapon = gun ? CG_FollowedWeapon(gun->modelindex) : NULL;
-    item   = weapon ? CG_FollowedWeaponItem(weapon->name) : -1;
-    if (item < 0) {
-        // no gun in their hand that's known: no arms
-        body->eFlags |= EF_UNARMED;
-        ps->stats[STAT_EQUIPPED_WEAPON] = 0;
-        // nothing in their hand: dropped as they died, or not in the demo
-        if (!gun) {
-            ps->stats[STAT_CROSSHAIR] = 0;
+Which way the hit that just took their health came: a bullet the server sent lately that was going through
+them, else an explosion near them, else a fall as they land (none), else a player who has just fired facing
+them, else from in front of them (qfalse: not known).
+(A stock server sends the bullets and explosions to a follower only when the follower's own place, kept below
+the follow camera, can see them: not at all while that place is in a wall.)
+===============
+*/
+static qboolean FE_HitDirection(const snapshot_t *snap, const entityState_t *pl, const vec3_t forward, vec3_t dir)
+{
+    vec3_t       mins, maxs, seg, p, center;
+    float        best, bestBlast, top, bottom, len, t, dist;
+    qboolean     found;
+    int          now, i;
+    unsigned int n;
+
+    IntegerToBoundingBox(pl->solid, mins, maxs);
+    bottom = pl->origin[2] + mins[2] - 16;
+    top    = pl->origin[2] + maxs[2] + 16;
+    VectorCopy(pl->origin, center);
+    center[2] += maxs[2] / 2;
+
+    VectorScale(forward, -1, dir);
+    best      = 40; // from the line up through them
+    bestBlast = 512;
+    found     = qfalse;
+    now       = cgi.Milliseconds();
+
+    for (i = 0, n = fe_numShots; i < FE_MAX_SHOTS && n > 0; i++, n--) {
+        const feShot_t *shot = &fe_shots[(n - 1) % FE_MAX_SHOTS];
+
+        if (now - shot->time > FE_SHOT_TIME) {
+            break;
         }
-        ps->activeItems[1]              = -1;
-        followed.gunModel               = 0;
+
+        if (shot->blast) {
+            VectorSubtract(center, shot->start, seg);
+            dist = VectorLength(seg);
+            if (best == 40 && dist < bestBlast && dist > 1) {
+                bestBlast = dist;
+                found     = qtrue;
+                VectorScale(seg, 1 / dist, dir);
+            }
+            continue;
+        }
+
+        // where it passed nearest the line up through them: past its start (their own go away from them) and
+        // not far past its end (one that hit them ends on them)
+        VectorSubtract(shot->end, shot->start, seg);
+        len = seg[0] * seg[0] + seg[1] * seg[1];
+        if (len < 1) {
+            continue;
+        }
+        t = ((pl->origin[0] - shot->start[0]) * seg[0] + (pl->origin[1] - shot->start[1]) * seg[1]) / len;
+        if (t <= 0 || (t - 1) * sqrt(len) > 32) {
+            continue;
+        }
+        VectorMA(shot->start, t, seg, p);
+        if (p[2] < bottom || p[2] > top) {
+            continue;
+        }
+
+        dist = sqrt((p[0] - pl->origin[0]) * (p[0] - pl->origin[0]) + (p[1] - pl->origin[1]) * (p[1] - pl->origin[1]));
+        if (dist < best) {
+            best  = dist;
+            found = qtrue;
+            VectorNormalize2(seg, dir);
+        }
+    }
+
+    if (found) {
+        return qtrue;
+    }
+
+    // landing: a fall's (Player::ProcessPmoveEvents), which has no direction: no kick, and the arrow a world
+    // yaw of 0's, as the player's own
+    if (!fe.airborne && fe.airTime && snap->serverTime - fe.airTime <= 150) {
+        VectorClear(dir);
+        return qtrue;
+    }
+
+    return FE_Shooter(snap, pl, center, dir);
+}
+
+/*
+===============
+FE_AddBlend
+
+A color over the screen's (Player::AddBlend)
+===============
+*/
+static void FE_AddBlend(float *blend, float r, float g, float b, float a)
+{
+    float a2, a3;
+
+    if (a <= 0) {
+        return;
+    }
+
+    a2       = blend[3] + (1 - blend[3]) * a;
+    a3       = blend[3] / a2;
+    blend[0] = blend[0] * a3 + r * (1 - a3);
+    blend[1] = blend[1] * a3 + g * (1 - a3);
+    blend[2] = blend[2] * a3 + b * (1 - a3);
+    blend[3] = a2;
+}
+
+/*
+===============
+FE_SetDamageDir
+
+The direction of a hit for the HUD's arrows, as the server sends it (STAT_DAMAGEDIR: its yaw x 10, moved a
+tenth when the same as the last so the hit shows)
+===============
+*/
+static void FE_SetDamageDir(const vec3_t dir)
+{
+    int yaw = (int)(vectoyaw(dir) * 10);
+
+    if (yaw == fe.damageDir) {
+        yaw += yaw < 1800 ? 1 : -1;
+    }
+    fe.damageDir = Com_Clamp(0, 3600, yaw);
+}
+
+/*
+===============
+FE_HitFeedback
+
+What their hits do to their view, as the server's Player::DamageFeedback and CalcBlend make it for them, once a
+server frame: the kick and the damage it's for decay to 0.8, and a hit kicks the view against the way it came,
+more the harder it was; the red flash goes up with a hit (0.001 a point, 10 points the least, between 0.2 and
+0.6) and down 0.06; the damage's direction for the HUD's arrows, kept as it was for a hit from where isn't
+known
+===============
+*/
+static void FE_HitFeedback(playerState_t *ps, const snapshot_t *snap, const entityState_t *pl, int lastServerTime)
+{
+    vec3_t axis[3], dir;
+    int    frames, health, damage;
+
+    health = ps->stats[STAT_INFOCLIENT_HEALTH];
+    frames = lastServerTime ? (snap->serverTime - lastServerTime + FE_SERVER_FRAME / 2) / FE_SERVER_FRAME : 1;
+    frames = Com_Clamp(1, 40, frames);
+
+    // the server frames before this snapshot's
+    for (; frames > 1; frames--) {
+        fe.flash = Q_max(0, fe.flash - 0.06f);
+        if (fe.kickCount) {
+            fe.kickCount *= 0.8f;
+            VectorScale(fe.kick, 0.8f, fe.kick);
+            if (fe.kickCount < 0.1f) {
+                fe.kickCount = 0;
+            }
+        }
+    }
+
+    // this snapshot's: the kick decays before a hit adds to it, the flash after
+    if (fe.kickCount && lastServerTime) {
+        fe.kickCount *= 0.8f;
+        VectorScale(fe.kick, 0.8f, fe.kick);
+        if (fe.kickCount < 0.1f) {
+            fe.kickCount = 0;
+        }
+    }
+
+    // their health is sent as a share of 100 (STAT_INFOCLIENT_HEALTH)
+    damage    = fe.health > 0 && health > 0 ? fe.health - health : 0;
+    fe.health = health;
+
+    if (damage > 0) {
+        AnglesToAxis(pl->angles, axis);
+        if (FE_HitDirection(snap, pl, axis[0], dir)) {
+            FE_SetDamageDir(dir);
+        }
+
+        fe.kick[PITCH] = Com_Clamp(-30, 30, fe.kick[PITCH] - DotProduct(dir, axis[0]) * damage * FE_KICK_PITCH);
+        fe.kick[YAW]   = Com_Clamp(-30, 30, fe.kick[YAW] - DotProduct(dir, axis[1]) * damage * FE_KICK_YAW);
+        fe.kick[ROLL]  = Com_Clamp(-25, 25, fe.kick[ROLL] + DotProduct(dir, axis[2]) * damage * FE_KICK_ROLL);
+        fe.kickCount += damage;
+
+        fe.flash = Com_Clamp(0.2f, 0.6f, Q_max(0, fe.flash) + Q_max(damage, 10) * 0.001f);
+    }
+    fe.flash = Q_max(0, fe.flash - 0.06f);
+
+    if (fe.kickCount) {
+        VectorCopy(fe.kick, ps->damage_angles);
     } else {
-        ps->stats[STAT_EQUIPPED_WEAPON] = weapon->weaponClass;
-        ps->activeItems[1]              = item;
+        VectorClear(fe.kick);
+        VectorClear(ps->damage_angles);
+    }
 
-        vmAnim = CG_FollowedGunAnim(gun, &anim, &time);
-        if (CG_FollowedBash(body, &time)) {
-            vmAnim = VM_ANIM_FIRE_SECONDARY;
-            anim   = FOLLOWED_BASH;
+    FE_AddBlend(ps->blend, 1, 0, 0, fe.flash);
+    ps->stats[STAT_DAMAGEDIR] = fe.damageDir;
+}
+
+/*
+===============
+FE_OnTurret
+
+A followed player on a turret: the flag servers set from Spearhead's code on (EF_PLAYER_ARTILLERY), or for
+Allied Assault's the upper body's newest animation, the turret's (global/mike_torso.st, TURRET_IDLE: it starts
+as they take the turret, and the next as they leave it)
+===============
+*/
+static qboolean FE_OnTurret(const entityState_t *pl)
+{
+    const frameInfo_t *fi = NULL;
+    const char        *name;
+    int                i;
+
+    if (pl->eFlags & EF_PLAYER_ARTILLERY) {
+        return qtrue;
+    }
+
+    for (i = FE_TORSO_SLOT; i < FE_TORSO_SLOT + 2; i++) {
+        if (pl->frameInfo[i].weight > 0 && (!fi || pl->frameInfo[i].time < fi->time)) {
+            fi = &pl->frameInfo[i];
         }
-        if (gun->modelindex != followed.gunModel && followed.gunAnim < 0 && !followed.vmAnimChanged) {
-            // the weapon they have as following them begins (a clip, a seek):
-            // doing what it does, from when it began, as the end of a reload
-            followed.gunModel   = gun->modelindex;
-            followed.vmAnim     = vmAnim;
-            followed.vmAnimTime = snap->serverTime - (int)(time * 1000);
-            followed.vmAnimChanged++;
-        } else if (gun->modelindex != followed.gunModel) {
-            // another weapon, taken out
-            followed.gunModel    = gun->modelindex;
-            followed.vmAnim      = VM_ANIM_PULLOUT;
-            followed.vmAnimTime  = snap->serverTime;
-            followed.pulloutTime = snap->serverTime;
-            followed.vmAnimChanged++;
-        } else if (anim != followed.gunAnim || time < followed.gunAnimTime) {
-            // the gun does something else, or again (a shot after a shot),
-            // from when it began
-            followed.vmAnim     = vmAnim;
-            followed.vmAnimTime = snap->serverTime - (int)(time * 1000);
-            followed.vmAnimChanged++;
-        } else if (followed.vmAnim == VM_ANIM_PULLOUT && snap->serverTime - followed.pulloutTime > FOLLOWED_PULLOUT_TIME) {
-            followed.vmAnim     = VM_ANIM_IDLE;
-            followed.vmAnimTime = snap->serverTime;
-            followed.vmAnimChanged++;
+    }
+    name = fi ? cgi.Anim_NameForNum(cgi.R_Model_GetHandle(cgs.model_draw[pl->modelindex]), fi->index) : NULL;
+
+    return name && !Q_stricmpn(name, "turret_", 7);
+}
+
+/*
+===============
+FE_IsTurret
+
+A turret a player takes: TurretGun, or Spearhead's portable MG42 set up (PortableTurret)
+===============
+*/
+static qboolean FE_IsTurret(dtiki_t *tiki)
+{
+    return FE_IsClass(tiki, "TurretGun") || FE_IsClass(tiki, "PortableTurret");
+}
+
+/*
+===============
+FE_KeepTurrets
+
+The turrets in a snapshot, kept as sent: the servers stop sending one to someone while a player is on it. They hide
+the turret from its user (TurretGun::P_CreateViewModel), but with the user's number ORed into the one they hid it
+from before, never cleared: from the second user on, the turret is hidden from whoever has that number, perhaps a
+follower, and not from its user
+===============
+*/
+static void FE_KeepTurrets(const snapshot_t *snap)
+{
+    int i, j;
+
+    for (i = 0; i < snap->numEntities; i++) {
+        const entityState_t *es = &snap->entities[i];
+
+        if (!es->modelindex || es->number == FE_TURRET_VIEWMODEL
+            || !FE_IsTurret(cgi.R_Model_GetHandle(cgs.model_draw[es->modelindex]))) {
+            continue;
         }
-        followed.gunAnim     = anim;
-        followed.gunAnimTime = time;
-    }
 
-    ps->iViewModelAnim        = followed.vmAnim;
-    ps->iViewModelAnimChanged = followed.vmAnimChanged & 3;
-    // as the client tells it from the snapshots before, which it doesn't
-    // for these
-    snap->vmAnimTime = followed.vmAnimTime;
-    snap->snapFlags |= SNAPFLAG_FOLLOWED_FROM_EYES;
+        for (j = 0; j < fe_numTurrets && fe_turrets[j].number != es->number; j++) {}
+        if (j == FE_MAX_TURRETS) {
+            // more than a map has: the first kept goes
+            memmove(&fe_turrets[0], &fe_turrets[1], (FE_MAX_TURRETS - 1) * sizeof(entityState_t));
+            j = FE_MAX_TURRETS - 1;
+        } else if (j == fe_numTurrets) {
+            fe_numTurrets++;
+        }
+        fe_turrets[j] = *es;
+    }
 }
 
 /*
 ===============
-CG_UnspeccedBody
+FE_TurretFire
 
-The body of the player snap is drawn for while the demo doesn't show them,
-with cg_unspeccedcamera 2, if it's in it
+The animation of a turret not sent, from the bullets the server sent from it since the last snapshot read: a
+"fire" for them in the next slot, as the server starts each shot (TurretGun::P_SetWeaponAnim), then idle
 ===============
 */
-static entityState_t *CG_UnspeccedBody(snapshot_t *snap)
+static void FE_TurretFire(entityState_t *turret, dtiki_t *tiki, int serverTime)
 {
-    if (cg_unspeccedcamera->integer != 2 || !cg.demoPlayback || snap->demoBehind < 0
-        || snap->demoBehind >= MAX_CLIENTS) {
-        return NULL;
+    const int fire = cgi.Anim_NumForName(tiki, "fire");
+    const int idle = cgi.Anim_NumForName(tiki, "idle");
+    qboolean  shot = qfalse;
+    int       elapsed;
+
+    if (fe_numShots - fe.turretShots > FE_MAX_SHOTS) {
+        fe.turretShots = fe_numShots - FE_MAX_SHOTS;
     }
-    return CG_SnapshotBody(snap, snap->demoBehind);
-}
+    for (; fe.turretShots != fe_numShots; fe.turretShots++) {
+        const feShot_t *s = &fe_shots[fe.turretShots % FE_MAX_SHOTS];
 
-/*
-===============
-CG_FollowFromEyes
-
-Makes snap as if the player it follows had recorded it, with cg_followcamera
-2 in a demo, when their entity is in it, unless it's drawn from the eyes of a
-player it doesn't show (CG_UnspeccedFromEyes)
-===============
-*/
-void CG_FollowFromEyes(snapshot_t *snap)
-{
-    playerState_t *ps = &snap->ps;
-    entityState_t *body;
-    int            client;
-
-    if (cg_followcamera->integer != 2 || !cg.demoPlayback || !(ps->pm_flags & PMF_CAMERA_VIEW)
-        || CG_UnspeccedBody(snap)) {
-        return;
+        if (!s->blast && DistanceSquared(s->start, turret->origin) < Square(FE_TURRET_MUZZLE)) {
+            shot = qtrue;
+        }
     }
-    client = ps->stats[STAT_INFOCLIENT];
-    if (client < 0 || client >= MAX_CLIENTS) {
-        return;
+    if (shot && fire >= 0) {
+        fe.turretFireSlot = (fe.turretFireSlot + 1) % MAX_FRAMEINFOS;
+        fe.turretFireTime = serverTime;
     }
 
-    body = CG_SnapshotBody(snap, client);
-    if (!body) {
-        return;
-    }
-
-    // where they are, look, crouch and zoom are theirs
-    ps->stats[STAT_HEALTH] = (body->eFlags & EF_DEAD) ? 0 : ps->stats[STAT_INFOCLIENT_HEALTH];
-    ps->stats[STAT_INZOOM] = ps->fov <= 30 ? (int)ps->fov : 0;
-    CG_FromEyes(snap, client, body);
-}
-
-// for the snapshots drawn from the eyes of a player not shown, by slot of
-// cg.activeSnapshots: the recorder, and the crosshair without a scope
-static struct {
-    int    client;
-    vec3_t origin;
-    vec3_t velocity;
-    int    crosshair;
-} unspecced[2];
-
-/*
-===============
-CG_UnspeccedFromEyes
-
-Makes snap as if the player whose kill it's drawn for while the demo doesn't
-show them (its demoBehind) had recorded it, with cg_unspeccedcamera 2, when
-their body is in it, after their gun is put in it (CG_DemoGuns): from their
-eyes, where their body is and aims, as the camera behind them goes by
-(CG_DemoBehindState), and moving as it does. All the rooms are drawn: the
-recorder's say what they see. A demo holds nothing of their health, ammo or
-zoom: alive, they have 100 here, their hits are made up by the client from the
-pain and blood the server sends (CL_DemoFollowedHits), the HUD's health and
-ammo worked out by it from all it has of them (cl_demohud.cpp), and the scope
-of a long sniper shot as the view is drawn (CG_DemoScopeEyes)
-===============
-*/
-void CG_UnspeccedFromEyes(snapshot_t *snap)
-{
-    static vec3_t  lastOrigin[MAX_CLIENTS];
-    static int     lastTime[MAX_CLIENTS];
-    playerState_t *ps   = &snap->ps;
-    entityState_t *body = CG_UnspeccedBody(snap);
-    playerState_t  eyes;
-    int            client, slot, msec;
-
-    if (!body) {
-        return;
-    }
-    client = body->number;
-    slot   = snap == &cg.activeSnapshots[1];
-
-    // the recorder, heard where they are
-    unspecced[slot].client = ps->clientNum;
-    VectorCopy(ps->origin, unspecced[slot].origin);
-    VectorCopy(ps->velocity, unspecced[slot].velocity);
-
-    CG_DemoBehindState(body, &eyes);
-    VectorCopy(eyes.origin, ps->origin);
-    VectorCopy(eyes.viewangles, ps->viewangles);
-    ps->viewheight = eyes.viewheight;
-
-    // the velocity of their entity, which servers that smooth players send
-    // (g_smoothClients), or else how they moved since the snapshot before
-    VectorCopy(body->pos.trDelta, ps->velocity);
-    msec = snap->serverTime - lastTime[client];
-    if (VectorCompare(ps->velocity, vec3_origin) && lastTime[client] && msec > 0 && msec <= 200) {
-        VectorSubtract(body->origin, lastOrigin[client], ps->velocity);
-        VectorScale(ps->velocity, 1000.0f / msec, ps->velocity);
-    }
-    VectorCopy(body->origin, lastOrigin[client]);
-    lastTime[client] = snap->serverTime;
-
-    if (body->eFlags & EF_DEAD) {
-        ps->pm_type = PM_DEAD;
-    } else if (CG_DemoOnLadder(body)) {
-        // their eyes turn about their neck as on a ladder
-        ps->pm_type = PM_CLIMBWALL;
+    memset(turret->frameInfo, 0, sizeof(turret->frameInfo));
+    elapsed = fe.turretFireTime ? serverTime - fe.turretFireTime : FE_TURRET_FIRE;
+    if (elapsed >= FE_TURRET_FIRE) {
+        turret->frameInfo[fe.turretFireSlot].index = idle;
+        elapsed -= FE_TURRET_FIRE;
     } else {
-        ps->pm_type = PM_NORMAL;
+        turret->frameInfo[fe.turretFireSlot].index = fire;
     }
-    // the recorder's: crouched, hit, frozen or on a turret
-    ps->pm_flags &= ~(PMF_DUCKED | PMF_DAMAGE_ANGLES | PMF_FROZEN | PMF_NO_MOVE | PMF_VIEW_DUCK_RUN
-                      | PMF_VIEW_JUMP_START | PMF_TURRET);
-    ps->fov                = cg_fov->value;
-    ps->stats[STAT_INZOOM] = 0;
-    // their hits, the kick (damage_angles), the red flash and the mark on the
-    // compass, are the client's, made again from what the demo has
-    // (CL_DemoFollowedHits)
-    ps->stats[STAT_HEALTH] = (body->eFlags & EF_DEAD) ? 0 : 100;
-    memset(snap->areamask, 0, sizeof(snap->areamask));
-
-    CG_FromEyes(snap, client, body);
-    unspecced[slot].crosshair = ps->stats[STAT_CROSSHAIR];
-    snap->snapFlags |= SNAPFLAG_UNSPECCED_FROM_EYES;
+    // the time as the snapshots show it: one server frame on (see FE_FrameVMAnim)
+    turret->frameInfo[fe.turretFireSlot].time   = (elapsed + FE_SERVER_FRAME) / 1000.0f;
+    turret->frameInfo[fe.turretFireSlot].weight = 1;
 }
 
 /*
 ===============
-CG_UnspeccedEyes
+FE_Turret
 
-The player drawn from their eyes while the demo doesn't show them
-(CG_UnspeccedFromEyes), -1 for none
+A followed player on a turret (see FE_OnTurret): the server shows them the turret's view model on their eyes
+instead of the turret (TurretGun::P_CreateViewModel: "<its model>_viewmodel.tik", playing the turret's
+animation, sent to them only, the turret left out of their snapshots), with the turret their item and a
+crosshair (Player::UpdateStats), and their view the turret's camera. The same made here from the turret in the
+snapshot, or when the server didn't send it (see FE_KeepTurrets) the one kept, its shots from the bullets: its
+view model taken from the models the server registered for it; with none (not registered) the turret stays as
+it is.
 ===============
 */
-int CG_UnspeccedEyes(void)
+static void FE_Turret(snapshot_t *snap, playerState_t *ps, int follow, int playerModel, const vec3_t eye)
 {
-    if (!cg.snap || !(cg.snap->snapFlags & SNAPFLAG_UNSPECCED_FROM_EYES)) {
-        return -1;
+    const entityState_t *turret = NULL;
+    const frameInfo_t   *fi     = NULL;
+    entityState_t        vm, kept;
+    dtiki_t             *tiki, *vmTiki, *ptiki;
+    char                 name[MAX_QPATH];
+    const char          *arg, *anim;
+    float                best = Square(96);
+    vec3_t               ofs;
+    qboolean             shot, sent = qtrue;
+    int                  i, item, vmIndex = 0, slot, fiSlot = -1, idle;
+
+    for (i = 0; i < snap->numEntities; i++) {
+        const entityState_t *es = &snap->entities[i];
+
+        if (!es->modelindex || es->number == FE_TURRET_VIEWMODEL) {
+            continue;
+        }
+        tiki = cgi.R_Model_GetHandle(cgs.model_draw[es->modelindex]);
+        if (FE_IsTurret(tiki) && DistanceSquared(es->origin, eye) < best) {
+            best   = DistanceSquared(es->origin, eye);
+            turret = es;
+        }
     }
-    return cg.snap->ps.clientNum;
+    if (!turret) {
+        for (i = 0; i < fe_numTurrets; i++) {
+            if (DistanceSquared(fe_turrets[i].origin, eye) < best) {
+                best   = DistanceSquared(fe_turrets[i].origin, eye);
+                turret = &fe_turrets[i];
+            }
+        }
+        if (!turret) {
+            fe.turretShots = fe_numShots;
+            return;
+        }
+        kept = *turret;
+        FE_TurretFire(&kept, cgi.R_Model_GetHandle(cgs.model_draw[kept.modelindex]), snap->serverTime);
+        turret = &kept;
+        sent   = qfalse;
+    }
+    fe.turretShots = fe_numShots;
+
+    tiki = cgi.R_Model_GetHandle(cgs.model_draw[turret->modelindex]);
+    item = FE_ItemIndex(FE_ServerInitArg(tiki, "name"));
+    if (item > 0) {
+        ps->activeItems[1] = item;
+    }
+    ps->stats[STAT_EQUIPPED_WEAPON] = 0;
+    ps->stats[STAT_CROSSHAIR]       = 1;
+
+    // the turret's animation, its heaviest: each shot starts "fire" again, in the next slot
+    // (Weapon::SetWeaponAnim)
+    for (slot = 0; slot < MAX_FRAMEINFOS; slot++) {
+        if (turret->frameInfo[slot].weight > 0 && (!fi || turret->frameInfo[slot].weight > fi->weight)) {
+            fi     = &turret->frameInfo[slot];
+            fiSlot = slot;
+        }
+    }
+    anim = fi ? cgi.Anim_NameForNum(tiki, fi->index) : NULL;
+    shot = FE_AnimChanged(&fe.turretAnim, fi ? fi->index : -1, fi ? fi->time : 0) || fiSlot != fe.turretSlot;
+    shot = shot && anim && !Q_stricmp(anim, "fire");
+    fe.turretSlot = fiSlot;
+
+    // their view: the turret's camera (TurretGun::P_ThinkActive, with g_turretcameras 1, the default) at the
+    // turret, its view offset turned with their aim, shaken for a moment by each shot (P_ApplyFiringViewJitter),
+    // as wide as the server zoomed them (ToggleZoom(80))
+    arg = FE_ServerInitArg(tiki, "viewOffset");
+    if (arg && sscanf(arg, "%f %f %f", &ofs[0], &ofs[1], &ofs[2]) == 3) {
+        if (shot) {
+            arg             = FE_ServerInitArg(tiki, "viewjitter");
+            fe.turretJitter = arg ? atof(arg) : 0;
+        }
+        ps->pm_flags |= PMF_CAMERA_VIEW | PMF_TURRET;
+        ps->camera_flags |= CF_CAMERA_ANGLES_TURRETMODE;
+        VectorCopy(turret->origin, ps->camera_origin);
+        ps->camera_angles[PITCH] = ps->viewangles[PITCH] + crandom() * fe.turretJitter;
+        ps->camera_angles[YAW]   = ps->viewangles[YAW] + crandom() * fe.turretJitter;
+        ps->camera_angles[ROLL]  = ps->viewangles[ROLL] + crandom() * fe.turretJitter * 0.8f;
+        VectorCopy(ofs, ps->camera_posofs);
+        ps->stats[STAT_INZOOM] = ps->fov;
+        fe.turretJitter        = Q_max(0, fe.turretJitter - 6 * FE_SERVER_FRAME / 1000.0f);
+    }
+
+    COM_StripExtension(CG_ConfigString(CS_MODELS + turret->modelindex), name, sizeof(name));
+    Q_strcat(name, sizeof(name), "_viewmodel.tik");
+    for (i = 1; i < MAX_MODELS && CS_MODELS + i < CS_SOUNDS; i++) {
+        if (!Q_stricmp(CG_ConfigString(CS_MODELS + i), name)) {
+            vmIndex = i;
+            break;
+        }
+    }
+    vmTiki = vmIndex ? cgi.R_Model_GetHandle(cgs.model_draw[vmIndex]) : NULL;
+    ptiki  = cgi.R_Model_GetHandle(cgs.model_draw[playerModel]);
+    if (!vmTiki || !ptiki || snap->numEntities >= MAX_ENTITIES_IN_SNAPSHOT) {
+        return;
+    }
+    for (i = 0; i < snap->numEntities; i++) {
+        if (snap->entities[i].number == FE_TURRET_VIEWMODEL) {
+            return;
+        }
+    }
+
+    // a new entity's state as the server makes it (Level::AllocEdict), the view model's (P_CreateViewModel)
+    memset(&vm, 0, sizeof(vm));
+    vm.number            = FE_TURRET_VIEWMODEL;
+    vm.eType             = ET_MODELANIM;
+    vm.modelindex        = vmIndex;
+    vm.parent            = follow;
+    vm.tag_num           = cgi.Tag_NumForName(ptiki, "eyes bone");
+    vm.attach_use_angles = qtrue;
+    vm.beam_entnum       = ENTITYNUM_NONE;
+    vm.groundEntityNum   = ENTITYNUM_NONE;
+    vm.scale             = turret->scale;
+    vm.alpha             = 1;
+    vm.constantLight     = 0xffffff;
+    vm.renderfx          = RF_FRAMELERP | RF_ALWAYSDRAW;
+    vm.usageIndex        = turret->usageIndex;
+    vm.actionWeight      = 1;
+    vm.quat[3]           = 1;
+    for (i = 0; i < NUM_BONE_CONTROLLERS; i++) {
+        vm.bone_tag[i]     = -1;
+        vm.bone_quat[i][3] = 1;
+    }
+    // its animations: the turret's, slot by slot (TurretGun::P_SetWeaponAnim starts each on both; a new slot
+    // each shot is what plays its sound and flash again)
+    idle = cgi.Anim_NumForName(vmTiki, "idle");
+    for (slot = 0; slot < MAX_FRAMEINFOS; slot++) {
+        const char *slotAnim = cgi.Anim_NameForNum(tiki, turret->frameInfo[slot].index);
+        const int   index    = slotAnim ? cgi.Anim_NumForName(vmTiki, slotAnim) : -1;
+
+        vm.frameInfo[slot]       = turret->frameInfo[slot];
+        vm.frameInfo[slot].index = index >= 0 ? index : idle;
+    }
+    if (vm.tag_num < 0 || idle < 0) {
+        return;
+    }
+
+    // the turret out of the snapshot (as from theirs), the view model at its end (the numbers go up)
+    if (sent) {
+        i = turret - snap->entities;
+        memmove(&snap->entities[i], &snap->entities[i + 1], (snap->numEntities - i - 1) * sizeof(entityState_t));
+        snap->numEntities--;
+    }
+    snap->entities[snap->numEntities++] = vm;
 }
 
 /*
 ===============
-CG_UnspeccedRecorder
+FE_Salt
 
-The recorder as cg.snap had them, before it was made from the eyes of a
-player not shown
+When the entity drawn as the first-person model changes, the old one goes back to its world model and
+the new one takes the first-person model, each keeping the other model's animations; a new usageIndex
+makes the cgame start both afresh (sv_snapshot.c does the same for g_spectatefollow_firstperson)
 ===============
 */
-void CG_UnspeccedRecorder(int *client, vec3_t origin, vec3_t velocity)
+static void FE_Salt(snapshot_t *snap, int viewEnt)
 {
-    int slot = cg.snap == &cg.activeSnapshots[1];
+    int i;
 
-    *client = unspecced[slot].client;
-    VectorCopy(unspecced[slot].origin, origin);
-    VectorCopy(unspecced[slot].velocity, velocity);
+    if (viewEnt != fe.viewEnt) {
+        if (fe.viewEnt >= 0 && fe.viewEnt < MAX_CLIENTS) {
+            fe.salt[fe.viewEnt] = fe.salt[fe.viewEnt] % 65534 + 1;
+        }
+        if (viewEnt >= 0 && viewEnt < MAX_CLIENTS) {
+            fe.salt[viewEnt] = fe.salt[viewEnt] % 65534 + 1;
+        }
+        fe.viewEnt = viewEnt;
+    }
+
+    for (i = 0; i < snap->numEntities; i++) {
+        entityState_t *es = &snap->entities[i];
+
+        if (es->number < MAX_CLIENTS && fe.salt[es->number] && es->usageIndex > 0) {
+            es->usageIndex = (es->usageIndex - 1 + fe.salt[es->number]) % 65535 + 1;
+        }
+    }
 }
 
 /*
 ===============
-CG_UnspeccedCrosshair
+CG_FollowEyes_Snapshot
 
-Whether cg.snap, made from the eyes of a player not shown, has a crosshair
-without a scope
+Called for each snapshot read from the client, before the cgame uses it
 ===============
 */
-int CG_UnspeccedCrosshair(void)
+void CG_FollowEyes_Snapshot(snapshot_t *snap)
 {
-    return unspecced[cg.snap == &cg.activeSnapshots[1]].crosshair;
+    playerState_t       *ps = &snap->ps;
+    const entityState_t *pl = NULL, *weapon;
+    dtiki_t             *tiki;
+    vec3_t               viewangles;
+    float                viewheight, lean, dt;
+    int                  follow, i, item, vmAnim, lastServerTime;
+    qboolean             dead, ok;
+
+    // A server of this code shows a follower the player's own view itself (g_spectatefollow_firstperson 1:
+    // the snapshot under their number), with their ammo: one seen doing it is asked for the view set here
+    // (its spectatemode), and does it from then on
+    if (!cg.demoPlayback && (ps->pm_flags & PMF_SPECTATING)) {
+        const int want = cg_spectatefirstperson->integer ? 1 : 0;
+
+        if (ps->clientNum != cg.clientNum) {
+            fe.serverMode = qtrue;
+        }
+        if (fe.serverMode && want != fe.modeSent) {
+            cgi.SendClientCommand(va("spectatemode %i", want));
+            fe.modeSent = want;
+        }
+    }
+
+    if (cg_spectatefirstperson->integer) {
+        FE_KeepTurrets(snap);
+    }
+
+    follow = -1;
+    if (cg_spectatefirstperson->integer && !fe.serverMode && (ps->pm_flags & PMF_SPECTATING)
+        && (ps->pm_flags & PMF_CAMERA_VIEW) && !(ps->pm_flags & PMF_INTERMISSION) && ps->clientNum == cg.clientNum) {
+        follow = ps->stats[STAT_INFOCLIENT];
+    }
+
+    if (follow >= 0 && follow < MAX_CLIENTS && follow != cg.clientNum) {
+        for (i = 0; i < snap->numEntities; i++) {
+            if (snap->entities[i].number == follow && snap->entities[i].eType == ET_PLAYER) {
+                pl = &snap->entities[i];
+                break;
+            }
+        }
+    }
+
+    if (follow != fe.follow) {
+        // nothing of the last one's box or eye height
+        fe.boxTop    = 0;
+        fe.eyeHeight = 0;
+    }
+
+    // dying: their death through their eyes (the cgame's own, for a health of 0), the camera no longer one behind them
+    dead = pl && (pl->eFlags & EF_DEAD) && follow == fe.follow;
+    if (dead) {
+        VectorCopy(ps->camera_angles, viewangles);
+        viewangles[ROLL] = 0;
+        viewheight       = fe.eyeHeight > 0 ? fe.eyeHeight : DEFAULT_VIEWHEIGHT;
+        lean             = 0;
+    }
+
+    ok = dead;
+    if (pl && !dead) {
+        ok = FE_Camera(ps, pl, viewangles, &viewheight, &lean);
+        if (ok) {
+            fe.keptFrames = 0;
+        } else if (follow == fe.follow && fe.keptFrames < 10) {
+            // a frame the camera can't be worked back while following them (their box a frame off it): as they
+            // were, rather than a frame of the view from behind
+            VectorCopy(ps->camera_angles, viewangles);
+            viewangles[ROLL] = 0;
+            viewheight       = fe.eyeHeight > 0 ? fe.eyeHeight : DEFAULT_VIEWHEIGHT;
+            lean             = fe.lean;
+            fe.keptFrames++;
+            ok = qtrue;
+        }
+    }
+
+    if (!pl || !ok) {
+        fe.follow    = -1;
+        fe.lean      = 0;
+        fe.eyeHeight = 0;
+        fe.health    = -1;
+        fe.kickCount = 0;
+        fe.flash     = 0;
+        VectorClear(fe.kick);
+        fe.turretShots = fe_numShots;
+        FE_Salt(snap, -1);
+        return;
+    }
+
+    lastServerTime = fe.serverTime;
+    if (follow != fe.follow) {
+        // someone new: no speed or kick from the last one, and their animations as they are now
+        lastServerTime      = 0;
+        fe.serverTime       = 0;
+        fe.weaponEnt        = -1;
+        fe.torsoAnim.index  = -1;
+        fe.torsoWeight      = 0;
+        fe.weaponAnim.index = -1;
+        fe.vmAnim           = VM_ANIM_IDLE;
+        fe.health           = -1;
+        fe.kickCount        = 0;
+        fe.flash            = 0;
+        fe.damageDir        = ps->stats[STAT_DAMAGEDIR];
+        fe.airTime          = 0;
+        fe.turretAnim.index = -1;
+        fe.turretSlot       = -1;
+        fe.turretJitter     = 0;
+        fe.turretFireTime   = 0;
+        VectorClear(fe.kick);
+        // their eye height at once (the first-person view eases changes of it in)
+        cg.fCurrentViewHeight = 0;
+    }
+
+    //
+    // where they are and look
+    //
+    ps->clientNum = follow;
+    ps->pm_flags &= ~(PMF_CAMERA_VIEW | PMF_DUCKED);
+    ps->pm_flags |= PMF_NO_PREDICTION;
+    if (viewheight <= CROUCH_VIEWHEIGHT) {
+        ps->pm_flags |= PMF_DUCKED;
+    }
+
+    VectorCopy(pl->origin, ps->origin);
+    // in the range the player's own are (PM_UpdateViewAngles: the pitch between -90 and 90): the camera's come in
+    // 0 to 360, and the first-person view tilts the eye and the gun by a share of the pitch (CG_OffsetFirstPersonView),
+    // looking up as 355 put the eye on the floor and the gun upside down
+    ps->viewangles[PITCH] = AngleNormalize180(viewangles[PITCH]);
+    ps->viewangles[YAW]   = AngleNormalize180(viewangles[YAW]);
+    ps->viewangles[ROLL]  = 0;
+    ps->viewheight        = (int)(viewheight + 0.5f);
+    ps->fLeanAngle = lean;
+
+    // on the ground (the cgame's walking bob and weapon pose, the landing sounds) or not
+    fe.airborne         = FE_Airborne(pl);
+    ps->groundEntityNum = fe.airborne ? ENTITYNUM_NONE : ENTITYNUM_WORLD;
+    ps->walking         = !fe.airborne;
+    VectorClear(ps->damage_angles);
+
+    // their speed: the server's when it sends it (g_smoothClients), else from their last origin
+    dt = (snap->serverTime - fe.serverTime) / 1000.0f;
+    if (pl->pos.trDelta[0] || pl->pos.trDelta[1] || pl->pos.trDelta[2]) {
+        VectorCopy(pl->pos.trDelta, ps->velocity);
+    } else if (fe.serverTime && dt > 0 && dt < 0.25f) {
+        VectorSubtract(pl->origin, fe.origin, ps->velocity);
+        VectorScale(ps->velocity, 1.0f / dt, ps->velocity);
+    } else {
+        VectorClear(ps->velocity);
+    }
+
+    fe.follow     = follow;
+    fe.serverTime = snap->serverTime;
+    fe.lean       = lean;
+    VectorCopy(pl->origin, fe.origin);
+
+    //
+    // their health, and what their hits do to their view
+    //
+    ps->stats[STAT_MAXHEALTH] = 100;
+    if (dead) {
+        vec3_t axis[3], dir;
+
+        // the hit that killed them shows where it came from (no kick nor flash once dead)
+        AnglesToAxis(pl->angles, axis);
+        if (fe.health > 0 && FE_HitDirection(snap, pl, axis[0], dir)) {
+            FE_SetDamageDir(dir);
+        }
+        ps->stats[STAT_HEALTH]    = 0;
+        ps->stats[STAT_DAMAGEDIR] = fe.damageDir;
+        fe.health                 = -1;
+        fe.kickCount              = 0;
+        fe.flash                  = 0;
+        VectorClear(fe.kick);
+    } else {
+        ps->stats[STAT_HEALTH] = ps->stats[STAT_INFOCLIENT_HEALTH] > 0 ? ps->stats[STAT_INFOCLIENT_HEALTH] : 1;
+        FE_HitFeedback(ps, snap, pl, lastServerTime);
+    }
+    if (fe.airborne) {
+        fe.airTime = snap->serverTime;
+    }
+
+    //
+    // what they hold
+    //
+    ps->activeItems[1]              = -1;
+    ps->stats[STAT_EQUIPPED_WEAPON] = 0;
+    ps->stats[STAT_CROSSHAIR]       = 0;
+    ps->stats[STAT_AMMO]            = 0;
+    ps->stats[STAT_CLIPAMMO]        = 0;
+    ps->stats[STAT_INZOOM]          = ps->fov > 0 && ps->fov < 60 ? (int)ps->fov : 0;
+
+    tiki   = NULL;
+    weapon = FE_FindWeapon(snap, follow, &tiki);
+    vmAnim = -1;
+    if (weapon) {
+        const frameInfo_t *fi = NULL;
+
+        item = FE_ItemIndex(FE_ServerInitArg(tiki, "name"));
+        if (item > 0) {
+            ps->activeItems[1] = item;
+        }
+        if (FE_ServerInitArg(tiki, "weapontype")) {
+            ps->stats[STAT_EQUIPPED_WEAPON] = FE_WeaponClass(FE_ServerInitArg(tiki, "weapontype"));
+        } else {
+            // an item (the packed MG42): its class is its place among their items (Player::UpdateStats, ITEM1 on),
+            // not sent; any item's gives the same first-person animations (CG_GetVMAnimPrefixIndex)
+            ps->stats[STAT_EQUIPPED_WEAPON] = WEAPON_CLASS_ITEM1;
+        }
+        ps->stats[STAT_CROSSHAIR] = FE_Crosshair(tiki, ps);
+
+        // the gun's own animation, its heaviest
+        for (i = 0; i < MAX_FRAMEINFOS; i++) {
+            if (weapon->frameInfo[i].weight > 0 && (!fi || weapon->frameInfo[i].weight > fi->weight)) {
+                fi = &weapon->frameInfo[i];
+            }
+        }
+
+        if (weapon->number != fe.weaponEnt) {
+            fe.weaponEnt        = weapon->number;
+            fe.weaponAnim.index = -1;
+        }
+
+        if (fi && FE_AnimChanged(&fe.weaponAnim, fi->index, fi->time) && !fe.torsoKnown) {
+            vmAnim = FE_WeaponVMAnim(cgi.Anim_NameForNum(tiki, fi->index));
+        }
+    } else {
+        fe.weaponEnt = -1;
+    }
+
+    // the upper body's, the newest of its two slots: a first-person animation starts with it, and with none
+    // (or one fading out: the state machine is back in a state without one) the first-person one is idle
+    {
+        dtiki_t           *ptiki  = cgi.R_Model_GetHandle(cgs.model_draw[pl->modelindex]);
+        const frameInfo_t *fi     = NULL;
+        qboolean           active = qfalse;
+
+        for (i = FE_TORSO_SLOT; i < FE_TORSO_SLOT + 2; i++) {
+            if (pl->frameInfo[i].weight > 0 && (!fi || pl->frameInfo[i].time < fi->time)) {
+                fi = &pl->frameInfo[i];
+            }
+        }
+
+        if (ptiki && fi) {
+            const int   lastIndex = fe.torsoAnim.index;
+            const float lastTime  = fe.torsoAnim.time;
+            int         frame;
+
+            if (FE_AnimChanged(&fe.torsoAnim, fi->index, fi->time)) {
+                int torso = FE_TorsoVMAnim(cgi.Anim_NameForNum(ptiki, fi->index));
+
+                // the frame commands the last one had left as it ended, and the new one's since it started
+                frame = FE_FrameVMAnim(ptiki, fi->index, -1, fi->time);
+                if (frame == -1 && lastIndex >= 0) {
+                    frame = FE_FrameVMAnim(ptiki, lastIndex, lastTime, 1e9f);
+                }
+
+                if (torso != -1) {
+                    vmAnim        = torso;
+                    fe.torsoKnown = qtrue;
+                } else if (frame != -1) {
+                    vmAnim = frame;
+                }
+                fe.torsoWeight = 0;
+            } else if ((frame = FE_FrameVMAnim(ptiki, fi->index, lastTime, fi->time)) != -1) {
+                vmAnim = frame;
+            }
+
+            active         = fi->weight + 0.01f >= fe.torsoWeight;
+            fe.torsoWeight = fi->weight;
+        } else {
+            fe.torsoAnim.index = -1;
+            fe.torsoWeight     = 0;
+        }
+
+        if (!active && fe.torsoKnown && vmAnim == -1 && fe.vmAnim != VM_ANIM_IDLE) {
+            vmAnim = VM_ANIM_IDLE;
+        }
+    }
+
+    if (vmAnim != -1) {
+        fe.vmAnim        = vmAnim;
+        fe.vmAnimChanged = (fe.vmAnimChanged + 1) & 3;
+    }
+    ps->iViewModelAnim        = fe.vmAnim;
+    ps->iViewModelAnimChanged = fe.vmAnimChanged;
+
+    // on a turret (last: it changes the snapshot's entities, pl among them)
+    if (FE_OnTurret(pl)) {
+        vec3_t eye;
+
+        VectorCopy(pl->origin, eye);
+        eye[2] += ps->viewheight;
+        FE_Turret(snap, ps, follow, pl->modelindex, eye);
+    } else {
+        fe.turretAnim.index = -1;
+        fe.turretSlot       = -1;
+        fe.turretJitter     = 0;
+        fe.turretFireTime   = 0;
+        fe.turretShots      = fe_numShots;
+    }
+
+    FE_Salt(snap, follow);
 }

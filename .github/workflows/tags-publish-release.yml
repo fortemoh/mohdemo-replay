@@ -1,63 +1,83 @@
+##########################
+# A version's release, from its tag: pushing v1.0.1 on a commit of vulkan whose cmake/identity.cmake says 1.0.1
+# builds Linux and Windows as a release (-DPRODUCT_RELEASE_TAG: the version without "unstable", 1.0.1+61.c2f07c2;
+# the build stops if the tag isn't the code's version), packs the downloads (misc/release/package.sh: the game's
+# mohreloaded-1.0.1-linux.tar.gz and mohreloaded-1.0.1-windows.zip, the dedicated server's
+# mohreloaded-server-1.0.1-linux.tar.gz and mohreloaded-server-1.0.1-windows.zip) and makes a draft release with them:
+# its notes hold the commit sentence the launcher reads and the SHA-256 table branches-build.yml keeps up to date.
+# Nothing is public until the draft is published by hand, with the rest of its notes. Once it is, each push to vulkan
+# replaces its downloads (branches-build.yml, job release), and metal's .github/workflows/macos-metal.yml adds the Mac's.
+##########################
 name: "Publish Release"
 
 on:
   push:
     tags:
-        - "v*.*.*"
-
-env:
-  RELEASE_STAGE: ${{ vars.RELEASE_STAGE || 'unstable' }}
-  RELEASE_IS_PRERELEASE: ${{ vars.RELEASE_IS_PRELEASE }}
+      - "v*.*.*"
 
 permissions:
   contents: write
 
 jobs:
   build-all:
-   uses: ./.github/workflows/shared-build.yml
-   with:
+    uses: ./.github/workflows/shared-build.yml
+    with:
       environment: "release"
+      release-tag: ${{ github.ref_name }}
 
-  # Initially create a release with 1 job
-  # so multiple files can be uploaded at the same time afterwards
-  create-release:
+  draft-release:
     runs-on: ubuntu-24.04
     environment: 'release'
     needs: [build-all]
+    # one release update at a time, with branches-build.yml's and metal's
+    concurrency:
+      group: release-downloads
+      cancel-in-progress: false
 
     steps:
-    - name: Release
-      uses: softprops/action-gh-release@v2.3.2
-      with:
-        name: '${{github.ref_name}}-${{env.RELEASE_STAGE}}'
-        prerelease: ${{env.RELEASE_IS_PRERELEASE}}
+    - uses: actions/checkout@v4
 
-  deploy-all:
-    strategy:
-      matrix:
-        target_os: [
-          'linux-amd64',
-          'windows-x64',
-        ]
-
-    runs-on: ubuntu-24.04
-    environment: 'release'
-    needs: [create-release]
-
-    env:
-      RELEASE_NAME: ${{ github.event.repository.name }}-${{github.ref_name}}-${{matrix.target_os}}
-
-    steps:
     - uses: actions/download-artifact@v4
       with:
-        name: 'out-${{matrix.target_os}}'
-        path: ${{github.workspace}}/${{matrix.target_os}}
+        name: out-linux-amd64
+        path: ${{github.workspace}}/artifacts/linux
 
-    - name: Zip
-      working-directory: '${{github.workspace}}/${{matrix.target_os}}'
-      run: zip -9 -r "../${{ env.RELEASE_NAME }}.zip" ./
-
-    - name: Release
-      uses: softprops/action-gh-release@v2.3.2
+    - uses: actions/download-artifact@v4
       with:
-        files: ${{github.workspace}}/${{ env.RELEASE_NAME }}.zip
+        name: out-windows-x64
+        path: ${{github.workspace}}/artifacts/windows
+
+    - name: Package the downloads
+      run: |
+        set -euo pipefail
+        version=$(sed -n 's/^set(PROJECT_VERSION \([0-9][0-9.]*\))$/\1/p' cmake/identity.cmake)
+        [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "The tag $GITHUB_REF_NAME isn't the code's version, v$version (cmake/identity.cmake)" >&2; exit 1; }
+        echo "VERSION=$version" >> "$GITHUB_ENV"
+        for p in linux windows; do
+          for k in client server; do
+            misc/release/package.sh "$p" "$k" "artifacts/$p" dist "$GITHUB_SHA"
+          done
+        done
+        (cd dist && sha256sum *.tar.gz *.zip) | tee -a "$GITHUB_STEP_SUMMARY"
+
+    - name: The draft release, with the downloads
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        files="dist/mohreloaded-$VERSION-linux.tar.gz dist/mohreloaded-$VERSION-windows.zip"
+        files="$files dist/mohreloaded-server-$VERSION-linux.tar.gz dist/mohreloaded-server-$VERSION-windows.zip"
+        {
+          echo "MoHAA Reloaded $VERSION for Linux and Windows."
+          echo
+          echo "Built by this repository's CI from commit [\`${GITHUB_SHA:0:8}\`](https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA) of the \`vulkan\` branch, tagged $GITHUB_REF_NAME."
+          echo
+          echo "| File | SHA-256 |"
+          echo "|---|---|"
+          for f in $files; do
+            echo "| \`$(basename "$f")\` | \`$(sha256sum "$f" | cut -d' ' -f1)\` |"
+          done
+        } > notes.md
+        cat notes.md >> "$GITHUB_STEP_SUMMARY"
+        gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "MoHAA Reloaded $VERSION" --notes-file notes.md $files

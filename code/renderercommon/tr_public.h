@@ -28,7 +28,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 extern "C" {
 #endif
 
-#define	REF_API_VERSION		22	// 15: DrawBoxes, 16: FrameToken, PresentGate, 17: RegisterImage2D, 18: 2D lists, 19: DrawPolygon2D, 20: RegisterTexture2D, 21: refdef_t viewmodel_fov_x/_y, 22: RegisterRadar2D, Radar2DHeight
+#define	REF_API_VERSION		23	// 15: DrawBoxes, 16: FrameToken, PresentGate, 17: RegisterImage2D, 18: 2D lists, 19: DrawPolygon2D, 20: RegisterTexture2D, 21: refdef_t viewmodel_fov_x/_y, 22: RegisterRadar2D, Radar2DHeight, 23: no SavePerformanceCounters, SetPerformanceCounters
 
 typedef struct dtiki_s dtiki_t;
 typedef struct skelAnimFrame_s skelAnimFrame_t;
@@ -157,7 +157,6 @@ typedef struct {
     void (*AddTerrainMarkToScene)(int terrainIndex, qhandle_t hShader, int numVerts, const polyVert_t* verts, int renderfx);
 
     refEntity_t* (*GetRenderEntity)(int entityNumber);
-    void    (*SavePerformanceCounters)();
 
     void    (*Set2DWindow)(int x, int y, int w, int h, float left, float right, float bottom, float top, float n, float f);
 	void	(*DrawStretchPic) ( float x, float y, float w, float h, 
@@ -356,7 +355,6 @@ typedef struct {
     int         (*CG_PermanentUpdateTreadMark)(treadMark_t* treadMark, float alpha, float minSegment, float maxSegment, float maxOffset, float texScale);
     void        (*CG_ProcessInitCommands)(dtiki_t* tiki, refEntity_t* ent);
     void        (*CG_EndTiki)(dtiki_t* tiki);
-    void        (*SetPerformanceCounters)(int totalTris, int totalVerts, int totalTexels, int worldTris, int worldVerts, int characterLights);
 
     debugline_t** DebugLines;
     int* numDebugLines;

@@ -48,6 +48,7 @@ cvar_t *s_testsound;
 cvar_t *s_separation;
 cvar_t *s_musicVolume;
 cvar_t *s_ambientVolume;
+cvar_t *s_cinematic;
 cvar_t *s_soundtrackCache;
 cvar_t *s_loadBuffers;
 
@@ -104,6 +105,9 @@ void S_Init(qboolean full_startup)
     s_volume         = Cvar_Get("s_volume", "0.9", CVAR_ARCHIVE);
     s_musicVolume    = Cvar_Get("s_musicvolume", "0.9", CVAR_ARCHIVE);
     s_ambientVolume  = Cvar_Get("s_ambientvolume", "1.00", CVAR_ARCHIVE);
+    // 1: the maps' cinematic sounds aren't played (S_IsCinematicSound), the useless sounds the stock
+    // "cinematic" command was typed to stop (Options: Audio, Cinematic)
+    s_cinematic      = Cvar_Get("s_cinematic", "0", CVAR_ARCHIVE);
     // the soundtrack file's text and its songs' mp3 files (scanned) kept in
     // memory until the next map load (MUSIC_LoadSoundtrackFile, snd_stream_memory.cpp)
     s_soundtrackCache = Cvar_Get("s_soundtrackCache", "1", 0);
@@ -217,6 +221,80 @@ qboolean S_NameExists(const char *name)
 
 /*
 ==============
+S_IsCinematicSound
+
+Added in MoHAA Reloaded: the maps' cinematic sounds, no player's: their scripted
+set pieces and their loudest background loops, each file played by these alone
+(in the three games' aliases, ubersound.scr). A server sends the file its alias
+chose, so this holds on any server. Played at the soundtrack's volume
+(s_ambientvolume), the same kind of sound; s_cinematic 1 plays none (Options:
+Audio, Cinematic).
+==============
+*/
+static const char *const s_cinematicSounds[] = {
+    // planes flying over: airplane3 to 6, plane1 to 4, m1l3b_stuka_strafing_run (V2 Rocket Facility's,
+    // obj_team2, at each round's start; Breakthrough's Castello, now and then)
+    "sound/vehicle/M1_PlaneBy.wav",
+    // m3l2_first_airstrike, m3l2_second_airstrike (aliased for the multiplayer maps too)
+    "sound/vehicle/plane4.wav",
+    // e2l3_c47_flyby: Breakthrough's Monte Cassino and Monte Battaglia, at a round's end
+    "sound/vehicle/Stuka_by04.wav",
+    // the single player's flybys (plane_by5 to 8, stuka_by1 and 2, e2l2_stuka_flyby, m5l1a_plane)
+    "sound/vehicle/plane1.wav",
+    "sound/vehicle/plane2.wav",
+    "sound/vehicle/stuka_by01.wav",
+    "sound/vehicle/stuka_by02.wav",
+    "sound/vehicle/stuka_by02.mp3",
+    "sound/vehicle/stuka_by03.mp3",
+    "sound/vehicle/m5_plane_sequence.wav",
+    // Kasserine_Bridge: the bridge blown at the end of Breakthrough's Kasserine, to every player
+    "sound/items/KasserineBridgeExplo1.wav",
+    // the water Allied Assault's global/ambience.scr loops, at full volume 1000 to 1200 units out: river and
+    // basement_water on The Bridge (obj_team4) and The Crossroads (mohdm4), waves1 and 2 on Omaha (obj_team3)
+    "sound/amb/Amb_River.wav",
+    "sound/amb/Amb_BasementWater.wav",
+    "sound/amb/Wave_Laps1.wav",
+};
+
+static qboolean S_IsCinematicSound(const char *name)
+{
+    size_t i;
+
+    for (i = 0; i < ARRAY_LEN(s_cinematicSounds); i++) {
+        if (!Q_stricmp(name, s_cinematicSounds[i])) {
+            return qtrue;
+        }
+    }
+
+    return qfalse;
+}
+
+/*
+==============
+S_CinematicVolume
+
+Added in MoHAA Reloaded: a cinematic sound's volume (below 0: its own, 1) with
+the soundtrack's; 0 with s_cinematic 1.
+==============
+*/
+static float S_CinematicVolume(float volume)
+{
+    if (s_cinematic->integer || s_ambientVolume->value <= 0) {
+        return 0;
+    }
+
+    if (volume < 0) {
+        volume = 1;
+    }
+
+    return volume * s_ambientVolume->value;
+}
+
+static qboolean S_ReadSound(sfx_t *sfx, int streamed, qboolean force_load);
+static qboolean S_ReadUnread(sfx_t *sfx, int streamed);
+
+/*
+==============
 S_FindName
 ==============
 */
@@ -276,6 +354,9 @@ sfx_t *S_FindName(const char *name, int sequenceNumber)
     //strcpy(sfx->name, name);
     Q_strncpyz(sfx->name, name, sizeof(sfx->name));
     sfx->registration_sequence = sequenceNumber;
+    if (S_IsCinematicSound(sfx->name)) {
+        sfx->iFlags |= SFX_FLAG_CINEMATIC;
+    }
 
     return sfx;
 }
@@ -392,28 +473,72 @@ sfxHandle_t S_RegisterSound(const char *name, int streamed, qboolean force_load)
         return 0;
     }
 
-    if (!sfx->data) {
-        if (!S_LoadSound(sfx->name, sfx, streamed, force_load)) {
-            Com_DPrintf("Couldn't load sound: %s\n", sfx->name);
-            if (!S_LoadSound("sound/default.wav", sfx, streamed, 0)) {
-                Com_DPrintf("Couldn't load sound: sound/default.wav\n");
-                sfx->iFlags |= SFX_FLAG_DEFAULT_SOUND;
-                return 0;
-            }
+    // Added in MoHAA Reloaded: a cinematic sound that would be silent isn't read until it plays (S_ReadUnread)
+    if ((sfx->iFlags & SFX_FLAG_CINEMATIC) && S_CinematicVolume(1) <= 0) {
+        if (!sfx->data) {
+            sfx->iFlags |= SFX_FLAG_UNREAD;
         }
+        return sfx - s_knownSfx;
+    }
 
-        sfx->iFlags &= ~SFX_FLAG_DEFAULT_SOUND;
-        sfx->sfx_info_index = 0;
-
-        for (i = 0; i < number_of_sfx_infos; i++) {
-            if (!Q_stricmp(sfx->name, sfx_infos[i].name)) {
-                sfx->sfx_info_index = i;
-                break;
-            }
-        }
+    if (!sfx->data && !S_ReadSound(sfx, streamed, force_load)) {
+        return 0;
     }
 
     return sfx - s_knownSfx;
+}
+
+/*
+==============
+S_ReadSound
+
+Changed: S_RegisterSound's reading of the file (sound/default.wav where it
+fails), for S_ReadUnread too.
+==============
+*/
+static qboolean S_ReadSound(sfx_t *sfx, int streamed, qboolean force_load)
+{
+    int i;
+
+    sfx->iFlags &= ~SFX_FLAG_UNREAD;
+    if (!S_LoadSound(sfx->name, sfx, streamed, force_load)) {
+        Com_DPrintf("Couldn't load sound: %s\n", sfx->name);
+        if (!S_LoadSound("sound/default.wav", sfx, streamed, 0)) {
+            Com_DPrintf("Couldn't load sound: sound/default.wav\n");
+            sfx->iFlags |= SFX_FLAG_DEFAULT_SOUND;
+            return qfalse;
+        }
+    }
+
+    sfx->iFlags &= ~SFX_FLAG_DEFAULT_SOUND;
+    sfx->sfx_info_index = 0;
+
+    for (i = 0; i < number_of_sfx_infos; i++) {
+        if (!Q_stricmp(sfx->name, sfx_infos[i].name)) {
+            sfx->sfx_info_index = i;
+            break;
+        }
+    }
+
+    return qtrue;
+}
+
+/*
+==============
+S_ReadUnread
+
+Added in MoHAA Reloaded: a cinematic sound registered while silent, read as it
+first plays; qfalse where it couldn't be (nor sound/default.wav: the handle
+S_RegisterSound would have given is 0).
+==============
+*/
+static qboolean S_ReadUnread(sfx_t *sfx, int streamed)
+{
+    if (sfx->iFlags & SFX_FLAG_UNREAD) {
+        S_ReadSound(sfx, streamed, qfalse);
+    }
+
+    return !(sfx->iFlags & SFX_FLAG_DEFAULT_SOUND);
 }
 
 /*
@@ -459,8 +584,10 @@ void S_EndRegistration()
     if (s_loadBuffers->integer) {
         // the decode of a sound's samples for the mixer on its first play
         // took up to 0.6 ms in the frame of the match that played it
+        // (not a cinematic sound that would be silent: S_CinematicVolume)
         for (i = 0; i < s_numSfx; i++) {
-            if (s_knownSfx[i].name[0]) {
+            if (s_knownSfx[i].name[0] && !(s_knownSfx[i].iFlags & SFX_FLAG_UNREAD)
+                && !((s_knownSfx[i].iFlags & SFX_FLAG_CINEMATIC) && S_CinematicVolume(1) <= 0)) {
                 S_Driver_PreloadSfx(&s_knownSfx[i]);
             }
         }
@@ -547,6 +674,22 @@ void S_StartSound(
 
     if (entnum && (entchannel == CHAN_DIALOG || entchannel == CHAN_DIALOG_SECONDARY) && s_dialogscale->value > 0) {
         volume *= s_dialogscale->value;
+    }
+
+    // Added in MoHAA Reloaded: a cinematic sound at the soundtrack's volume; silent, not started, but for one a
+    // single player's script waits on ("playsound ... wait": S_FLAG_DO_CALLBACK, a hosted game's, never a
+    // multiplayer one's), started silent so the script goes on when it ends
+    if (s_knownSfx[sfxHandle].iFlags & SFX_FLAG_CINEMATIC) {
+        volume = S_CinematicVolume(volume);
+        if (volume <= 0 && !(entnum & S_FLAG_DO_CALLBACK)) {
+            if (s_show_sounds->integer > 0) {
+                Com_DPrintf("^~^~^ cinematic sound off: %s\n", s_knownSfx[sfxHandle].name);
+            }
+            return;
+        }
+        if (!S_ReadUnread(&s_knownSfx[sfxHandle], streamed)) {
+            return;
+        }
     }
 
     S_Driver_StartSound(origin, entnum, entchannel, sfxHandle, volume, min_dist, pitch, maxDist, streamed);
@@ -702,6 +845,14 @@ void S_AddLoopingSound(
 
     if (!sfxHandle) {
         return;
+    }
+
+    // Added in MoHAA Reloaded: a cinematic loop (the river) at the soundtrack's volume; silent, not added (so stopped)
+    if (s_knownSfx[sfxHandle].iFlags & SFX_FLAG_CINEMATIC) {
+        volume = S_CinematicVolume(volume);
+        if (volume <= 0 || !S_ReadUnread(&s_knownSfx[sfxHandle], qfalse)) {
+            return;
+        }
     }
 
     S_Driver_AddLoopingSound(origin, velocity, sfxHandle, volume, min_dist, max_dist, pitch, flags);

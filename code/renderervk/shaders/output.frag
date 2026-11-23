@@ -39,6 +39,8 @@ layout(push_constant) uniform Push {
 	vec2	invExtent;	// 1 / the swapchain image's size
 	float	black;		// r_hdrBlack: the black level's toe, 0 none
 	float	sdrBox;		// the HDR look's peak screen: the box, linear (VK_OutputSdrBox)
+	float	contrast;	// r_contrast, 1 none (Omaha's)
+	float	vibrance;	// r_vibrance, 1 none
 } pc;
 
 layout(location = 0) out vec4 out_color;
@@ -105,6 +107,21 @@ void main() {
 	vec2 uv = gl_FragCoord.xy * pc.invExtent;
 	vec3 c = texture( u_frame, uv ).rgb;
 	vec3 lin;
+
+	// r_contrast (Omaha's 843a74c0), around mid gray of the gamma-encoded
+	// picture (1.0 paper white), as a monitor's contrast; not on the
+	// calibration screens
+	if ( pc.contrast != 1.0 && pc.test == 0 ) {
+		c = max( ( c - vec3( 0.5 ) ) * pc.contrast + vec3( 0.5 ), vec3( 0.0 ) );
+	}
+	// r_vibrance: the colour saturation, away from or toward the gray of the
+	// same BT.709 luma in linear light (as the composite's r_saturation)
+	if ( pc.vibrance != 1.0 && pc.test == 0 ) {
+		vec3 l = pow( max( c, vec3( 0.0 ) ), vec3( 2.2 ) );
+
+		l = max( mix( vec3( dot( l, vec3( 0.2126, 0.7152, 0.0722 ) ) ), l, pc.vibrance ), vec3( 0.0 ) );
+		c = pow( l, vec3( 1.0 / 2.2 ) );
+	}
 
 	if ( pc.mode == MODE_SDR && pc.test == 0 ) {
 		out_color = vec4( clamp( c, 0.0, 1.0 ), 1.0 );

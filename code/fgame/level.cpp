@@ -1104,18 +1104,26 @@ void Level::setSkill(int value)
     gi.cvar_set("skill", va("%d", skill_level));
 }
 
+// The original game multiplies by 0.001f in double precision (x87) and rounds
+// once to float. Dividing by 1000.0f rounds differently, which makes a fire
+// delay that is a whole number of frames ready one frame late more often.
+static float MsecToSeconds(int msec)
+{
+    return (float)((double)msec * (double)0.001f);
+}
+
 void Level::setTime(int levelTime)
 {
     svsTime      = levelTime;
     inttime      = levelTime - svsStartTime;
-    svsFloatTime = levelTime / 1000.0f;
-    time         = inttime / 1000.0f;
+    svsFloatTime = MsecToSeconds(levelTime);
+    time         = MsecToSeconds(inttime);
 }
 
 void Level::setFrametime(int frametime)
 {
     intframetime    = frametime;
-    this->frametime = frametime / 1000.0f;
+    this->frametime = MsecToSeconds(frametime);
 }
 
 void Level::SpawnEntities(char *entities, int svsTime)

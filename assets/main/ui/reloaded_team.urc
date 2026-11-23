@@ -1,0 +1,72 @@
+// The Reloaded team page, shown for the team menus (SelectTeam, ObjSelectTeam, SelectFFAModel; cl_uimenus.cpp): the sides and each side's model; each side's figure full length at its outer edge (placed, made and framed by cl_uimenus.cpp: RL_TFIG*)
+menu "reloaded_team" 640 480 NONE 0
+align left top
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle NONE
+virtualres 1
+drawcache 1
+
+resource
+ReloadedMenu
+{
+name "back"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen team
+layer back
+}
+
+resource
+Label
+{
+name "allies"
+rect 0 0 64 64
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+linkcvar "ui_reloaded_side_allies"
+rendermodel 1
+modeloffset "0 0 -4"
+modelrotateoffset "0 0 0"
+modelangles "4 160 0"
+modelscale 1.1
+modelaspect 1
+modelstudio 1
+modelanim reloadedidle
+}
+
+resource
+Label
+{
+name "axis"
+rect 0 0 64 64
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+linkcvar "ui_reloaded_side_axis"
+rendermodel 1
+modeloffset "0 0 -4"
+modelrotateoffset "0 0 0"
+modelangles "4 200 0"
+modelscale 1.1
+modelaspect 1
+modelstudio 1
+modelanim reloadedidle
+}
+
+resource
+ReloadedMenu
+{
+name "front"
+rect 0 0 640 480
+fgcolor 1.00 1.00 1.00 1.00
+bgcolor 0.00 0.00 0.00 0.00
+borderstyle "NONE"
+screen team
+layer front
+}
+
+end.

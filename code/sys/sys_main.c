@@ -150,10 +150,11 @@ char *Sys_GetClipboardData(void)
     return NULL;
 }
 
+// without PRODUCT_NAME's space
 #ifdef DEDICATED
-#	define PID_FILENAME PRODUCT_NAME "_server.pid"
+#	define PID_FILENAME "mohreloaded_server.pid"
 #else
-#	define PID_FILENAME PRODUCT_NAME ".pid"
+#	define PID_FILENAME "mohreloaded.pid"
 #endif
 
 /*

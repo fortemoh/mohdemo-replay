@@ -1043,7 +1043,6 @@ void	Com_PresentMark( uint64_t token );
 extern	cvar_t	*paused;
 extern	cvar_t	*config;
 extern	cvar_t	*fps;
-extern	cvar_t	*fps_location;
 extern	cvar_t	*developer;
 extern	cvar_t	*com_dedicated;
 extern	cvar_t	*com_speeds;
@@ -1402,8 +1401,9 @@ void	Sys_Print( const char *msg );
 // Sys_Milliseconds should only be used for profiling purposes,
 // any game related timing information should come from event timestamps
 int		Sys_Milliseconds (void);
-// a monotonic clock in microseconds (the fps counter) and in nanoseconds
-// (the frame limiter's deadlines)
+// the same monotonic clock in microseconds (the fps counter) and in nanoseconds
+// (the frame limiter's deadlines):
+// Sys_Milliseconds() == Sys_Microseconds() / 1000 == Sys_Nanoseconds() / 1000000
 int64_t	Sys_Microseconds (void);
 int64_t	Sys_Nanoseconds (void);
 // sleeps for about ns nanoseconds, as closely as the platform's timers can

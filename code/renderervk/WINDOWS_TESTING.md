@@ -10,7 +10,7 @@ About 30 minutes. Sound can stay on.
 
 1. Build: the `out-windows-x64` artifact of the commit to test (GitHub,
    pstngh/openmohaa-vulkan, Actions, the "Builds" run of that commit;
-   kept 3 days). Unzip it into a new folder: `openmohaa.exe`,
+   kept 3 days). Unzip it into a new folder: `mohreloaded.exe`,
    `renderer_vulkan.dll`, `game.dll`, `cgame.dll`...
 2. Game data: the folder of a Medal of Honor: Allied Assault install, the
    one that contains `main\Pak0.pk3` (below `C:\MOHAA`).
@@ -84,7 +84,7 @@ overwrites it). The console opens with the key below Esc.
 1. **Startup and vid_restart** (`life.log`):
 
    ```
-   openmohaa.exe +set fs_basepath C:\MOHAA +set logfile 2 +set developer 1 +set r_fullscreen 0 +set r_mode 3 +set r_allowResize 1 +exec vktest_life.cfg
+   mohreloaded.exe +set fs_basepath C:\MOHAA +set logfile 2 +set developer 1 +set r_fullscreen 0 +set r_mode 3 +set r_allowResize 1 +exec vktest_life.cfg
    ```
 
    When the script is done (the third `vkinfo` in the console), by hand:
@@ -99,14 +99,14 @@ overwrites it). The console opens with the key below Esc.
 2. **Frame limiter** (`limiter.log` and the five `lim_*.txt` files):
 
    ```
-   openmohaa.exe +set fs_basepath C:\MOHAA +set logfile 2 +set r_vkFrameLog 1 +set r_swapInterval 0 +set r_fullscreen 1 +set r_mode -2 +exec vktest_limiter.cfg
+   mohreloaded.exe +set fs_basepath C:\MOHAA +set logfile 2 +set r_vkFrameLog 1 +set r_swapInterval 0 +set r_fullscreen 1 +set r_mode -2 +exec vktest_limiter.cfg
    ```
 
    (`r_mode -2`: the desktop's resolution.) Don't touch anything for the
    2 minutes it runs; it quits by itself. Then once more with
    `+set r_vkSubmitThread 1` added (`limiter_thread.log`; rename the five
    `lim_*.txt` files of the first run before, e.g. to `lim_*_off.txt`).
-   Look at the Task Manager's CPU column for openmohaa meanwhile if you
+   Look at the Task Manager's CPU column for mohreloaded meanwhile if you
    can: about a third of a core at 250 (the wait spins the last
    millisecond of every frame, more when the timer woke it up late), one
    core uncapped. A whole core at 60 to 165 means the waitable timer

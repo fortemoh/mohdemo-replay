@@ -85,23 +85,40 @@ static int CL_XcHeight(const byte *b)
     return b[2] | b[3] << 8;
 }
 
+// why a code isn't imported: the console's words, the menu's
+typedef struct {
+    const char *said;
+    const char *note;
+} xcWhy_t;
+
+static const xcWhy_t xcNoCode   = {"copy a crosshair code in CS2 first, or type crosshair_import CS...",
+                                   "NO CODE IN THE BOX OR THE CLIPBOARD"};
+static const xcWhy_t xcOldCode  = {"an old CSGO- code: CS2 no longer takes those either, copy the crosshair's new code from CS2",
+                                   "AN OLD CSGO- CODE: COPY CS2'S NEW ONE"};
+static const xcWhy_t xcNotCode  = {"not a crosshair code (CS and 44 letters and digits)", "NOT A CS2 CROSSHAIR CODE"};
+static const xcWhy_t xcBadChar  = {"not a crosshair code (a character CS2 never writes: a typo?)", "NOT A CS2 CROSSHAIR CODE: A TYPO?"};
+static const xcWhy_t xcTooBig   = {"not a crosshair code (a typo?)", "NOT A CS2 CROSSHAIR CODE: A TYPO?"};
+static const xcWhy_t xcGarbled  = {"the code is garbled (its checksum doesn't match: a typo?)", "NOT A CS2 CROSSHAIR CODE: A TYPO?"};
+static const xcWhy_t xcNewer    = {"a crosshair code of a newer kind than this game reads", "A NEWER CODE THAN THIS GAME READS"};
+static const xcWhy_t xcNoHeight = {"the code has no screen height", "NOT A CS2 CROSSHAIR CODE"};
+
 // the code's bytes, or why it isn't one CS2 writes now
-static const char *CL_XcDecode(const char *code, byte *b)
+static const xcWhy_t *CL_XcDecode(const char *code, byte *b)
 {
     int i, j, carry;
 
     if (!Q_strncmp(code, "CSGO", 4)) {
-        return "an old CSGO- code: CS2 no longer takes those either, copy the crosshair's new code from CS2";
+        return &xcOldCode;
     }
     if (Q_strncmp(code, "CS", 2) || strlen(code) != 2 + XC_CHARS) {
-        return "not a crosshair code (CS and 44 letters and digits)";
+        return &xcNotCode;
     }
     memset(b, 0, XC_BYTES);
     for (i = XC_CHARS - 1; i >= 0; i--) {
         const char *digit = strchr(xcDigits, code[2 + i]);
 
         if (!digit) {
-            return "not a crosshair code (a character CS2 never writes: a typo?)";
+            return &xcBadChar;
         }
         // b = b * 57 + digit
         carry = digit - xcDigits;
@@ -111,17 +128,17 @@ static const char *CL_XcDecode(const char *code, byte *b)
             carry >>= 8;
         }
         if (carry) {
-            return "not a crosshair code (a typo?)";
+            return &xcTooBig;
         }
     }
     if (b[0] != CL_XcChecksum(b)) {
-        return "the code is garbled (its checksum doesn't match: a typo?)";
+        return &xcGarbled;
     }
     if (b[1] != 1) {
-        return va("a crosshair code of a newer kind (version %d) than this game reads", b[1]);
+        return &xcNewer;
     }
     if (!CL_XcHeight(b)) {
-        return "the code has no screen height";
+        return &xcNoHeight;
     }
     return NULL;
 }
@@ -198,6 +215,47 @@ static int CL_XcClamp(const cvar_t *var, int hi)
     return Q_min(Q_max(var->integer, 0), hi);
 }
 
+// the code in text (NULL: the clipboard's) to the cvars, and kept in cg_crosshair_code for crosshair_export: NULL,
+// else why not (nothing changed then)
+static const xcWhy_t *CL_XcImport(const char *text)
+{
+    char           code[64] = "";
+    char           values[XC_CVARS][MAX_QPATH];
+    byte           b[XC_BYTES];
+    const xcWhy_t *why;
+    size_t         length;
+    int            i;
+
+    if (!text) {
+        text = Sys_GetWholeClipboard();
+    }
+    if (text) {
+        // the first word, as copied with spaces, a line break, quotes or a full stop around it
+        while (*text && !isalnum((unsigned char)*text)) {
+            text++;
+        }
+        length = strcspn(text, " \t\r\n");
+        while (length && !isalnum((unsigned char)text[length - 1])) {
+            length--;
+        }
+        Q_strncpyz(code, text, Q_min(length + 1, sizeof(code)));
+    }
+    if (!code[0]) {
+        return &xcNoCode;
+    }
+    why = CL_XcDecode(code, b);
+    if (why) {
+        return why;
+    }
+
+    CL_XcCvars(b, values);
+    for (i = 0; i < XC_CVARS; i++) {
+        CL_XcSet(xcCvars[i], values[i]);
+    }
+    CL_XcSet("cg_crosshair_code", code);
+    return NULL;
+}
+
 /*
 ===============
 CL_CrosshairImport_f
@@ -208,34 +266,27 @@ kept in cg_crosshair_code for crosshair_export. A code CS2 doesn't take now chan
 */
 void CL_CrosshairImport_f(void)
 {
-    char        code[64] = "";
-    const char *text     = Cmd_Argc() > 1 ? Cmd_Argv(1) : Sys_GetWholeClipboard();
-    const char *error;
-    char        values[XC_CVARS][MAX_QPATH];
-    byte        b[XC_BYTES];
-    int         i;
+    const xcWhy_t *why = CL_XcImport(Cmd_Argc() > 1 ? Cmd_Argv(1) : NULL);
 
-    if (text) {
-        // the first word, as copied with spaces or a line break around it
-        text += strspn(text, " \t\r\n");
-        Q_strncpyz(code, text, Q_min(strcspn(text, " \t\r\n") + 1, sizeof(code)));
-    }
-    if (!code[0]) {
-        Com_Printf("crosshair_import: copy a crosshair code in CS2 first, or type crosshair_import CS...\n");
+    if (why) {
+        Com_Printf("crosshair_import: %s; nothing changed.\n", why->said);
         return;
     }
-    error = CL_XcDecode(code, b);
-    if (error) {
-        Com_Printf("crosshair_import: %s; nothing changed.\n", error);
-        return;
-    }
-
-    CL_XcCvars(b, values);
-    for (i = 0; i < XC_CVARS; i++) {
-        CL_XcSet(xcCvars[i], values[i]);
-    }
-    CL_XcSet("cg_crosshair_code", code);
     Com_Printf("Crosshair imported.\n");
+}
+
+/*
+===============
+CL_CrosshairImportNote
+
+the menu's import: as crosshair_import's, of the code typed (NULL: the clipboard's), and what it says
+===============
+*/
+const char *CL_CrosshairImportNote(const char *code)
+{
+    const xcWhy_t *why = CL_XcImport(code);
+
+    return why ? why->note : "CROSSHAIR IMPORTED";
 }
 
 /*

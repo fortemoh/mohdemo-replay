@@ -57,8 +57,6 @@ public:
     void              setFirstResponder(UIWidget *responder);
     UIWidget         *getFirstResponder(void);
     UIWidget         *ActiveControl(void);
-    // Added: what a left click at pos goes to (ServiceEvents': the key capture's widget, else the one under it)
-    UIWidget         *ClickTarget(UIPoint2D& pos);
     void              ActivateControl(UIWidget *control);
     void              DeactivateCurrentControl(void);
     void              setCursor(const char *string);

@@ -6,14 +6,22 @@ on:
       environment:
         required: true
         type: string
+      # a version tag (v1.0.1) for a release build, cmake/version.cmake's PRODUCT_RELEASE_TAG; empty for the others
+      # (the flag is left out then)
+      release-tag:
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build-platform-linux:
     uses: ./.github/workflows/shared-build-linux.yml
     with:
       environment: ${{inputs.environment}}
+      release-tag: ${{inputs.release-tag}}
 
   build-platform-windows:
     uses: ./.github/workflows/shared-build-windows.yml
     with:
       environment: ${{inputs.environment}}
+      release-tag: ${{inputs.release-tag}}

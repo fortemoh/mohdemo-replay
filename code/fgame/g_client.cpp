@@ -1094,11 +1094,15 @@ void G_ClientDisconnect(gentity_t *ent)
         ((Player *)ent->entity)->Disconnect();
 
         if (g_iInThinks) {
+            // Dropped in the middle of the frame's entity walk, for example by
+            // "Server command overflow" while an obituary is sent. Removal waits
+            // until the walk ends, and until then this edict stays active and
+            // linked, so it must keep its entity. ~Entity clears ent->entity.
             ent->entity->PostEvent(EV_Remove, 0);
         } else {
             delete ent->entity;
+            ent->entity = NULL;
         }
-        ent->entity = NULL;
 
         G_InitClientPersistant(ent->client);
     }

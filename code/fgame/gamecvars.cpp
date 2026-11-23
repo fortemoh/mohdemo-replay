@@ -706,7 +706,8 @@ void CVAR_Init(void)
     g_spectatefollow_stockbob    = gi.Cvar_Get("g_spectatefollow_stockbob", "0", 0);
 
     g_playeranim_legs_continous = gi.Cvar_Get("g_playeranim_legs_continous", "1", 0);
-    g_playerStacking            = gi.Cvar_Get("g_playerStacking", "0", 0);
+    // Changed in Reloaded: on by default (players may stand on each other's heads)
+    g_playerStacking            = gi.Cvar_Get("g_playerStacking", "1", 0);
 
     if (maxclients->integer + sv_maxbots->integer > MAX_CLIENTS) {
         unsigned int lowered;
@@ -730,7 +731,8 @@ void CVAR_Init(void)
 
     g_navigation_legacy = gi.Cvar_Get("g_navigation_legacy", "0", CVAR_LATCH);
 
-    g_door_reopen_blocked = gi.Cvar_Get("g_door_reopen_blocked", "1", 0);
+    // Changed in Reloaded: off by default (a blocked door goes back as in the original game)
+    g_door_reopen_blocked = gi.Cvar_Get("g_door_reopen_blocked", "0", 0);
 
     g_splean = gi.Cvar_Get("g_splean", "0", CVAR_ARCHIVE);
 

@@ -91,6 +91,11 @@ typedef struct {
 	int cursize;
 	byte *datatypes;
 	int dtindex;
+	// where the message being written began, so one that does not fit is
+	// taken out whole instead of leaving its first fields in the block
+	int msgStart;
+	int msgStartDt;
+	qboolean msgDropped;
 } cgm_t;
 
 cgm_t g_CGMessages[MAX_CLIENTS];
@@ -145,10 +150,11 @@ void SV_InitCGMessage (int iClient)
 		pCGM->data = Z_Malloc(CGM_DATA_SIZE);
 
 	if ( pCGM->datatypes == 0 )
-		pCGM->datatypes = Z_Malloc(CGM_DATA_SIZE);
+		pCGM->datatypes = Z_Malloc(CGM_DATATYPES_SIZE);
 
 	pCGM->cursize = 0;
 	pCGM->dtindex = 0;
+	pCGM->msgDropped = qfalse;
 
 	g_CGMRecieve[iClient] = 0;
 }
@@ -179,12 +185,16 @@ static void MSG_HandleCGMBufferOverflow(cgm_t* pCGM, qboolean isDatum) {
 
 static void MSG_WriteCGMBits (cgm_t *pCGM, int value, int bits)
 {
-	if (CGM_DATA_SIZE - pCGM->cursize < 4) {
-		MSG_HandleCGMBufferOverflow(pCGM, qfalse);
+	if (pCGM->msgDropped) {
 		return;
 	}
-	if(CGM_DATATYPES_SIZE - pCGM->dtindex < 1) {
-		MSG_HandleCGMBufferOverflow(pCGM, qtrue);
+	if (CGM_DATA_SIZE - pCGM->cursize < 4 || CGM_DATATYPES_SIZE - pCGM->dtindex < 1) {
+		// a cut message would make the client read the rest of the
+		// snapshot as its missing fields, so drop it whole
+		MSG_HandleCGMBufferOverflow(pCGM, CGM_DATA_SIZE - pCGM->cursize >= 4);
+		pCGM->cursize = pCGM->msgStart;
+		pCGM->dtindex = pCGM->msgStartDt;
+		pCGM->msgDropped = qtrue;
 		return;
 	}
 
@@ -386,8 +396,11 @@ void PF_MSG_StartCGM (int type)
 
 	pCGM = g_CGMessages;
 	for(i = 0; i < svs.iNumClients; i++,pCGM++) {
-		if(g_CGMRecieve[i] == 0) 
+		if(g_CGMRecieve[i] == 0)
 			continue;
+		pCGM->msgStart = pCGM->cursize;
+		pCGM->msgStartDt = pCGM->dtindex;
+		pCGM->msgDropped = qfalse;
 		if(pCGM->cursize <= 0) {
 			// always put "svc_cgameMessage" byte at the beginning of CGM block
 			MSG_WriteCGMBits(pCGM,svc_cgameMessage,8);
@@ -411,6 +424,8 @@ void PF_MSG_SetClient (int iClient)
 	if(g_CGMessages[iClient].data && (g_CGMessages[iClient].cursize <= 3967))
 	{
 		g_CGMRecieve[iClient] = 1;
+	} else if (g_CGMessages[iClient].data) {
+		MSG_HandleCGMBufferOverflow(&g_CGMessages[iClient], qfalse);
 	}
 }
 
@@ -526,8 +541,6 @@ void SV_WriteCGMToClient (client_t *client, msg_t *msg)
 		{
 			int curDTIndex;
 			byte *data;
-			// write end of message - single false bit
-			MSG_WriteCGMBits(pCGMMsg, 0, 1);
 			data = pCGMMsg->data;
 			curDTIndex = 0;
 			for(curDTIndex = 0; curDTIndex < pCGMMsg->dtindex; curDTIndex++) {
@@ -542,8 +555,11 @@ void SV_WriteCGMToClient (client_t *client, msg_t *msg)
 					MSG_WriteBits(msg, *(int*)data, bits);
 					data+=4;
 				}
-			
+
 			}
+			// end of messages - single false bit, written here so a full
+			// buffer can never lose it
+			MSG_WriteBits(msg, 0, 1);
 			pCGMMsg->cursize = 0;
 			pCGMMsg->dtindex = 0;
 		}

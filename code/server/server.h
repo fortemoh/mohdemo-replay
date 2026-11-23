@@ -387,6 +387,7 @@ extern	cvar_t	*sv_netprofile;
 extern	cvar_t	*sv_netprofileoverlay;
 extern	cvar_t	*sv_netoptimize;
 extern	cvar_t	*sv_netoptimize_vistime;
+extern	cvar_t	*sv_fatpvs;
 extern	cvar_t	*g_netoptimize;
 extern	cvar_t	*sv_chatter;
 extern	cvar_t	*sv_gamename;

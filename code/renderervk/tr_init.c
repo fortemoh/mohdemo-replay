@@ -77,6 +77,7 @@ cvar_t	*r_drawworld;
 cvar_t	*r_speeds;
 cvar_t	*r_fullbright;
 cvar_t	*r_novis;
+cvar_t	*r_fatpvs;
 cvar_t	*r_nocull;
 cvar_t	*r_showcull;
 cvar_t	*r_facePlaneCull;
@@ -274,7 +275,6 @@ cvar_t* r_aviMotionJpegQuality;
 cvar_t* r_screenshotJpegQuality;
 
 cvar_t* r_developer;
-cvar_t* r_fps;
 
 static char infostring[8192];
 
@@ -1826,6 +1826,8 @@ void R_Register( void )
 	r_nocull = ri.Cvar_Get ("r_nocull", "0", CVAR_CHEAT);
 	r_showcull = ri.Cvar_Get("r_showcull", "0", CVAR_CHEAT);
 	r_novis = ri.Cvar_Get ("r_novis", "0", CVAR_CHEAT);
+	// Added: see R_MarkLeaves
+	r_fatpvs = ri.Cvar_Get ("r_fatpvs", "32", CVAR_ARCHIVE);
 	r_showcluster = ri.Cvar_Get ("r_showcluster", "0", CVAR_CHEAT);
 	r_speeds = ri.Cvar_Get ("r_speeds", "0", CVAR_CHEAT);
 	r_verbose = ri.Cvar_Get( "r_verbose", "0", CVAR_CHEAT );
@@ -1903,7 +1905,6 @@ void R_Register( void )
 	r_alpha_foliage2 = ri.Cvar_Get("r_alpha_foliage2", "0.75", CVAR_CHEAT);
 	r_blendtrees = ri.Cvar_Get("r_blendtrees", "0", CVAR_LATCH);
 	r_blendbushes = ri.Cvar_Get("r_blendbushes", "0", CVAR_LATCH);
-	r_fps = ri.Cvar_Get("fps", "0", 0);
 	r_loadjpg = ri.Cvar_Get("r_loadjpg", "1", CVAR_LATCH);
 	r_loadftx = ri.Cvar_Get("r_loadftx", "0", CVAR_LATCH);
 
@@ -2317,8 +2318,6 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
     re.AddTerrainMarkToScene = RE_AddTerrainMarkToScene;
 
     re.GetRenderEntity = RE_GetRenderEntity;
-
-	re.SavePerformanceCounters = R_SavePerformanceCounters;
 
 	re.R_Model_GetHandle = R_Model_GetHandle;
 	re.SetColor = Draw_SetColor;

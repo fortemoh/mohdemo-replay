@@ -489,34 +489,39 @@ char* Sys_MicrosoftStorePath(void)
 
 /*
 ================
-Sys_Milliseconds
+Sys_Nanoseconds
+
+The one clock behind Sys_Nanoseconds, Sys_Microseconds and Sys_Milliseconds:
+monotonic, so a change to the system's date and time (a time sync stepping it,
+the user setting it) moves neither the game's time nor the frame limiter's
+deadlines. CLOCK_UPTIME_RAW on macOS (mach_absolute_time's clock, which the
+input's event timestamps use), CLOCK_MONOTONIC elsewhere; neither counts time
+spent asleep. All three are this reading from one base, so they always agree:
+Sys_Milliseconds() == Sys_Microseconds() / 1000 == Sys_Nanoseconds() / 1000000.
+The base is the whole second before the first call, which main() makes before
+any other thread starts, so Sys_Milliseconds starts at 0-999 as it always has.
+Only differences of these values mean anything.
 ================
 */
-/* base time in seconds, that's our origin
-   timeval:tv_sec is an int:
-   assuming this wraps every 0x7fffffff - ~68 years since the Epoch (1970) - we're safe till 2038 */
-unsigned long sys_timeBase = 0;
-/* current time in ms, using sys_timeBase as origin
-   NOTE: sys_timeBase*1000 + curtime -> ms since the Epoch
-     0x7fffffff ms - ~24 days
-   although timeval:tv_usec is an int, I'm not sure whether it is actually used as an unsigned int
-     (which would affect the wrap period) */
-int curtime;
-int Sys_Milliseconds (void)
+int64_t Sys_Nanoseconds (void)
 {
-	struct timeval tp;
+	static int64_t	timeBase = -1;
+	struct timespec	ts;
+	int64_t			now;
 
-	gettimeofday(&tp, NULL);
+#ifdef __APPLE__
+	clock_gettime(CLOCK_UPTIME_RAW, &ts);
+#else
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+#endif
+	now = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
 
-	if (!sys_timeBase)
+	if (timeBase < 0)
 	{
-		sys_timeBase = tp.tv_sec;
-		return tp.tv_usec/1000;
+		timeBase = now - now % 1000000000;
 	}
 
-	curtime = (tp.tv_sec - sys_timeBase)*1000 + tp.tv_usec/1000;
-
-	return curtime;
+	return now - timeBase;
 }
 
 /*
@@ -526,25 +531,19 @@ Sys_Microseconds
 */
 int64_t Sys_Microseconds (void)
 {
-	struct timespec ts;
-
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-
-	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+	return Sys_Nanoseconds() / 1000;
 }
 
 /*
 ================
-Sys_Nanoseconds
+Sys_Milliseconds
+
+Wraps after about 24 days, as it always has.
 ================
 */
-int64_t Sys_Nanoseconds (void)
+int Sys_Milliseconds (void)
 {
-	struct timespec ts;
-
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-
-	return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+	return (int)(Sys_Nanoseconds() / 1000000);
 }
 
 /*

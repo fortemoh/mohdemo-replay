@@ -2409,6 +2409,30 @@ void Player::InitHealth(void)
     CancelEventsOfType(EV_Player_Dead);
 }
 
+// Custom player models that failed to load on the current map. A skin the
+// server does not have was tried, and logged as a bad model name, at every
+// respawn before InitModel fell back to the team's default model.
+static Container<str> missingPlayerModels;
+static str            missingPlayerModelsMap;
+
+static void SetCustomPlayerModel(Player *player, const str& path)
+{
+    if (missingPlayerModelsMap != level.mapname) {
+        missingPlayerModels.ClearObjectList();
+        missingPlayerModelsMap = level.mapname;
+    }
+
+    if (missingPlayerModels.ObjectInList(path)) {
+        // leave the model cleared so InitModel uses the default
+        return;
+    }
+
+    player->setModel(path);
+    if (!player->edict->tiki) {
+        missingPlayerModels.AddObject(path);
+    }
+}
+
 void Player::InitModel(void)
 {
     static const char *defaultAxisModel   = "models/player/german_wehrmacht_soldier.tik";
@@ -2440,7 +2464,7 @@ void Player::InitModel(void)
                    && Q_stricmpn(client->pers.dm_playergermanmodel, "sc", 2)) {
             setModel(defaultAxisModel);
         } else {
-            setModel("models/player/" + str(client->pers.dm_playergermanmodel) + ".tik");
+            SetCustomPlayerModel(this, "models/player/" + str(client->pers.dm_playergermanmodel) + ".tik");
         }
     } else {
         size_t len = strlen(client->pers.dm_playermodel);
@@ -2453,7 +2477,7 @@ void Player::InitModel(void)
                    && Q_stricmpn(client->pers.dm_playermodel, "allied", 6)) {
             setModel(defaultAlliedModel);
         } else {
-            setModel("models/player/" + str(client->pers.dm_playermodel) + ".tik");
+            SetCustomPlayerModel(this, "models/player/" + str(client->pers.dm_playermodel) + ".tik");
         }
     }
 

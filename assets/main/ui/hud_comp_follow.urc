@@ -1,6 +1,6 @@
 // The Competitive HUD (cg_hudstyle 1 and 2): the player followed while
-// spectating, CS2's way: a plate at the bottom's middle, SPECTATING over
-// their name (HudFollow: over CS2's strip, or the HUD's margin)
+// spectating, CS2's way: a plate at the bottom's middle with their name
+// (HudFollow: over CS2's strip, or the HUD's margin)
 menu "hud_comp_follow" 800 240 NONE 0
 virtualres 1 1920 1080
 drawcache 1

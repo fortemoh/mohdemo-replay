@@ -55,6 +55,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define VK_PRESENT_FENCES			16		// presents whose fence may be pending (swapchain_maintenance1)
 #define VK_MAX_RETIRED_SWAPCHAINS	8		// replaced swapchains whose presents may be pending
 #define VK_MAX_TEXTURES				4096	// live texture handles
+#define VK_TEXTURE_ARRAY_SETS		4		// bindless textures: sets of every texture slot a frame slot has (see vk_image.c)
 #define VK_MAX_DEPTH_READS			256		// vk_queue_depth_reads per frame
 #define VK_DEPTH_READ_FRAMES		300		// the depth image stays readable this many frames after the last read
 
@@ -312,6 +313,8 @@ typedef struct {
 	float	invExtent[2];	// 1 / the swapchain's size
 	float	black;			// r_hdrBlack; 0 with an SDR swapchain but for the HDR look's calibration
 	float	sdrBox;			// the HDR look's peak calibration screen: the box, linear (VK_OutputSdrBox)
+	float	contrast;		// r_contrast, 1 none (Omaha's)
+	float	vibrance;		// r_vibrance, 1 none
 } vkOutputPush_t;
 
 typedef struct {
@@ -331,7 +334,14 @@ typedef struct {
 	VkDeviceSize	stagingOffset;
 	vkBuffer_t		dlightBuffer;	// lights of vk_add_dlights (vkDlightGPU_t), set 2 of the shaders
 	VkDescriptorSet	dlightSet;		// set 2: the dlight buffer, the skin data and this frame's skin data
-	VkDescriptorSet	textureArraySet;	// bindless textures: set 0, every texture slot as of this frame's begin
+	// bindless textures: set 0, every texture slot (vk_image.c). The draws
+	// bind textureArraySet, one of textureArraySets: a slot that changes
+	// after a draw bound it goes in the next one, a copy, for the draws after
+	VkDescriptorSet	textureArraySets[VK_TEXTURE_ARRAY_SETS];
+	VkDescriptorSet	textureArraySet;
+	int				textureArrayIndex;	// of textureArraySet in textureArraySets
+	int				textureArrayCount;	// of textureArraySets in the command buffer being recorded, textureArraySet's included
+	qboolean		textureArrayBound;	// textureArraySet bound in it
 	int				numDlights;
 	// the lists of more than 32 lights, at their place in the dlight buffer
 	// (which is write-combined memory): the draws whose lights span more
@@ -370,6 +380,7 @@ typedef struct {
 	uint64_t	skinDraws;			// skinned draws (drawGeometry_t::isSkinned)
 	uint64_t	pipelineBinds;
 	uint64_t	descriptorBinds;	// descriptor sets bound
+	uint64_t	textureArrayCopies;	// bindless textures: sets copied for a slot that changed after a draw bound the set
 	uint64_t	vertexBinds;		// vkCmdBindVertexBuffers calls (the streams, the normals)
 	uint64_t	indexBinds;			// vkCmdBindIndexBuffer calls
 	uint64_t	pushConstants;		// vkCmdPushConstants calls
@@ -591,12 +602,7 @@ typedef struct {
 	VkFramebuffer		framebuffer;
 	VkRenderPass		depthResolvePass;	// multisampling: resolves the depth/stencil buffer for readbacks
 	VkFramebuffer		depthResolveFramebuffer;
-	// the frame blurred (vk_frame_blur): the color target halved down its mip
-	// levels; made at its first use, its contents only the blur's
-	VkImage				blurImage;
-	VkDeviceMemory		blurMemory;
-	VkImageView			blurView;
-	uint64_t			blurSerial;		// the frame it was last blurred in
+	uint64_t			blurSerial;		// the frame last blurred in (vk_frame_blur)
 
 	// shared objects
 	VkDescriptorSetLayout textureSetLayout;
@@ -732,10 +738,15 @@ when the surface offers it and the window is in HDR (SDL)
 
 typedef struct {
 	qboolean		enabled;		// r_hdrOutput latched on, and the instance has VK_EXT_swapchain_colorspace
-	// r_hdrOutput 2 (the HDR look in SDR): the output pass exists for the
-	// calibration screens only; the other frames go to the swapchain as
-	// without HDR output
+	// an SDR swapchain's output pass (Omaha's: always, it was the HDR look's
+	// only), for the HDR look's calibration screens and the grade (r_contrast,
+	// r_vibrance); the other frames go to the swapchain as without HDR output
 	qboolean		sdrPass;
+	qboolean		hdrLook;		// r_hdrOutput 2 (the HDR look in SDR), latched
+	// the grade of the frame being drawn (VK_OutputBeginFrame), and whether an
+	// SDR frame goes through the pass for it
+	float			contrast, vibrance;
+	qboolean		gradeFrame;
 	qboolean		metadata;		// VK_EXT_hdr_metadata is enabled
 	vkHdrMode_t		mode;			// the swapchain's
 	qboolean		windowHdr;		// SDL's HDR state of the window when the swapchain was chosen
@@ -772,6 +783,8 @@ qboolean	VK_OutputDrawsFrame( const vkFrame_t *frame );
 qboolean	VK_OutputChooseFormat( const VkSurfaceFormatKHR *formats, uint32_t count, VkSurfaceFormatKHR *chosen );
 void		VK_OutputSwapchainCreated( void );
 void		VK_OutputUpdate( void );
+void		VK_OutputBeginFrame( void );
+void		VK_OutputFillTarget( vkOutputPush_t *push );
 void		VK_OutputFillPush( vkOutputPush_t *push );
 void		VK_OutputExpansion( float *params );
 float		VK_OutputSdrBox( void );
@@ -823,6 +836,11 @@ void		VK_UploadTextureGPU( image_t *image, int x, int y, int width, int height, 
 void		VK_RadarInit( void );
 void		VK_RadarShutdown( void );
 void		VK_RadarShutdownObjects( void );
+
+// vk_blur.c
+void		VK_FrameBlurInit( void );
+void		VK_FrameBlurShutdown( void );	// the device idle
+void		VK_FrameBlurRecord( VkCommandBuffer cmd, VkImage target, const vkTexture_t *dst );
 
 // vk_framelog.c
 extern qboolean	vk_frameLog;	// r_vkFrameLog: the frame log records
@@ -952,6 +970,12 @@ extern const uint32_t	vk_spirv_radar_comp[];
 extern const size_t		vk_spirv_radar_comp_size;
 extern const uint32_t	vk_spirv_radar_changing_comp[];
 extern const size_t		vk_spirv_radar_changing_comp_size;
+
+// vk_shaders_blur.c
+extern const uint32_t	vk_spirv_frame_blur_comp[];
+extern const size_t		vk_spirv_frame_blur_comp_size;
+extern const uint32_t	vk_spirv_frame_blur_vertical_comp[];
+extern const size_t		vk_spirv_frame_blur_vertical_comp_size;
 
 // vk_shaders_temporal.c
 extern const uint32_t	vk_spirv_generic_temporal_vert[];
@@ -1084,7 +1108,7 @@ typedef struct {
 	qboolean		enabled;
 	qboolean		active;			// a scene is being drawn (between vk_begin_scene and vk_end_scene)
 	qboolean		clearPending;	// the scene's first render pass clears its images (renderPassClear)
-	uint64_t		sceneSerial;	// the frame of the last scene, 0 for none
+	uint64_t		sceneSerial;	// the frame of the last scene (or of one left out: nothing read it), 0 for none
 	uint64_t		historySerial;	// the frame whose scene the other images hold, 0 for none
 	int				current;		// the images of VK_TEMPORAL_HISTORY this frame's scene writes
 
@@ -1289,6 +1313,7 @@ void		VK_TemporalCreateTargets( void );
 void		VK_TemporalDestroyTargets( void );
 void		VK_TemporalDepthChanged( void );
 void		VK_TemporalUpdateFeatures( void );
+qboolean	VK_TemporalSceneWanted( void );
 void		VK_TemporalInitPipelines( void );
 void		VK_TemporalShutdownPipelines( void );
 void		VK_TemporalBeginFrame( vkFrame_t *frame, VkBuffer skinData );

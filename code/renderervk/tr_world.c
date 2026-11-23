@@ -1129,17 +1129,66 @@ qboolean R_inPVS( const vec3_t p1, const vec3_t p2 ) {
 
 /*
 ===============
+R_FatPVSClusters
+
+Added: the clusters of the leaves in the box (see R_MarkLeaves), up to
+MAX_FATPVS_CLUSTERS of them, in no order
+===============
+*/
+#define MAX_FATPVS_CLUSTERS 32
+
+static int R_FatPVSClusters( mnode_t *node, const vec3_t mins, const vec3_t maxs, int *list, int count ) {
+	int i;
+
+	while ( node->contents == -1 ) {
+		const int side = BoxOnPlaneSide( mins, maxs, node->plane );
+
+		if ( side == 1 ) {
+			node = node->children[0];
+		} else if ( side == 2 ) {
+			node = node->children[1];
+		} else {
+			count = R_FatPVSClusters( node->children[0], mins, maxs, list, count );
+			node = node->children[1];
+		}
+	}
+
+	if ( node->cluster < 0 || count == MAX_FATPVS_CLUSTERS ) {
+		return count;
+	}
+	for ( i = 0; i < count && list[i] != node->cluster; i++ ) {
+	}
+	if ( i == count ) {
+		list[count++] = node->cluster;
+	}
+	return count;
+}
+
+/*
+===============
 R_MarkLeaves
 
 Lists the leaves in the PVS for the current cluster (R_GroupVisibleLeaves).
 GL1 marked them and their ancestors for its BSP walk in a pass over every
 node, 0.23 ms in obj_team4 whenever the view's cluster changes (2 % of the
 frames of a match there)
+
+Changed: the PVS is the union of those of the clusters within r_fatpvs units
+of the view (a "fat" PVS). A map's PVS can leave out what a view right by
+a cluster's edge sees: obj_team4, leaning left by the door to the alley with
+the door open, a crack by the frame shows the alley's far end, which the
+view's cluster's PVS doesn't hold, so its wall went undrawn and the trees
+behind it showed through; a cluster 32 units off holds it
 ===============
 */
 static void R_MarkLeaves (void) {
 	mnode_t	*leaf;
 	int		cluster;
+	static int	fat[MAX_FATPVS_CLUSTERS], lastFat[MAX_FATPVS_CLUSTERS];
+	static int	numFat, numLastFat;
+	static byte	fatVis[8192];
+	qboolean	fatChanged;
+	int		i, j;
 
 	// lockpvs lets designers walk around to determine the
 	// extent of the current pvs
@@ -1151,14 +1200,37 @@ static void R_MarkLeaves (void) {
 	leaf = R_PointInLeaf( tr.viewParms.pvsOrigin );
 	cluster = leaf->cluster;
 
+	// Added: the clusters within r_fatpvs units, sorted to compare with the last ones
+	numFat = 0;
+	if ( r_fatpvs->value > 0 && cluster >= 0 && tr.world->vis && tr.world->clusterBytes <= (int)sizeof( fatVis ) ) {
+		vec3_t mins, maxs;
+
+		for ( i = 0; i < 3; i++ ) {
+			mins[i] = tr.viewParms.pvsOrigin[i] - r_fatpvs->value;
+			maxs[i] = tr.viewParms.pvsOrigin[i] + r_fatpvs->value;
+		}
+		numFat = R_FatPVSClusters( tr.world->nodes, mins, maxs, fat, 0 );
+		for ( i = 1; i < numFat; i++ ) {
+			const int c = fat[i];
+
+			for ( j = i; j > 0 && fat[j - 1] > c; j-- ) {
+				fat[j] = fat[j - 1];
+			}
+			fat[j] = c;
+		}
+	}
+	fatChanged = numFat != numLastFat || memcmp( fat, lastFat, numFat * sizeof( fat[0] ) );
+
 	// if the cluster is the same and the area visibility matrix
 	// hasn't changed, we don't need to mark everything again
 
-	// if r_showcluster was just turned on, remark everything 
-	if ( tr.viewCluster == cluster && !tr.refdef.areamaskModified 
-		&& !r_showcluster->modified ) {
+	// if r_showcluster was just turned on, remark everything
+	if ( tr.viewCluster == cluster && !tr.refdef.areamaskModified
+		&& !r_showcluster->modified && !fatChanged ) {
 		return;
 	}
+	numLastFat = numFat;
+	memcpy( lastFat, fat, numFat * sizeof( fat[0] ) );
 
 	if ( r_showcluster->modified || r_showcluster->integer ) {
 		r_showcluster->modified = qfalse;
@@ -1172,6 +1244,20 @@ static void R_MarkLeaves (void) {
 
 	if ( r_novis->integer || tr.viewCluster == -1 ) {
 		R_GroupVisibleLeaves( NULL );
+		return;
+	}
+
+	// Added: the union of the fat PVS's clusters' PVS
+	if ( numFat > 1 ) {
+		memcpy( fatVis, R_ClusterPVS( fat[0] ), tr.world->clusterBytes );
+		for ( i = 1; i < numFat; i++ ) {
+			const byte *vis = R_ClusterPVS( fat[i] );
+
+			for ( j = 0; j < tr.world->clusterBytes; j++ ) {
+				fatVis[j] |= vis[j];
+			}
+		}
+		R_GroupVisibleLeaves( fatVis );
 		return;
 	}
 

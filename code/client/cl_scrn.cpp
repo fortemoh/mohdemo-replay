@@ -545,25 +545,6 @@ void SCR_UpdateScreen( void ) {
 	CL_StartHunkUsers(qfalse);
 	SCR_SimpleUpdateScreen();
 
-	// set the fps value
-	if( fps->integer && clc.state == CA_ACTIVE ) {
-		static int belowlastplaytime = 0;
-		static qboolean belowframerate = qfalse;
-
-		if( currentfps > 19.8 ) {
-			belowframerate = qfalse;
-		} else if( !belowframerate ) {
-			if( currentfps < 18.0 ) {
-				belowlastplaytime = 10000;
-				belowframerate = qtrue;
-			}
-		}
-
-		if( belowframerate && cls.realtime > belowlastplaytime ) {
-			belowlastplaytime = cls.realtime + 4000;
-		}
-	}
-
 	screen_recursive = qfalse;
 }
 

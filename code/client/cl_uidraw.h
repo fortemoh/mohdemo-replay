@@ -44,14 +44,18 @@ static const rlColor_t RL_FAINT = {110 / 255.0f, 107 / 255.0f, 100 / 255.0f, 1};
 extern rlColor_t RL_BRASS, RL_BRASS_HOT;
 static const rlColor_t RL_INK   = {8 / 255.0f, 9 / 255.0f, 10 / 255.0f, 1}; // on brass
 
+// icon: the badge (the star or cross on its disc); mark: the star or cross
+// alone (the team page's medallions, where the badge's disc drawn faint in
+// the medallion's showed as a ring), each as wide as CS:GO's in its disc
+// (the star 0.95 of its viewBox, the cross's viewBox cropped to the cross)
 typedef struct {
     int         deep[3], base[3], mid[3], light[3], pale[3];
-    const char *name, *icon;
+    const char *name, *icon, *mark;
 } rlTeam_t;
 
 static const rlTeam_t rl_teams[2] = {
-    {{18, 30, 43}, {30, 50, 70}, {58, 94, 128}, {150, 192, 228}, {218, 233, 246}, "ALLIES", RL_OUTLINES "team/allies.svg"},
-    {{44, 18, 16}, {70, 32, 28}, {134, 62, 50}, {234, 162, 142}, {248, 218, 208}, "AXIS", RL_OUTLINES "team/axis.svg"  },
+    {{18, 30, 43}, {30, 50, 70}, {58, 94, 128}, {150, 192, 228}, {218, 233, 246}, "ALLIES", RL_OUTLINES "team/allies.svg", RL_OUTLINES "team/allies-mark.svg"},
+    {{44, 18, 16}, {70, 32, 28}, {134, 62, 50}, {234, 162, 142}, {248, 218, 208}, "AXIS", RL_OUTLINES "team/axis.svg", RL_OUTLINES "team/axis-mark.svg"},
 };
 
 // a font the HUD's small text can take (cg_hud_font, Options' HUD Font): the
@@ -98,6 +102,8 @@ void RL_Shape(int x, int y, int w, int h, const char *text, rlColor_t c, float s
 // a box rounded r; its frame, width thick inside its edge
 void RL_Round(const rlView_t& v, float x, float y, float w, float h, float r, rlColor_t c);
 void RL_RoundFrame(const rlView_t& v, float x, float y, float w, float h, float r, float width, rlColor_t c);
+// a small triangle, pointing down (or up), in w x h
+void RL_Arrow(const rlView_t& v, float x, float y, float w, float h, bool up, rlColor_t c);
 // a horizontal gradient from a to b
 void RL_HGradient(const rlView_t& v, float x, float y, float w, float h, rlColor_t a, rlColor_t b);
 bool RL_Outline(const rlView_t& v, const char *name, float cx, float cy, float bw, float bh, rlColor_t c, bool mirror = false);

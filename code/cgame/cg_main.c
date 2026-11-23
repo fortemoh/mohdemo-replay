@@ -306,6 +306,8 @@ void CG_RegisterCvars(void)
     CG_RP_RegisterCvars();
     // Added: the hitmarker's (cg_hitmarker, cg_hitmarker_sound)
     CG_Hitmarker_RegisterCvars();
+    // Added: a followed player watched through their eyes (cg_spectatefirstperson)
+    CG_FollowEyes_Init();
 }
 /*
 ===============
@@ -1243,6 +1245,8 @@ clientGameExport_t *GetCGameAPI(void)
     cge.CG_SaveStateToBuffer        = CG_SaveStateToBuffer;
     cge.CG_LoadStateToBuffer        = CG_LoadStateToBuffer;
     cge.CG_CleanUpTempModels        = CG_CleanUpTempModels;
+    // Added in Reloaded
+    cge.CG_FollowEyesPlayerState = CG_FollowEyes_PlayerState;
 
     // FIXME
     //cge.profStruct = NULL;

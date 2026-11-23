@@ -618,6 +618,13 @@ functions exported to the main executable
 
         qboolean (*CG_Command_ProcessFile)(const char *name, qboolean quiet, dtiki_t *curTiki);
 
+        //
+        // Added in Reloaded
+        //
+        // the playerstate the view is drawn from while a followed player is watched through their eyes
+        // (cg_followeyes.c), NULL otherwise
+        const playerState_t *(*CG_FollowEyesPlayerState)(void);
+
     } clientGameExport_t;
 
 #ifdef CGAME_DLL

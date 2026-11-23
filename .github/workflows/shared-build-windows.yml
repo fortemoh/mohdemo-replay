@@ -12,6 +12,11 @@ on:
       environment:
         required: true
         type: string
+      # a version tag (v1.0.1) for a release build, cmake/version.cmake's PRODUCT_RELEASE_TAG; empty for the others
+      release-tag:
+        required: false
+        type: string
+        default: ''
         
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
@@ -181,7 +186,8 @@ jobs:
         -DFLEX_EXECUTABLE='${{github.workspace}}/thirdparties/winflexbison-install/win_flex.exe' `
         -DBUILD_RENDERER_VULKAN=ON `
         -DVulkanHeaders_DIR='${{github.workspace}}/thirdparties/Vulkan-Headers/install/share/cmake/VulkanHeaders' `
-        -DPRODUCT_VERSION_STAGE='${{ env.RELEASE_STAGE }}'".Replace("`r", "").Replace("`n", "") >> $env:GITHUB_ENV
+        -DPRODUCT_VERSION_STAGE='${{ env.RELEASE_STAGE }}' `
+        ${{ inputs.release-tag != '' && format('-DPRODUCT_RELEASE_TAG={0}', inputs.release-tag) || '' }}".Replace("`r", "").Replace("`n", "") >> $env:GITHUB_ENV
 
     - name: Configure CMake
       working-directory: ${{github.workspace}}

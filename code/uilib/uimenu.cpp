@@ -671,65 +671,6 @@ void MenuManager::ListMenus(void)
     }
 }
 
-str MenuManager::DescribeState(void)
-{
-    const StackNode<Menu *> *n;
-    str                      s = "shown";
-    int                      i, hud = 0;
-
-    for (n = m_showmenustack.Top(); n; n = n->next) {
-        s += " ";
-        s += n->data->m_name;
-    }
-    if (!m_showmenustack.Top()) {
-        s += " none";
-    }
-    s += ", pushed";
-    for (n = m_menustack.Top(); n; n = n->next) {
-        s += " ";
-        s += n->data->m_name;
-    }
-    if (!m_menustack.Top()) {
-        s += " none";
-    }
-    s += ", visible";
-    for (i = 1; i <= m_menulist.NumObjects(); i++) {
-        Menu *menu = m_menulist.ObjectAt(i);
-
-        if (!menu->isVisible()) {
-            continue;
-        }
-        // (the HUD's menus counted, not named)
-        if (!str::icmpn(menu->m_name.c_str(), "hud_", 4)) {
-            hud++;
-            continue;
-        }
-        s += " ";
-        s += menu->m_name;
-    }
-    if (hud) {
-        s += " +";
-        s += hud;
-        s += " of the HUD";
-    }
-    s += m_lock ? ", locked" : ", not locked";
-    return s;
-}
-
-Menu *MenuManager::MenuOf(UIWidget *w)
-{
-    int i;
-
-    for (; w; w = w->getParent()) {
-        for (i = 1; i <= m_menulist.NumObjects(); i++) {
-            if (m_menulist.ObjectAt(i)->GetContainerWidget() == w) {
-                return m_menulist.ObjectAt(i);
-            }
-        }
-    }
-    return NULL;
-}
-
 void MenuManager::Lock(Event *ev)
 {
     m_lock = true;

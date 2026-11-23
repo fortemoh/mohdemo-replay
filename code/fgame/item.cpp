@@ -532,6 +532,12 @@ void Item::ItemTouch(Event *ev)
 
     other = ev->GetEntity(1);
 
+    // Trigger::TriggerStuff posts this event, so the player who touched
+    // the item may have left the server before it runs
+    if (!other) {
+        return;
+    }
+
     e = new Event(EV_Item_Pickup);
     e->AddEntity(other);
     ProcessEvent(e);

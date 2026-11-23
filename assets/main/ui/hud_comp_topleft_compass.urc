@@ -22,6 +22,7 @@ borderstyle NONE
 enabledcvar ui_hud_compass_on
 shape circle 0.047 0.055 0.071 0.45
 shape ring 2 $ui_hud_acc_radar 0.6
+shadow
 }
 
 resource
@@ -33,6 +34,7 @@ bgcolor 0 0 0 0
 borderstyle NONE
 enabledcvar ui_hud_compass_on
 shape circle 1 1 1 0.9
+shadow
 }
 
 resource

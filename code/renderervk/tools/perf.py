@@ -10,8 +10,8 @@ options:
   --renderers A,B   cl_renderer values (renderer_<name>.so of MOH_BINDIR),
                     default vulkan; a copy of an older renderer_vulkan.so
                     under another name compares builds (base,vulkan)
-  --binaries A,B    engine executables of MOH_BINDIR (default openmohaa); a
-                    copy of an older openmohaa under another name compares
+  --binaries A,B    engine executables of MOH_BINDIR (default mohreloaded); a
+                    copy of an older mohreloaded under another name compares
                     engine builds: each runs every renderer, interleaved
                     like them, named <renderer>-<binary> in the output
   --caps N,...      com_maxfps values: every view is measured at each
@@ -543,7 +543,7 @@ def main():
     ap.add_argument("--sp", action="store_true")
     ap.add_argument("--frames", type=int, default=1000)
     ap.add_argument("--renderers", default="vulkan")
-    ap.add_argument("--binaries", default="openmohaa")
+    ap.add_argument("--binaries", default="mohreloaded")
     ap.add_argument("--caps", default="")
     ap.add_argument("--seconds", type=float)
     ap.add_argument("--preload", default="")

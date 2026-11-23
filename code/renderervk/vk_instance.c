@@ -279,7 +279,7 @@ static void VK_CreateInstance( void ) {
 	// HDR output (r_hdrOutput, vk_output.c): the HDR10 and scRGB color spaces
 	// of the surface formats
 	vko.enabled = qfalse;
-	vko.sdrPass = VK_OutputSdrPassWanted();
+	vko.hdrLook = VK_OutputSdrPassWanted();
 	if ( VK_OutputWanted() ) {
 		if ( VK_HasExtension( available, numAvailable, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME ) ) {
 			VK_AddExtension( extensions, &numExtensions, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME );
@@ -288,6 +288,10 @@ static void VK_CreateInstance( void ) {
 			ri.Printf( PRINT_ALL, S_COLOR_YELLOW "HDR output: off, the Vulkan loader has no %s\n", VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME );
 		}
 	}
+	// an SDR swapchain always has the output pass (Omaha's 843a74c0: it was
+	// r_hdrOutput 2's only), so r_contrast and r_vibrance apply at once
+	// (vk_output.c)
+	vko.sdrPass = !vko.enabled;
 
 	// validation layer
 	numLayers = 0;
@@ -1373,11 +1377,16 @@ void VK_CreateSwapchain( void ) {
 		if ( !( caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT ) ) {
 			ri.Error( ERR_FATAL, "Vulkan: swapchain images can't be transfer destinations" );
 		}
-		// drawn to directly and read back when possible, blitted to otherwise
-		vk.swapchainUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		// drawn to directly and read back when possible, blitted to otherwise;
+		// color attachments without TRANSFER_SRC too, for the output pass
+		// every SDR swapchain has (vko.sdrPass; Omaha's fea286f5): every
+		// surface supports it (VkSurfaceCapabilitiesKHR), so only a broken one
+		// lacks it
+		vk.swapchainUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT
+			| ( caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT );
 		if ( ( caps.supportedUsageFlags & ( VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT ) )
 			== ( VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT ) ) {
-			vk.swapchainUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+			vk.swapchainUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 		}
 	}
 

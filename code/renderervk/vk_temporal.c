@@ -220,7 +220,7 @@ static const int vk_dofSamples[3] = { 16, 32, 48 };
 
 void VK_TemporalRegisterCvars( void ) {
 	r_temporal = ri.Cvar_Get( "r_temporal", "0", CVAR_ARCHIVE | CVAR_LATCH );
-	ri.Cvar_SetDescription( r_temporal, "1: the 3D view is drawn with motion vectors, normals, a depth pyramid and the last frame's color and depth (for temporal anti-aliasing and ambient occlusion; see the renderer's README)" );
+	ri.Cvar_SetDescription( r_temporal, "1: the 3D view is drawn with motion vectors, normals, a depth pyramid and the last frame's color and depth (for r_taa, r_ao, r_motionBlur, r_dof and HDR output's expansion; see the renderer's README), while one of them is on (else as without it, at its cost). Enhanced Rendering in Options; the client turns it on with r_taa, r_ao, r_motionBlur or r_dof and those off with it" );
 	r_temporalJitter = ri.Cvar_Get( "r_temporalJitter", "0", 0 );
 	ri.Cvar_SetDescription( r_temporalJitter, "with r_temporal 1: the 3D view's projection moves by a sub-pixel offset every frame (Halton 2, 3)" );
 	r_temporalJitterSamples = ri.Cvar_Get( "r_temporalJitterSamples", "8", 0 );
@@ -247,7 +247,7 @@ void VK_TemporalRegisterCvars( void ) {
 	ri.Cvar_SetDescription( r_taaLodBias, "with r_taa 1: the textures' mip level bias, negative for sharper textures (the anti-aliasing smooths their shimmer); 0 as without it" );
 	ri.Cvar_CheckRange( r_taaLodBias, -2.0f, 0.0f, qfalse );
 	r_saturation = ri.Cvar_Get( "r_saturation", "1.1", CVAR_ARCHIVE );
-	ri.Cvar_SetDescription( r_saturation, "with r_temporal 1: the 3D view's color saturation (not the HUD's), 1 unchanged; in SDR and with HDR output" );
+	ri.Cvar_SetDescription( r_saturation, "with r_temporal 1 and an effect or HDR on: the 3D view's color saturation (not the HUD's), 1 unchanged; in SDR and with HDR output" );
 	ri.Cvar_CheckRange( r_saturation, 0.0f, 2.0f, qfalse );
 	r_ao = ri.Cvar_Get( "r_ao", "0", CVAR_ARCHIVE );
 	ri.Cvar_SetDescription( r_ao, "with r_temporal 1: ambient occlusion (ground truth ambient occlusion, GTAO), the contact shadows of corners, creases and what stands on a floor" );
@@ -1863,6 +1863,25 @@ static int VK_TemporalReadersFor( int showMode ) {
 // for this scene (r_temporalShow latched)
 static int VK_TemporalReaders( void ) {
 	return VK_TemporalReadersFor( vkt.showMode );
+}
+
+/*
+===============
+VK_TemporalSceneWanted
+
+Whether this frame's 3D views are drawn as the scene: something reads it (an
+effect, r_temporalShow, the jitter's tests) or the composite expands it (HDR
+output on an HDR swapchain, the HDR look). Else they are drawn as without the
+path, at its cost:
+the scene's RGBA16F color, motion vectors, normals and the composite cost
+more than every effect but one alone (0.64 ms a frame on a Radeon 780M at
+1920x1080). r_saturation alone doesn't keep it, or its default would make
+the path a cost of its own
+===============
+*/
+qboolean VK_TemporalSceneWanted( void ) {
+	return r_taa->integer || r_ao->integer || r_motionBlur->integer || r_dof->integer || r_temporalShow->integer
+		|| r_temporalJitter->integer || ( vko.enabled && vko.mode != VK_HDR_SDR ) || vko.hdrLook;
 }
 
 /*

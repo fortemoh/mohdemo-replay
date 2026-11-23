@@ -5291,6 +5291,29 @@ extern "C" {
     void CG_AnimationDebugMessage(int number, const char *fmt, ...);
 }
 
+// Added: set by CG_ProcessEntityLastingCommands
+static qboolean cg_lastingCommandsOnly;
+
+// Added: a client command whose effect is over at once: a sound, a spawned effect, a
+// flash of light, a view kick
+static qboolean CG_IsOneTimeCommand(const char *name)
+{
+    static const char *const oneTime[] = {
+        "sound",       "footstep",        "landing",      "bodyfall",   "tagspawn",     "tagspawnlinked",
+        "originspawn", "originbeamspawn", "tagbeamspawn", "tracespawn", "commanddelay", "origindlight",
+        "tagdlight",   "dlight",          "blockdlight",  "viewkick",   "sfx",          "delayedsfx",
+        "playforcefeedback"
+    };
+    size_t i;
+
+    for (i = 0; i < ARRAY_LEN(oneTime); i++) {
+        if (!Q_stricmp(name, oneTime[i])) {
+            return qtrue;
+        }
+    }
+    return qfalse;
+}
+
 //=================
 // CG_ProcessEntityCommands
 //=================
@@ -5313,6 +5336,10 @@ qboolean CG_ProcessEntityCommands(int frame, int anim, int entnum, refEntity_t *
 
             num_args = tikicmds.cmds[i].num_args;
 
+            if (num_args > 0 && cg_lastingCommandsOnly && CG_IsOneTimeCommand(tikicmds.cmds[i].args[0])) {
+                continue;
+            }
+
             if (num_args > 0) {
                 // Create the event and Process it.
                 ev = new Event(tikicmds.cmds[i].args[0]);
@@ -5332,6 +5359,23 @@ qboolean CG_ProcessEntityCommands(int frame, int anim, int entnum, refEntity_t *
     }
 
     return qtrue;
+}
+
+/*
+===============
+CG_ProcessEntityLastingCommands
+
+Added: CG_ProcessEntityCommands without the one-time commands
+===============
+*/
+qboolean CG_ProcessEntityLastingCommands(int frame, int anim, int entnum, refEntity_t *ent, centity_t *cent)
+{
+    qboolean processed;
+
+    cg_lastingCommandsOnly = qtrue;
+    processed              = CG_ProcessEntityCommands(frame, anim, entnum, ent, cent);
+    cg_lastingCommandsOnly = qfalse;
+    return processed;
 }
 
 //=================

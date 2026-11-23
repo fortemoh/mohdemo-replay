@@ -1135,6 +1135,11 @@ void CL_KeyEvent(int key, qboolean down, unsigned time)
         }
     }
 
+    // Added: a right click while the scoreboard shows: its cursor (cl_ui.cpp)
+    if (UI_ScoreboardKey(key, down, time)) {
+        return;
+    }
+
     if (key >= K_MOUSE1 && key <= K_MOUSE5) {
         if (down) {
             cl.mouseButtons |= (1 << (key - K_MOUSE1));

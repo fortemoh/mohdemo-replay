@@ -1857,7 +1857,10 @@ void TriggerChangeLevel::ChangeLevel(Event *ev)
 
     // if noexit, do a ton of damage to other
     if (DM_FLAG(DF_SAME_LEVEL) && other != world) {
-        other->Damage(this, other, 10 * other->max_health, other->origin, vec_zero, vec_zero, 1000, 0, MOD_CRUSH);
+        // This event is posted, so the activator may have left the server
+        if (other) {
+            other->Damage(this, other, 10 * other->max_health, other->origin, vec_zero, vec_zero, 1000, 0, MOD_CRUSH);
+        }
         return;
     }
 
@@ -2054,6 +2057,11 @@ void TriggerHurt::Hurt(Event *ev)
     Entity *other;
 
     other = ev->GetEntity(1);
+
+    // This event is posted, so the activator may have left the server
+    if (!other) {
+        return;
+    }
 
     if ((damage != 0) && !other->deadflag && !(other->flags & FL_GODMODE)) {
         other->Damage(
@@ -2742,7 +2750,7 @@ void TriggerReverb::ChangeReverb(Event *ev)
     Entity *other;
 
     other = ev->GetEntity(1);
-    if (other->isClient()) {
+    if (other && other->isClient()) {
         Player *client;
 
         client = (Player *)other;
@@ -2756,7 +2764,7 @@ void TriggerReverb::AltChangeReverb(Event *ev)
     Entity *other;
 
     other = ev->GetEntity(1);
-    if (other->isClient()) {
+    if (other && other->isClient()) {
         Player *client;
 
         client = (Player *)other;
@@ -2927,7 +2935,7 @@ void TriggerGivePowerup::GivePowerup(Event *ev)
     Sentient *sen;
     str       powerup_name_str;
 
-    if (!other->IsSubclassOfSentient()) {
+    if (!other || !other->IsSubclassOfSentient()) {
         // ignore non-sentient entities
         return;
     }
@@ -3040,6 +3048,11 @@ void TriggerNoDamage::TakeNoDamage(Event *ev)
 {
     Entity *ent = ev->GetEntity(1);
     Event  *newev;
+
+    // This event is posted, so the activator may have left the server
+    if (!ent) {
+        return;
+    }
 
     ent->ProcessEvent(EV_NoDamage);
     ent->CancelEventsOfType(EV_TakeDamage);

@@ -137,6 +137,11 @@ extern "C" {
         int      iNextLandTime;
         // Added in OPM
         qboolean animJump; // time jumped (a demo seek): no animation commands this frame
+
+        // Added: when the entity last came into the snapshots (CG_ResetEntity), the server
+        // time of the snapshot before, which didn't have it: an animation it was already
+        // in by then began out of our sight (CG_ModelAnim)
+        int unseenBefore;
     } centity_t;
 
     //======================================================================
@@ -610,6 +615,9 @@ extern "C" {
     void     CG_RestartCommandManager();
     void     CG_CleanUpTempModels();
     qboolean CG_ProcessEntityCommands(int frame, int anim, int entnum, refEntity_t *ent, centity_t *cent);
+    // Added: only the commands whose effect lasts (emitters, loop sounds...), not the
+    // one-time sounds and effects
+    qboolean CG_ProcessEntityLastingCommands(int frame, int anim, int entnum, refEntity_t *ent, centity_t *cent);
     void     CG_ClientCommands(refEntity_t *ent, centity_t *cent, int slot);
     float    RandomizeRange(float start, float end);
 
@@ -679,7 +687,7 @@ extern "C" {
     void     CG_CalcEntityLerpPositions(centity_t *cent);
 
     //
-    // cg_followeyes.c
+    // cg_demoeyes.c
     //
     // Added in OPM
     //  set on a snapshot made as if the player followed recorded it
@@ -741,6 +749,16 @@ extern "C" {
     void     CG_Hitmarker_RegisterSound(void);
     qboolean CG_Hitmarker_Hit(void);
     void     CG_Hitmarker_Draw(void);
+
+    //
+    // cg_followeyes.c (Added in Reloaded)
+    //
+    extern cvar_t *cg_spectatefirstperson;
+    void           CG_FollowEyes_Init(void);
+    void           CG_FollowEyes_Snapshot(snapshot_t *snap);
+    void           CG_FollowEyes_Shot(const vec3_t start, const vec3_t end);
+    void           CG_FollowEyes_Blast(const vec3_t origin);
+    const playerState_t *CG_FollowEyes_PlayerState(void);
 
     //
     // cg_draw.c

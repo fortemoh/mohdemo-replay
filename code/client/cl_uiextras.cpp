@@ -85,9 +85,9 @@ typedef struct {
     qhandle_t         shader;
     // what is drawn, worked out with the mask: its four draws (x, y, w, h,
     // s0, t0, s1, t1), the black round it, the lines (the scope's [1] the
-    // Kar98's) and their alpha
+    // Kar98's) and their alpha, the Kar98's post's point (x, y, w, h)
     float             quads[4][8], black[4][4], lines[2][24][4], lineAlpha;
-    int               numBlack, numLines[2];
+    int               numBlack, numLines[2], tip[4];
 } zoomMask_t;
 
 static zoomMask_t zm[ZM_NUM];
@@ -261,9 +261,12 @@ ZM_Layout
 What is drawn with a mask, worked out with it: the mask four times
 (mirrored right and down: an odd size's middle column and row once), the
 black round it, and the lines as boxes on whole pixels, the crosshair's
-way. The scope's a pixel at 1080 lines (85 % black): a cross, and the
+way. The scope's a pixel more than a 1080-line screen's share (85 %
+black; 2 pixels at 1080 and 1440 lines, 3 at 2160): a cross, and the
 Kar98's, the line open 0.047 of the height either side of the middle, a
-post twice as thick from below up to the middle. The binoculars' two
+post twice as thick from below narrowing to a point at the middle (the
+real scope's; 0.012 of the height long, three times its width at least,
+drawn smoothed as a shape). The binoculars' two
 (90 %): a line 0.5 of the unit across, ticks every 0.05 up from it (the
 middle and the ends twice as tall), and down from its middle a line 0.1
 long crossed every 0.025
@@ -288,12 +291,13 @@ static void ZM_Layout(zoomMask_t *m, int kind, int w, int h)
     ZM_Box(m->black, &m->numBlack, m->xl, h - m->yt, w - 2 * m->xl, m->yt);
 
     if (kind == ZM_SCOPE) {
-        const int   t  = Q_max(1, (int)floorf(h / 1080.0f + 0.5f));
+        const int   t  = Q_max(1, (int)floorf(h / 1080.0f + 0.5f)) + 1;
         const float R  = 0.46f * h;
         const int   x0 = (int)floorf(w * 0.5f - R), x1 = (int)ceilf(w * 0.5f + R);
         const int   y0 = (int)floorf(h * 0.5f - R), y1 = (int)ceilf(h * 0.5f + R);
         const int   lx = (w - t) / 2, ly = (h - t) / 2;
         const int   g = (w - 2 * (int)floorf(0.047f * h + 0.5f)) / 2;
+        const int   p = 2 * t, px = (w - p) / 2, tip = Q_max(3 * p, (int)floorf(0.012f * h + 0.5f));
 
         // (the vertical line in two, the crossing drawn once)
         ZM_Box(m->lines[0], &m->numLines[0], x0, ly, x1 - x0, t);
@@ -301,7 +305,11 @@ static void ZM_Layout(zoomMask_t *m, int kind, int w, int h)
         ZM_Box(m->lines[0], &m->numLines[0], lx, ly + t, t, y1 - ly - t);
         ZM_Box(m->lines[1], &m->numLines[1], x0, ly, g - x0, t);
         ZM_Box(m->lines[1], &m->numLines[1], w - g, ly, x1 - (w - g), t);
-        ZM_Box(m->lines[1], &m->numLines[1], (w - 2 * t) / 2, h / 2, 2 * t, y1 - h / 2);
+        ZM_Box(m->lines[1], &m->numLines[1], px, h / 2 + tip, p, y1 - h / 2 - tip);
+        m->tip[0] = px;
+        m->tip[1] = h / 2;
+        m->tip[2] = p;
+        m->tip[3] = tip;
         m->lineAlpha = 0.85f;
     } else {
         const float u  = ZM_BinocularUnit(w, h);
@@ -395,8 +403,8 @@ static void ZM_Finish(int kind)
 ================
 UI_DrawZoomOverlay
 
-The cgame's zoom overlay (its fade kept): the mask and its lines as
-ZM_Layout worked them out
+The cgame's zoom overlay (its fade kept): the mask, its lines and the
+Kar98's post's point as ZM_Layout worked them out
 ================
 */
 void UI_DrawZoomOverlay(int type, float alpha)
@@ -424,6 +432,9 @@ void UI_DrawZoomOverlay(int type, float alpha)
     re.DrawBoxes((const float (*)[4])m->black, m->numBlack, color);
     color[3] = m->lineAlpha * alpha;
     re.DrawBoxes((const float (*)[4])m->lines[kar], m->numLines[kar], color);
+    if (kar) {
+        RL_Shape(m->tip[0], m->tip[1], m->tip[2], m->tip[3], "poly 1 1 1 1 0.5 0 1 1 0 1", {0, 0, 0, color[3]}, 1.0f);
+    }
     re.SetColor(NULL);
 }
 

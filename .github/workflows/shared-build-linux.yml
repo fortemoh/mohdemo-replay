@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ''
+      # a version tag (v1.0.1) for a release build, cmake/version.cmake's PRODUCT_RELEASE_TAG; empty for the others
+      release-tag:
+        required: false
+        type: string
+        default: ''
         
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
@@ -171,7 +176,8 @@ jobs:
         -DBUILD_RENDERER_VULKAN=ON \
         -DVulkanHeaders_DIR='${{github.workspace}}/thirdparties/Vulkan-Headers/install/share/cmake/VulkanHeaders' \
         -DGIT_REVISION_BUILD_NUMBER=${{ github.run_number }} \
-        -DPRODUCT_VERSION_STAGE='${{ env.RELEASE_STAGE }}'" >> $GITHUB_ENV
+        -DPRODUCT_VERSION_STAGE='${{ env.RELEASE_STAGE }}' \
+        ${{ inputs.release-tag != '' && format('-DPRODUCT_RELEASE_TAG={0}', inputs.release-tag) || '' }}" >> $GITHUB_ENV
 
     - name: Configure CMake
       working-directory: ${{github.workspace}}

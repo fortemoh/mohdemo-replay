@@ -31,6 +31,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "cg_radar.h"
 #include "../corepp/tiki.h"
 
+// Added: the server time of the snapshot before the one being moved to, for
+// centity_t's unseenBefore
+static int cg_prevSnapTime;
+
 /*
 ==================
 CG_ResetEntity
@@ -99,6 +103,8 @@ static void CG_ResetEntity(centity_t *cent)
     cent->usageIndexLast      = 0;
     cent->bFootOnGround_Left  = qtrue;
     cent->bFootOnGround_Right = qtrue;
+    // Added
+    cent->unseenBefore = cg_prevSnapTime;
 
     if (cent->currentState.eType == ET_PLAYER) {
         CG_ResetPlayerEntity(cent);
@@ -148,6 +154,8 @@ void CG_SetInitialSnapshot(snapshot_t *snap)
     entityState_t *state;
 
     cg.snap = snap;
+    // Added: the animations under way in the first snapshot began before we came
+    cg_prevSnapTime = snap->serverTime;
 
     // sort out solid entities
     CG_BuildSolidList();
@@ -209,6 +217,8 @@ static void CG_TransitionSnapshot(qboolean differentServer)
     // move nextSnap to snap and do the transitions
     oldFrame = cg.snap;
     cg.snap  = cg.nextSnap;
+    // Added
+    cg_prevSnapTime = oldFrame->serverTime;
 
     // FAKK: Commented out to make our stuff work
     // cg_entities[ cg.snap->ps.clientNum ].interpolate = qfalse;
@@ -391,6 +401,12 @@ static snapshot_t *CG_ReadNextSnapshot(void)
             CG_DemoGuns(dest);
             CG_UnspeccedFromEyes(dest);
             CG_DemoShots(dest);
+            // Added in Reloaded
+            //  a followed player watched through their eyes on any server (cg_spectatefirstperson);
+            //  not in a demo, whose cameras are cl_demoBehind, cg_followcamera and cg_unspeccedcamera's
+            if (!cg.demoPlayback) {
+                CG_FollowEyes_Snapshot(dest);
+            }
             return dest;
         }
 

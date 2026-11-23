@@ -1,9 +1,8 @@
 COPYING.txt
 INSTALL.txt
-OMAHA-SOUND-LICENSES.txt
-SDL3.dll
-cgame.dll
-game.dll
+cgame.so
+game.so
+libSDL3.so.0
 licenses
 licenses/SDL3
 licenses/SDL3/LICENSE.txt
@@ -29,6 +28,8 @@ licenses/libvorbis
 licenses/libvorbis/COPYING
 licenses/mohlauncher
 licenses/mohlauncher/COPYING
+licenses/omaha-sound
+licenses/omaha-sound/OMAHA-SOUND-LICENSES.txt
 licenses/opus
 licenses/opus/COPYING
 licenses/opusfile
@@ -48,6 +49,6 @@ main/sound/prom/hrtf
 main/sound/prom/hrtf/README.txt
 main/sound/prom/hrtf/SADIE_KU100_DFC_256_order_fir_48000.sofa
 main/sound/prom/hrtf/SADIE_LICENSE.txt
-mohlauncher.exe
-openmohaa.exe
-renderer_vulkan.dll
+mohlauncher
+mohreloaded
+renderer_vulkan.so

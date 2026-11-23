@@ -72,7 +72,6 @@ fileHandle_t	com_journalDataFile;		// config files are written here
 cvar_t	*paused;
 cvar_t	*config;
 cvar_t	*fps;
-cvar_t	*fps_location;
 cvar_t	*com_speeds;
 cvar_t	*developer;
 cvar_t	*com_dedicated;
@@ -1889,7 +1888,6 @@ void Com_Init( char *commandLine ) {
 	paused = Cvar_Get( "paused", "0", 64 );
 	autopaused = Cvar_Get( "autopaused", "1", CVAR_ARCHIVE );
 	fps = Cvar_Get( "fps", "0", CVAR_ARCHIVE );
-	fps_location = Cvar_Get( "fps_location", "0", CVAR_ARCHIVE );
 	com_timescale = Cvar_Get( "timescale", "1", CVAR_CHEAT | CVAR_SYSTEMINFO );
 	com_fixedtime = Cvar_Get( "fixedtime", "0", CVAR_CHEAT );
 	com_showtrace = Cvar_Get( "com_showtrace", "0", CVAR_CHEAT );
@@ -2333,7 +2331,8 @@ before the gate of its own present (one period after the previous
 present), so that a frame after a long one is not started at once to then
 wait here for most of a period, and the time from input to present stays
 the lead, or the work when that is longer. And it counts the presents: the
-fps counter (currentfps), presents a second over the last COM_FPS_SAMPLES,
+fps counter (currentfps), presents a second counted over a quarter of a
+second (COM_FPS_WINDOW_NS: a number that holds still long enough to read),
 which no present interval below the period can push above the cap.
 
 Runs on the thread that presents (the main thread, the render thread with
@@ -2344,7 +2343,7 @@ written whole on the platforms this builds for.
 */
 #define COM_FRAME_RING		16
 #define COM_LEAD_SAMPLES	64
-#define COM_FPS_SAMPLES		16
+#define COM_FPS_WINDOW_NS	250000000
 
 typedef struct {
 	uint64_t	number;		// the frame (com_frameNumber)
@@ -2358,8 +2357,8 @@ static volatile int64_t	com_lastPresentNs;		// the last gate's release
 static volatile int64_t	com_leadNs;				// the lead (above), 0: unknown yet
 static int64_t	com_leadSamples[COM_LEAD_SAMPLES];	// the presenting thread's
 static int		com_leadIndex, com_numLeadSamples;
-static int64_t	com_fpsTimes[COM_FPS_SAMPLES];		// the last presents
-static int		com_numPresents;
+static int64_t	com_fpsStartNs;		// the present the fps count runs from, 0: none yet
+static int		com_fpsCount;		// the presents since
 
 uint64_t Com_FrameToken( void )
 {
@@ -2412,8 +2411,7 @@ void Com_PresentGate( uint64_t token )
 void Com_PresentMark( uint64_t token )
 {
 	volatile comFrame_t	*frame = &com_frames[token % COM_FRAME_RING];
-	int64_t	nowNs, oldestNs;
-	int		i;
+	int64_t	nowNs;
 
 	nowNs = Sys_Nanoseconds();
 	com_lastPresentNs = nowNs;
@@ -2423,13 +2421,16 @@ void Com_PresentMark( uint64_t token )
 
 	// the fps counter
 	if ( fps && fps->integer ) {
-		i = com_numPresents % COM_FPS_SAMPLES;
-		oldestNs = com_fpsTimes[i];
-		com_fpsTimes[i] = nowNs;
-		com_numPresents++;
-		if ( com_numPresents > COM_FPS_SAMPLES && nowNs > oldestNs ) {
-			currentfps = COM_FPS_SAMPLES * 1000000000.0 / ( nowNs - oldestNs );
+		com_fpsCount++;
+		if ( nowNs - com_fpsStartNs >= COM_FPS_WINDOW_NS ) {
+			if ( com_fpsStartNs ) {
+				currentfps = com_fpsCount * 1000000000.0 / ( nowNs - com_fpsStartNs );
+			}
+			com_fpsStartNs = nowNs;
+			com_fpsCount = 0;
 		}
+	} else {
+		com_fpsStartNs = 0;
 	}
 }
 

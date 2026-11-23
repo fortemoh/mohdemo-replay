@@ -1753,13 +1753,18 @@ void TurretGun::P_CreateViewModel(void)
 
     m_pViewModel->NewAnim("idle");
 
+    // Changed in Reloaded
+    //  The owner's number set, not ORed in: singleClient is a client number, and ORing it into the
+    //  last owner's (never cleared) hid the turret from someone else, a spectator perhaps, and not
+    //  from the owner from the second one on
+
     // Make the world model invisible to the owner
     edict->r.svFlags |= SVF_NOTSINGLECLIENT;
-    edict->r.singleClient |= owner->edict->s.number;
+    edict->r.singleClient = owner->edict->s.number;
 
     // Make the viewmodel visible only to the owner
     m_pViewModel->edict->r.svFlags |= SVF_SINGLECLIENT;
-    m_pViewModel->edict->r.singleClient |= owner->edict->s.number;
+    m_pViewModel->edict->r.singleClient = owner->edict->s.number;
 }
 
 void TurretGun::P_DeleteViewModel(void)

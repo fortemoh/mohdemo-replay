@@ -70,12 +70,18 @@ jobs:
         files: ${{github.workspace}}/${{env.RELEASE_NAME}}.zip
 
   ##########################
-  # MoHAA Reloaded's v1.0.0 release: each push to vulkan that changes code replaces its Linux and Windows downloads
-  # (misc/release/package.sh) and updates their SHA-256s and commit in the release notes; the rest of the notes is
-  # written by hand. Pushes that change only docs (docs/, *.md) don't. Run by hand (workflow_dispatch) on vulkan, it
-  # replaces them whatever changed. metal's .github/workflows/macos-metal.yml does the same for the Mac download.
+  # The release of cmake/identity.cmake's version (v1.0.0, then v1.0.1 once the code says 1.0.1 and its release is
+  # published, tags-publish-release.yml): each push to vulkan that changes code replaces its four Linux and Windows
+  # downloads, the game's mohreloaded-<version>-<linux|windows> and the dedicated server's
+  # mohreloaded-server-<version>-<linux|windows> (misc/release/package.sh), and updates their SHA-256s (a missing row is
+  # added under the one before it) and commit in the release notes; the rest of the notes is written by hand. A
+  # Linux or Windows download of another name in the release (upstream's openmohaa-vulkan-..., -linux-amd64 and
+  # -windows-x64 of before, or an earlier version's) is replaced by these, in the notes too. Pushes that change only
+  # docs (docs/, *.md) don't. Run by hand (workflow_dispatch) on vulkan, it replaces them whatever changed. Without a
+  # published release of the version (not made yet, or still a draft) it does nothing. metal's
+  # .github/workflows/macos-metal.yml does the same for the Mac download.
   ##########################
-  release-v1-changes:
+  release-changes:
     if: github.ref == 'refs/heads/vulkan' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
@@ -100,15 +106,15 @@ jobs:
         fi
         echo "release=$release" | tee -a "$GITHUB_OUTPUT"
 
-  release-v1:
-    needs: [build-all, release-v1-changes]
-    if: github.ref == 'refs/heads/vulkan' && needs.release-v1-changes.outputs.release == '1'
+  release:
+    needs: [build-all, release-changes]
+    if: github.ref == 'refs/heads/vulkan' && needs.release-changes.outputs.release == '1'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     # one release update at a time, with metal's
     concurrency:
-      group: release-v1.0.0
+      group: release-downloads
       cancel-in-progress: false
 
     steps:
@@ -117,50 +123,84 @@ jobs:
     - uses: actions/download-artifact@v4
       with:
         name: out-linux-amd64
-        path: ${{github.workspace}}/artifacts/linux-amd64
+        path: ${{github.workspace}}/artifacts/linux
 
     - uses: actions/download-artifact@v4
       with:
         name: out-windows-x64
-        path: ${{github.workspace}}/artifacts/windows-x64
+        path: ${{github.workspace}}/artifacts/windows
 
     - name: Package the downloads
       run: |
         set -euo pipefail
-        for p in linux-amd64 windows-x64; do
-          misc/release/package.sh "$p" "artifacts/$p" dist "$GITHUB_SHA"
+        version=$(sed -n 's/^set(PROJECT_VERSION \([0-9][0-9.]*\))$/\1/p' cmake/identity.cmake)
+        echo "VERSION=$version" >> "$GITHUB_ENV"
+        for p in linux windows; do
+          for k in client server; do
+            misc/release/package.sh "$p" "$k" "artifacts/$p" dist "$GITHUB_SHA"
+          done
         done
-        (cd dist && sha256sum openmohaa-vulkan-1.0.0-*.tar.gz openmohaa-vulkan-1.0.0-*.zip) | tee -a "$GITHUB_STEP_SUMMARY"
+        (cd dist && sha256sum *.tar.gz *.zip) | tee -a "$GITHUB_STEP_SUMMARY"
 
-    - name: Replace them in v1.0.0, with their SHA-256s and commit in the notes
+    - name: Replace them in the version's release, with their SHA-256s and commit in the notes
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
-        files="dist/openmohaa-vulkan-1.0.0-linux-amd64.tar.gz dist/openmohaa-vulkan-1.0.0-windows-x64.zip"
-        assets=$(gh release view v1.0.0 --json assets --jq '.assets[].name')
-        for f in $files; do
-          printf '%s\n' "$assets" | grep -qxF "$(basename "$f")" || { echo "v1.0.0 has no $(basename "$f")" >&2; exit 1; }
-        done
-        gh release view v1.0.0 --json body --jq .body > notes.md
-        python3 - notes.md "$GITHUB_REPOSITORY" "$GITHUB_SHA" $files <<'EOF'
+        tag="v$VERSION"
+        # in the notes' order: a missing SHA-256 row goes under the one before it
+        files="dist/mohreloaded-$VERSION-linux.tar.gz dist/mohreloaded-$VERSION-windows.zip"
+        files="$files dist/mohreloaded-server-$VERSION-linux.tar.gz dist/mohreloaded-server-$VERSION-windows.zip"
+        if ! draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2> view.err); then
+          cat view.err >&2
+          grep -qi 'not found' view.err || exit 1
+          echo "No release $tag: nothing replaced. Push the tag $tag for its draft (tags-publish-release.yml), then publish it." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if [ "$draft" = true ]; then
+          echo "$tag is still a draft: nothing replaced, its downloads are the tag's build" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        gh release view "$tag" --json body --jq .body > notes.md
+        python3 - notes.md "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$VERSION" $files <<'EOF'
         import hashlib, os, re, sys
-        notes, repo, commit, files = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+        notes, repo, commit, version, files = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
         text = open(notes, encoding="utf-8").read()
         def sub(pattern, repl):
             global text
             text, n = re.subn(pattern, repl, text)
             if n != 1:
                 sys.exit(f"the notes match {pattern!r} {n} times, not once")
+        # the downloads' names wherever the notes give them: upstream's openmohaa-vulkan-..., -linux-amd64 and
+        # -windows-x64 of before, or an earlier version's
+        text = re.sub(r"\b(?:openmohaa-vulkan|mohreloaded)-\d+\.\d+\.\d+-(linux|windows)(?:-amd64|-x64)?\b",
+                      "mohreloaded-" + version + r"-\1", text)
+        text = re.sub(r"\bmohreloaded-server-\d+\.\d+\.\d+-(linux|windows)\b", "mohreloaded-server-" + version + r"-\1", text)
+        row = lambda name: r"\| `" + re.escape(name) + r"` \| `[0-9a-f]{64}` \|\n"
+        before = None
         for f in files:
             name = os.path.basename(f)
             digest = hashlib.sha256(open(f, "rb").read()).hexdigest()
+            if not re.search(row(name), text):
+                # a new download (the server's): its row under the one before it
+                at = re.search(row(before), text) if before else None
+                if not at:
+                    sys.exit(f"the notes have no SHA-256 row for {name}, nor one to put it under")
+                text = text[:at.end()] + f"| `{name}` | `{'0' * 64}` |\n" + text[at.end():]
             sub(r"(\| `" + re.escape(name) + r"` \| `)[0-9a-f]{64}(` \|)", r"\g<1>" + digest + r"\g<2>")
+            before = name
         sub(r"(Built by this repository's CI from commit )\[`[0-9a-f]{8}`\]\(https://github\.com/[^/]+/[^/]+/commit/[0-9a-f]{40}\)( of the `vulkan` branch)",
             r"\g<1>[`" + commit[:8] + "`](https://github.com/" + repo + "/commit/" + commit + r")\g<2>")
         # gh adds a newline to the body it reads: without this, each update would add one
         open(notes, "w", encoding="utf-8").write(text.rstrip("\n") + "\n")
         EOF
-        gh release upload v1.0.0 $files --clobber
-        gh release edit v1.0.0 --notes-file notes.md
+        gh release upload "$tag" $files --clobber
+        gh release edit "$tag" --notes-file notes.md
+        # the Linux and Windows downloads of other names, now that these replace them (the Mac's stay)
+        gh release view "$tag" --json assets --jq '.assets[].name' | while read -r asset; do
+          case " $files " in *"/$asset "*) continue;; esac
+          case $asset in
+          *-linux*.tar.gz | *-windows*.zip) gh release delete-asset "$tag" "$asset" --yes;;
+          esac
+        done

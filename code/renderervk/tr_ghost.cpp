@@ -1576,6 +1576,10 @@ void R_UpdateGhostTextures(int refdefTime)
 
     frameTime = refdefTime - lastTime;
     lastTime  = refdefTime;
+    // Omaha's (d243cc60): time going back (Omaha's demo seeking) is no time at all
+    if (frameTime < 0) {
+        frameTime = 0;
+    }
 
     numTextures = ghostManager.m_textureList.NumObjects();
     for (i = 1; i <= numTextures; i++) {

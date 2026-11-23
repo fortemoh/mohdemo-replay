@@ -371,11 +371,6 @@ UIWidget *UIWindowManager::ActiveControl(void)
     return m_activeControl;
 }
 
-UIWidget *UIWindowManager::ClickTarget(UIPoint2D& pos)
-{
-    return m_bindactive ? m_bindactive : getResponder(pos);
-}
-
 void UIWindowManager::ActivateControl(UIWidget *control)
 {
     UIWidget *wid;

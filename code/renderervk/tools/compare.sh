@@ -6,9 +6,9 @@
 # and compares every screenshot with tgadiff.py: A, the reference, and B, the
 # build under test. A and B (default base and vulkan) are renderers of
 # $MOH_BINDIR (renderer_<name>.so: keep a copy of the build before as
-# renderer_base.so); A_BIN and B_BIN (default openmohaa) are engine binaries
-# of $MOH_BINDIR, e.g. a copy of an older openmohaa, or a wrapper script
-# `exec <other bin dir>/openmohaa "$@"` for a build with its own cgame.so
+# renderer_base.so); A_BIN and B_BIN (default mohreloaded) are engine binaries
+# of $MOH_BINDIR, e.g. a copy of an older mohreloaded, or a wrapper script
+# `exec <other bin dir>/mohreloaded "$@"` for a build with its own cgame.so
 # (cgame is loaded from the binary's directory). Results:
 #   $MOH_HOMEPATH/main/screenshots/<view>[_w]_{a,b}.tga
 #   $MOH_OUT/<view>[_w]_{a,b,diff}.png
@@ -51,7 +51,7 @@ fi
 VIEWS=$(awk '$1 == "shot" || $1 == "menu" { print $2 }' "$LIST")
 
 for S in a b; do
-	if [ $S = a ]; then R=$A; BIN=${A_BIN:-openmohaa}; else R=$B; BIN=${B_BIN:-openmohaa}; fi
+	if [ $S = a ]; then R=$A; BIN=${A_BIN:-mohreloaded}; else R=$B; BIN=${B_BIN:-mohreloaded}; fi
 	for v in $VIEWS; do rm -f "$SS/$v.tga"; done
 	# the logs of the two runs apart, also when A and B are the same renderer
 	MOH_BIN=$BIN MOH_OUT=$MOH_OUT/$S "$TOOLS/run.sh" "$R" "$CFG" "$@"

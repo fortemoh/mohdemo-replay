@@ -86,8 +86,6 @@ public:
     void     Push(Type data);
     Type     Pop(void);
     Type     Head(void);
-    // Added: the top node (its data, then next): the stack read in place
-    StackNode<Type> *Top(void);
 };
 
 template<class Type>
@@ -161,12 +159,6 @@ inline Type Stack<Type>::Head(void)
     }
 
     return head->data;
-}
-
-template<class Type>
-inline StackNode<Type> *Stack<Type>::Top(void)
-{
-    return head;
 }
 
 #endif /* stack.h */

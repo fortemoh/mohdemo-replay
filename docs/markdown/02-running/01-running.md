@@ -8,7 +8,7 @@
 
 **Spearhead** and **Breakthrough** are supported in OpenMoHAA using the `com_target_game` variable.
 
-To change the target game, append the following command-line arguments to the `openmohaa` and `omohaaded` executable:
+To change the target game, append the following command-line arguments to the `mohreloaded` and `mohreloaded-server` executable:
 
 - `+set com_target_game 0` for the default base game (mohaa, uses `main` folder)
 - `+set com_target_game 1` for the Spearhead expansion (mohaas, uses `mainta` folder)
@@ -16,7 +16,7 @@ To change the target game, append the following command-line arguments to the `o
 
 OpenMoHAA will also use the correct network protocol version accordingly. The default value of `com_target_game` is 0.
 
-On Windows, a shortcut can be created to the `openmohaa` executable, with the command-line argument appended from above to play an expansion.
+On Windows, a shortcut can be created to the `mohreloaded` executable, with the command-line argument appended from above to play an expansion.
 
 ### Using a demo version
 
@@ -43,7 +43,7 @@ If necessary, the location of user-writable data can be changed manually by sett
 
 The game directory is intended to be read-only, which is the reason why the home path exists. This prevents existing files in the game directory from being accidentally overwritten.
 
-Note that the configuration file isn't created nor written automatically on a dedicated server (**omohaaded**).
+Note that the configuration file isn't created nor written automatically on a dedicated server (**mohreloaded-server**).
 
 ## Configuration
 

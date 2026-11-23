@@ -269,6 +269,14 @@ void RB_TestFlare( flare_t *f ) {
 		memmove( f->depthReads, f->depthReads + 1, f->numDepthReads * sizeof( f->depthReads[0] ) );
 	}
 
+	// Omaha's (d243cc60): a fade that starts later than now is from before
+	// time went back (Omaha's demo seeking in place): restart it, or a flare
+	// that was visible stays hidden, and a hidden one shown, until time
+	// catches up
+	if ( backEnd.refdef.time < f->fadeTime ) {
+		f->fadeTime = backEnd.refdef.time - 1;
+	}
+
 	if ( visible ) {
 		if ( !f->visible ) {
 			f->visible = qtrue;

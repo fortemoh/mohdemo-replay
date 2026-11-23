@@ -54,6 +54,7 @@ set(RENDERER_VULKAN_SOURCES
     ${SOURCE_DIR}/renderervk/tr_vis.cpp
     ${SOURCE_DIR}/renderervk/tr_world.c
     ${SOURCE_DIR}/renderervk/vk.c
+    ${SOURCE_DIR}/renderervk/vk_blur.c
     ${SOURCE_DIR}/renderervk/vk_framelog.c
     ${SOURCE_DIR}/renderervk/vk_image.c
     ${SOURCE_DIR}/renderervk/vk_instance.c
@@ -65,6 +66,7 @@ set(RENDERER_VULKAN_SOURCES
     ${SOURCE_DIR}/renderervk/vk_shaders_temporal.c
     ${SOURCE_DIR}/renderervk/vk_shaders_hdr.c
     ${SOURCE_DIR}/renderervk/vk_shaders_radar.c
+    ${SOURCE_DIR}/renderervk/vk_shaders_blur.c
     ${SOURCE_DIR}/renderervk/vk_submit.c
     ${SOURCE_DIR}/renderervk/vk_temporal.c
 )

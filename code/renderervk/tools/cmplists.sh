@@ -8,8 +8,8 @@
 # (tgadiff.py, with the list's masks). variants: comma separated
 #   name=renderer[=r_vkFallbacks[=binary]]
 # renderer: a renderer of $MOH_BINDIR (renderer_<renderer>.so), binary: an
-# engine binary there (default openmohaa; a wrapper script `exec <other bin
-# dir>/openmohaa "$@"` runs a build with its own cgame.so). EXTRA holds more
+# engine binary there (default mohreloaded; a wrapper script `exec <other bin
+# dir>/mohreloaded "$@"` runs a build with its own cgame.so). EXTRA holds more
 # +set arguments for every run. Results: <out dir>/<variant>/<view>.tga, the
 # logs in <out dir>/logs/<variant>/, and <out dir>/summary.txt with one line
 # per view and variant ("identical" or "DIFFERS <pixels> px, max r/g/b"),
@@ -37,7 +37,7 @@ for LIST in "$@"; do
 	VIEWS=$(awk '$1 == "shot" || $1 == "menu" { print $2 }' "$LIST")
 	for V in $(echo "$VARIANTS" | tr , ' '); do
 		NAME=${V%%=*}; REST=${V#*=}; R=${REST%%=*}
-		FB=0; BIN=openmohaa
+		FB=0; BIN=mohreloaded
 		case $REST in *=*) REST=${REST#*=}; FB=${REST%%=*}; case $REST in *=*) BIN=${REST#*=};; esac;; esac
 		mkdir -p "$OUT/$NAME" "$OUT/logs/$NAME"
 		for v in $VIEWS; do rm -f "$SS/$v.tga"; done

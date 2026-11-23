@@ -40,8 +40,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define HITMARKER_INNER  6.0f  // a stroke's ends from the middle, pixels at 1080 lines
 #define HITMARKER_OUTER  14.0f
 #define HITMARKER_THICK  2.0f
-#define HITMARKER_VOLUME 4.78f // 10 dB over the stock dings' 2.0 as played (held at the voice ceiling, 127/84), to be
-                               // heard over the player's own shot (the Mac's driver lets the client's own sounds past it)
+#define HITMARKER_VOLUME 2.0f  // the stock dings'
 #define HITMARKER_BOXES  256   // four strokes of squares
 
 static cvar_t     *cg_hitmarker;

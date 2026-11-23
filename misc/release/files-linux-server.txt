@@ -1,0 +1,4 @@
+COPYING.txt
+INSTALL.txt
+game.so
+mohreloaded-server

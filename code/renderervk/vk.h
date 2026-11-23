@@ -592,9 +592,9 @@ qboolean	vk_skin_frame_room( int numWords );
 // starts the frame
 unsigned int vk_frame_serial( void );
 // the frame as drawn so far, blurred into image ("*frameblur", about a
-// VK_FRAME_BLUR-th of the color target's size), once a frame; whether the
-// device can
-#define VK_FRAME_BLUR		16
+// VK_FRAME_BLUR-th of the color target's size: vk_blur.c), once a frame;
+// whether the device can
+#define VK_FRAME_BLUR		4
 void		vk_frame_blur( image_t *image );
 qboolean	vk_frame_blur_supported( void );
 
@@ -644,6 +644,9 @@ int			vk_readback_dropped( void );
 // with HDR output its 3D scene is drawn without the expansion, so the
 // readback is the SDR frame (vk_output.c)
 void		vk_sdr_frame( void );
+// r_hdrOutputActive, and r_hdrOutputTest refused, set on the front end
+// (RE_BeginFrame; vk_output.c)
+void		vk_output_publish( void );
 
 // Depth and stencil reads (vk_read_pixels with READ_DEPTH_FLOAT or
 // READ_STENCIL8, vk_queue_depth_reads) need a depth buffer that some

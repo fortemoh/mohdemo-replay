@@ -50,6 +50,6 @@ void        UI_DrawTeamTag(int client, float x, float y, int health);
 #define UI_COMPHUD_MENUS 14
 extern const char *const ui_compHudMenus[UI_COMPHUD_MENUS];
 // the followed player's plate's height at the bottom's middle (hud_comp_follow, while ui_hud_follow_on)
-#define COMP_FOLLOW_H 62.0f
+#define COMP_FOLLOW_H 52.0f
 // which of them cg_hudstyle's preset shows (the bottom's health and ammo: CS2's strip or CS:GO's corners), set when it changes
 extern bool ui_compHudInLayout[UI_COMPHUD_MENUS];

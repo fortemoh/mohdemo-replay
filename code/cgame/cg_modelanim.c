@@ -26,7 +26,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "cg_local.h"
 #include "../corepp/tiki.h"
 
-static qboolean cg_forceModelAllowed = qfalse;
+// Added: an animation an entity coming into the snapshots is this far into (s) began
+// too long ago for its one-time start (sounds, flashes) to be played now (CG_ModelAnim)
+#define CG_ANIM_STALE_START 0.2f
 
 /*
 ===============
@@ -68,15 +70,20 @@ The team tag
 Added in Reloaded: the player aimed at (the server's STAT_INFOCLIENT: a team
 mate, or anyone while spectating free; kept 1.5 s after looking away) shown
 CS2's way in place of their head icon: their name, their health under it and
-an arrow down to their head, drawn by the client in the HUD's look
-(cgi.UI_DrawTeamTag). Not while following a player (the HUD names them),
+an arrow down to them, drawn by the client in the HUD's look
+(cgi.UI_DrawTeamTag); over their feet at their box's height (eased as they
+crouch or stand), not their head, which sways even standing still. Not
+while following a player (the HUD names them),
 under the Reloaded menus, with the HUD hidden or cg_hud_targetinfo 0; not
 behind the world
 ===============
 */
 static int      cg_tagClient = -1; // the player tagged this frame, -1 none
 static qboolean cg_tagEyesSet;     // their eyes found this frame (their model added)
-static vec3_t   cg_tagEyes;
+static vec3_t   cg_tagEyes;        // (seen from the view: the tag drawn)
+static vec3_t   cg_tagPoint;       // the arrow's tip: over their feet, cg_tagHeight up
+static int      cg_tagHeightOf = -1; // whose height cg_tagHeight is, -1 nobody's
+static float    cg_tagHeight;        // their box's top over their feet, eased
 
 /*
 ===============
@@ -122,12 +129,17 @@ void CG_TeamTagFrame(void)
 ===============
 CG_TeamTagEyes
 
-The tagged player's eyes, as their model is added (their head icon's point)
+The tagged player's eyes, as their model is added (seen or not), and the
+tag's point: over their feet, at their box's top (94 standing, 54 or 60
+crouching) eased in a fifth of a second; the eyes' height and 12 when the
+box isn't sent
 ===============
 */
 static void CG_TeamTagEyes(refEntity_t *pModel, entityState_t *pPlayerState)
 {
-    int i, iTag;
+    vec3_t mins, maxs;
+    float  h;
+    int    i, iTag;
 
     if (pPlayerState->number != cg_tagClient) {
         return;
@@ -144,6 +156,17 @@ static void CG_TeamTagEyes(refEntity_t *pModel, entityState_t *pPlayerState)
         }
     }
     cg_tagEyesSet = qtrue;
+
+    IntegerToBoundingBox(pPlayerState->solid, mins, maxs);
+    h = maxs[2] >= 8.0f ? maxs[2] : cg_tagEyes[2] - pModel->origin[2] + 12.0f;
+    if (cg_tagHeightOf != cg_tagClient) {
+        cg_tagHeightOf = cg_tagClient;
+        cg_tagHeight   = h;
+    } else {
+        cg_tagHeight += (h - cg_tagHeight) * Q_min(1.0f, cg.frametime * 0.006f);
+    }
+    VectorCopy(pModel->origin, cg_tagPoint);
+    cg_tagPoint[2] += cg_tagHeight + 4.0f;
 }
 
 /*
@@ -156,12 +179,13 @@ seen (nothing of the world between)
 */
 void CG_DrawTeamTag(void)
 {
-    vec3_t  top, d;
+    vec3_t  d;
     trace_t tr;
     float   z, tx, ty;
     int     health;
 
     if (cg_tagClient < 0 || !cg_tagEyesSet) {
+        cg_tagHeightOf = -1;
         return;
     }
     CG_Trace(
@@ -171,9 +195,7 @@ void CG_DrawTeamTag(void)
     if (tr.fraction < 1.0f) {
         return;
     }
-    VectorCopy(cg_tagEyes, top);
-    top[2] += 16.0f;
-    VectorSubtract(top, cg.refdef.vieworg, d);
+    VectorSubtract(cg_tagPoint, cg.refdef.vieworg, d);
     z = DotProduct(d, cg.refdef.viewaxis[0]);
     if (z < 1.0f) {
         return;
@@ -1030,7 +1052,7 @@ CG_CheckValidModels
 
 This verifies the allied player model and the german player model:
 - If they don't exist on the client, reset to the default allied player model
-- If they don't exist on the server, don't allow forceModel so the client explicitly know the skin isn't supported
+- If they don't exist on the server, force models draw that side in its default model (CG_UpdateForceModels)
 ===============
 */
 void CG_CheckValidModels()
@@ -1058,7 +1080,7 @@ void CG_CheckValidModels()
         modelpath = va("models/player/%s.tik", dm_playergermanmodel->string);
         if (!cgi.R_RegisterModel(modelpath)) {
             cgi.Printf(
-                "Allied model '%s' is invalid, resetting to '%s'\n",
+                "Axis model '%s' is invalid, resetting to '%s'\n",
                 dm_playergermanmodel->string,
                 dm_playergermanmodel->resetString
             );
@@ -1075,9 +1097,6 @@ void CG_CheckValidModels()
         //  A demo has no server to have the models: any can be forced
         cg.serverAlliedModelValid = qtrue;
         cg.serverAxisModelValid   = qtrue;
-        cg_forceModelAllowed      = qtrue;
-    } else if (dm_playermodel->modified || dm_playergermanmodel->modified) {
-        cg_forceModelAllowed = cg.serverAlliedModelValid && cg.serverAxisModelValid;
     }
 }
 
@@ -1125,6 +1144,14 @@ void CG_ServerModelUnloaded(qhandle_t handle)
 /*
 ===============
 CG_UpdateForceModels
+
+Changed in Reloaded: each side on its own. OPM forced no model at all while
+either side's model wasn't loaded on the server; now that side is drawn in
+its default model (american_army, german_wehrmacht_soldier), so force models
+work on any server. Stock servers load every stock model but four the model
+picker offers (global/DMprecache.scr names allied_oss, german_elite_gestapo,
+german_winter1 and 2, not allied_sas, german_elite_officer, german_winter_1
+and 2): those load only once a player wears them
 ===============
 */
 void CG_UpdateForceModels()
@@ -1137,17 +1164,6 @@ void CG_UpdateForceModels()
     qboolean  isDirty;
 
     isDirty = dm_playermodel->modified || dm_playergermanmodel->modified || cg_forceModel->modified;
-
-    if (!cg_forceModelAllowed) {
-        if (isDirty) {
-            cgi.Printf(
-                "One or more of the selected players model don't exist on the server or are not loaded, using the "
-                "default skin\n"
-            );
-        }
-
-        return;
-    }
 
     if (cg.pAlliedPlayerModel && cg.pAxisPlayerModel && !isDirty) {
         return;
@@ -1163,6 +1179,13 @@ void CG_UpdateForceModels()
     if (!hModel) {
         Com_sprintf(szAlliesModel, sizeof(szAlliesModel), "models/player/%s.tik", dm_playermodel->resetString);
         hModel = cgi.R_RegisterModel(szAlliesModel);
+        if (hModel && Q_stricmp(pszAlliesPartial, dm_playermodel->resetString)) {
+            cgi.Printf(
+                "Force Models: the server has no '%s', the Allies drawn as '%s'\n",
+                pszAlliesPartial,
+                dm_playermodel->resetString
+            );
+        }
     }
 
     if (hModel) {
@@ -1180,6 +1203,13 @@ void CG_UpdateForceModels()
     if (!hModel) {
         Com_sprintf(szAxisModel, sizeof(szAxisModel), "models/player/%s.tik", dm_playergermanmodel->resetString);
         hModel = cgi.R_RegisterModel(szAxisModel);
+        if (hModel && Q_stricmp(pszAxisPartial, dm_playergermanmodel->resetString)) {
+            cgi.Printf(
+                "Force Models: the server has no '%s', the Axis drawn as '%s'\n",
+                pszAxisPartial,
+                dm_playergermanmodel->resetString
+            );
+        }
     }
 
     if (hModel) {
@@ -1423,7 +1453,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     model.tiki      = cgi.R_Model_GetHandle(cgs.model_draw[s1->modelindex]);
 
     if (s1->number != cg.snap->ps.clientNum && (s1->eType == ET_PLAYER || (s1->eFlags & EF_DEAD))) {
-        if (cg_forceModel->integer && cg_forceModelAllowed) {
+        if (cg_forceModel->integer) {
             //CG_UpdateForceModels();
 
             if (s1->eFlags & EF_AXIS) {
@@ -1855,7 +1885,20 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
         // process the entry commands of the current anim
         if (model.frameInfo[i].weight && !bJumped) {
             if (!((cent->animLastWeight >> i) & 1) || model.frameInfo[i].index != cent->animLast[i]) {
-                CG_ProcessEntityCommands(TIKI_FRAME_ENTRY, model.frameInfo[i].index, s1->number, &model, cent);
+                if (cent->animLastTimes[i] == -1 && s1->frameInfo[i].index == model.frameInfo[i].index
+                    && cg.snap->serverTime - s1->frameInfo[i].time * 1000 < cent->unseenBefore
+                    && (s1->frameInfo[i].time > CG_ANIM_STALE_START
+                        || s1->frameInfo[i].time >= cgi.Anim_Time(model.tiki, model.frameInfo[i].index) - 0.001f)) {
+                    // Added: just come into the snapshots (a player round a corner or
+                    // behind a wall, dropped by the server's visibility test a moment)
+                    // in an animation that began out of our sight and is well under way
+                    // or over and held (a cocked grenade's): what it started stays on,
+                    // but its one-time sounds and effects are stale (else his grenade's
+                    // pin is heard pulled again). A shot just fired still sounds.
+                    CG_ProcessEntityLastingCommands(TIKI_FRAME_ENTRY, model.frameInfo[i].index, s1->number, &model, cent);
+                } else {
+                    CG_ProcessEntityCommands(TIKI_FRAME_ENTRY, model.frameInfo[i].index, s1->number, &model, cent);
+                }
                 if (cent->animLastTimes[i] == -1) {
                     cent->animLast[i]      = model.frameInfo[i].index;
                     cent->animLastTimes[i] = model.frameInfo[i].time;

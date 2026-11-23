@@ -2,7 +2,7 @@
 #
 # MOH_BASEPATH  game data (read only), default ~/Documents/moh
 # MOH_HOMEPATH  throwaway fs_homepath, default /tmp/moh-vktest
-# MOH_BINDIR    directory of the openmohaa binary, default build-vk/RelWithDebInfo
+# MOH_BINDIR    directory of the mohreloaded binary, default build-vk/RelWithDebInfo
 # MOH_OUT       logs, PNG copies and diffs, default $MOH_HOMEPATH/compare
 TOOLS=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$TOOLS/../../.." && pwd)

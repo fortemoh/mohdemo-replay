@@ -137,7 +137,9 @@ void R_AddSwipeSurfaces()
         }
         swipe->lastrendtime = tr.refdef.time;
 
-        if (timedelta) {
+        // Omaha's (d243cc60): time going back (Omaha's demo seeking) doesn't
+        // run swipes backward
+        if (timedelta > 0) {
             swipe->time += timedelta;
         }
 

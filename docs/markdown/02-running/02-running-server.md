@@ -174,14 +174,14 @@ map "obj/obj_team1"
 
 ## Starting the server
 
-Run the `omohaaded` executable from your MOHAA directory. Use one of the following commands, depending on the game you want to use:
+Run the `mohreloaded-server` executable from your MOHAA directory. Use one of the following commands, depending on the game you want to use:
 
 - For **Allied Assault**:
   
-  `./omohaaded +set com_target_game 0 +exec server_opm.cfg`
+  `./mohreloaded-server +set com_target_game 0 +exec server_opm.cfg`
 - For **Spearhead**:
 
-  `./omohaaded +set com_target_game 1 +exec server_opm.cfg` 
+  `./mohreloaded-server +set com_target_game 1 +exec server_opm.cfg` 
 - For **Breakthrough**:
 
-  `./omohaaded +set com_target_game 2 +exec server_opm.cfg`
+  `./mohreloaded-server +set com_target_game 2 +exec server_opm.cfg`

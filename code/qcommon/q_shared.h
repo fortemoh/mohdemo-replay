@@ -29,7 +29,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 extern "C" {
 #endif
 
-#define PRODUCT_NAME					"OpenMoHAA"
+// The name the game shows: the window title, the console's version line, the version servers show (the original
+// game's first, then this one's)
+#define PRODUCT_NAME					"MoHAA Reloaded"
 #define PRODUCT_DATE					__DATE__
 
 #define BASEGAME				"main"
@@ -77,6 +79,8 @@ extern "C" {
 // Note: An universal client is not currently possible without refactoring the network and the file system.
 //       Pak files must be reloaded on-the-fly depending on the server the client is connecting to.
 //
+// The settings folder and the config file keep upstream's names: renaming them would leave everyone's settings,
+// binds and saves behind (the launcher reads them there too, launcher/desktop/src/platform.rs)
  #define HOMEPATH_NAME_UNIX_LEGACY	".openmohaa"
  #define HOMEPATH_NAME				"openmohaa"
 

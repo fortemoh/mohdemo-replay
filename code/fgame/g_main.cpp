@@ -428,6 +428,11 @@ void G_AddGEntity(gentity_t *edict, qboolean showentnums)
     unsigned long long start, end;
     Entity            *ent = edict->entity;
 
+    // The parent walk in G_RunFrame goes by edict number and can reach a freed edict
+    if (!ent) {
+        return;
+    }
+
     if (g_timeents->integer) {
         start = clock();
         G_RunEntity(ent);

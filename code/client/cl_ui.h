@@ -133,6 +133,10 @@ void     UI_CloseDMConsole(void);
 qboolean UI_DMConsoleState(int *mode, const char **line, int *caret);
 // Added: a scoreboard is shown
 qboolean UI_ScoreboardShown(void);
+// Added: the scoreboard's cursor (a right click while it shows): on; a key
+// event it takes (the right button's press: on, or off again)
+qboolean UI_ScoreboardCursor(void);
+qboolean UI_ScoreboardKey(int key, qboolean down, unsigned time);
 void     UI_ToggleDMConsole(int iMode);
 void     UI_PrintConsole(const char *msg);
 

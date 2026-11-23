@@ -33,7 +33,7 @@ cmake --build .
 cmake --install .
 ```
 
-Usually binaries get installed inside the `/usr/local/lib/openmohaa` directory.
+Usually binaries get installed inside the `/usr/local/lib/mohreloaded` directory.
 
 Other compilers can be specified by appending `-DCMAKE_C_COMPILER=/path/to/compiler -DCMAKE_CXX_COMPILER=path/to/compiler` to the CMake command-line.
 

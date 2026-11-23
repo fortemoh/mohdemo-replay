@@ -24,6 +24,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "client.h"
 #include "../server/server.h"
 #include "cl_lagometer.h"
+#include "cl_effects.h"
+#include "cl_mouseturn.h"
 #include "cl_ui.h"
 #include "cl_demoindex.h"
 #include "cl_demohud.h"
@@ -3479,8 +3481,8 @@ void CL_Connect( const char *server, netadrtype_t family ) {
 	}
 	serverString = NET_AdrToStringwPort(clc.serverAddress);
 
-	// Added: the Reloaded connect's box asks the server for its name and map
-	UI_Menus_Connect(server, &clc.serverAddress);
+	// Added: the Reloaded connect screen told a connect begins
+	UI_Menus_Connect(server);
 
 	Com_Printf( "%s resolved to %s\n", clc.servername, serverString );
 
@@ -4829,6 +4831,12 @@ void CL_Frame ( int msec ) {
 	// decide on the serverTime to render
 	CL_SetCGameTime();
 
+	// Enhanced Rendering (r_temporal) on while an effect needs it (Omaha's)
+	CL_Effects_Sync(EFFECTS_SYNC_FRAME);
+
+	// the turn distance (m_turn) kept when the Field of View or the mouse's DPI changes
+	CL_MouseTurn_Sync();
+
 	// set the time if we loaded a save
 	if( SV_DoSaveGame() )
 	{
@@ -4887,21 +4895,6 @@ static Q_PRINTF_FUNC(2, 3) void QDECL CL_RefPrintf( int print_level, const char 
 	else if (print_level == PRINT_DEVELOPER_2 && developer->integer) {
 		Com_DPrintf("%s", msg);
 	}
-}
-
-/*
-============
-CL_RefSetPerformanceCounters
-============
-*/
-void CL_RefSetPerformanceCounters( int total_tris, int total_verts, int total_texels, int world_tris, int world_verts, int character_lights )
-{
-	cls.total_tris = total_tris;
-	cls.total_verts = total_verts;
-	cls.total_texels = total_texels;
-	cls.world_tris = world_tris;
-	cls.world_verts = world_verts;
-	cls.character_lights = character_lights;
 }
 
 /*
@@ -5201,6 +5194,10 @@ void CL_InitRef( void ) {
 
 	Com_Printf( "----- Initializing Renderer ----\n" );
 
+	// the renderer reads r_temporal once, as it starts: turn it on first if
+	// an effect needs it (Omaha's cl_effects)
+	CL_Effects_Sync(EFFECTS_SYNC_START);
+
 #define RENDERER_ARCH_DLL_EXT DLL_SUFFIX DLL_EXT
 
 #ifdef USE_RENDERER_DLOPEN
@@ -5292,7 +5289,6 @@ void CL_InitRef( void ) {
 	ri.CM_TerrainSquareType = CM_TerrainSquareType;
 	ri.CG_ProcessInitCommands = CL_CG_ProcessInitCommands;
 	ri.CG_EndTiki = CL_CG_EndTiki;
-	ri.SetPerformanceCounters = CL_RefSetPerformanceCounters;
 
     ri.DebugLines = &DebugLines;
     ri.numDebugLines = &numDebugLines;
@@ -5362,6 +5358,7 @@ void CL_InitRef( void ) {
 	}
 
 	re = *ret;
+	CL_Effects_RendererStarted();
 
 	// unpause so the cgame definately gets a snapshot and renders a frame
 	Cvar_Set( "cl_paused", "0" );
@@ -5680,6 +5677,7 @@ void CL_Init( void ) {
 
 	m_pitch = Cvar_Get ("m_pitch", "0.022", CVAR_ARCHIVE);
 	m_yaw = Cvar_Get ("m_yaw", "0.022", CVAR_ARCHIVE);
+	CL_MouseTurn_Init();
 	m_forward = Cvar_Get ("m_forward", "0.25", CVAR_ARCHIVE);
 	m_side = Cvar_Get ("m_side", "0.25", CVAR_ARCHIVE);
 	// no m_filter: upstream's averaged each frame's mouse movement with the
@@ -5812,6 +5810,10 @@ void CL_Init( void ) {
 		//  Apply config tweaks after loading the original config
 		CL_ApplyOriginalConfigTweaks();
 	}
+
+	// Added in Reloaded
+	//  our own actions' keys, given once (Options' Controls)
+	RL_DefaultBinds();
 
 	Com_Printf( "----- Client Initialization Complete ----- %i ms\n", start - end );
 }
@@ -5963,11 +5965,6 @@ void CL_ServerInfoPacket( netadr_t from, msg_t *msg ) {
 	qboolean gameMismatch;
 
 	infoString = MSG_ReadString( msg );
-
-	// Added: the answer the Reloaded connect's box asked for (it has no gamename)
-	if (UI_Menus_ServerInfo(&from, infoString)) {
-		return;
-	}
 
 	// if this isn't the correct gamename, ignore it
 	gamename = Info_ValueForKey( infoString, "gamename" );

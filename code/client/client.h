@@ -392,12 +392,6 @@ typedef struct {
 
 	// rendering info
 	glconfig_t	glconfig;
-	int total_tris;
-	int total_verts;
-	int total_texels;
-	int world_tris;
-	int world_verts;
-	int character_lights;
 	hdelement_t HudDrawElements[ MAX_HUDDRAW_ELEMENTS ];
 	clientAnim_t anim;
 	stopWatch_t stopwatch;
@@ -736,6 +730,8 @@ void CL_SetCGameTime( void );
 void CL_FirstSnapshot( void );
 void CL_ShaderStateChanged( void );
 baseshader_t *CL_GetShaderPointer( int iShaderNum );
+// Added in Reloaded
+const playerState_t *CL_FollowEyesPlayerState( void );
 
 //
 // cl_ui.c
@@ -782,6 +778,7 @@ void CL_InitConsoleCommands( void );
 //
 void CL_CrosshairImport_f( void );
 void CL_CrosshairExport_f( void );
+const char *CL_CrosshairImportNote( const char *code );
 
 #ifdef USE_DISCORD
 //

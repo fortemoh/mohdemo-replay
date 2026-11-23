@@ -589,6 +589,70 @@ int EntityDistCheck(const vec3_t origin, const vec3_t forward, const gentity_t* 
 
 /*
 ===============
+SV_FatPVS
+
+Added in Reloaded
+  The union of the PVS of the eye's cluster and of every other cluster
+  within sv_fatpvs units of the eye (a "fat" PVS), or the eye's cluster's
+  PVS alone when there is no other. A map's PVS can leave out what an eye
+  right by a cluster's edge sees: on obj_team4, leaning left by the door to
+  the alley with the door open, a crack by the frame shows the alley's far
+  end, which the eye's cluster's PVS doesn't hold, so a player standing
+  there in plain sight wasn't sent; a cluster 32 units off holds it. The
+  client's renderer draws the world from the same union (r_fatpvs).
+  The result stays valid until the next call.
+===============
+*/
+#define MAX_FATPVS_LEAFS 128
+
+static byte *SV_FatPVS(const vec3_t origin, int cluster, byte *pvs) {
+	static byte	fatpvs[MAX_MAP_LEAFS / 8];
+	vec3_t		mins, maxs;
+	int			leafs[MAX_FATPVS_LEAFS], clusters[MAX_FATPVS_LEAFS];
+	int			numLeafs, numClusters, lastLeaf, bytes, i, j;
+
+	bytes = (CM_NumClusters() + 7) >> 3;
+	if (sv_fatpvs->value <= 0 || cluster < 0 || bytes > (int)sizeof(fatpvs)) {
+		return pvs;
+	}
+
+	for (i = 0; i < 3; i++) {
+		mins[i] = origin[i] - sv_fatpvs->value;
+		maxs[i] = origin[i] + sv_fatpvs->value;
+	}
+	numLeafs = CM_BoxLeafnums(mins, maxs, leafs, MAX_FATPVS_LEAFS, &lastLeaf);
+
+	// the other clusters, each once
+	numClusters = 0;
+	for (i = 0; i < numLeafs; i++) {
+		const int c = CM_LeafCluster(leafs[i]);
+
+		if (c < 0 || c == cluster) {
+			continue;
+		}
+		for (j = 0; j < numClusters && clusters[j] != c; j++) {
+		}
+		if (j == numClusters) {
+			clusters[numClusters++] = c;
+		}
+	}
+	if (!numClusters) {
+		return pvs;
+	}
+
+	Com_Memcpy(fatpvs, pvs, bytes);
+	for (i = 0; i < numClusters; i++) {
+		const byte *vis = CM_ClusterPVS(clusters[i]);
+
+		for (j = 0; j < bytes; j++) {
+			fatpvs[j] |= vis[j];
+		}
+	}
+	return fatpvs;
+}
+
+/*
+===============
 SV_AddEntitiesVisibleFromPoint
 ===============
 */
@@ -631,6 +695,13 @@ static void SV_AddEntitiesVisibleFromPoint(const vec3_t origin, clientSnapshot_t
 	frame->areabytes = CM_WriteAreaBits( frame->areabits, clientarea );
 
 	clientpvs = CM_ClusterPVS (clientcluster);
+
+	// Added in Reloaded
+	//  The client's own eye sees from a fat PVS (SV_FatPVS); not the views
+	//  through portals or the sky portal, which this calls itself for
+	if (!portalEnt && !portalsky) {
+		clientpvs = SV_FatPVS(origin, clientcluster, clientpvs);
+	}
 
 	AngleVectors(angles, forward, right, NULL);
 

@@ -831,9 +831,19 @@ Every frame slot has a descriptor set of every texture slot (set 0 of the
 pipelines, VK_MAX_TEXTURES combined image samplers), bound once per command
 buffer; a draw names its units' slots instead of binding their sets. A set
 is written at its frame's begin, when the frame before it is done, for the
-slots that changed since it was last written; the frame being recorded has
-its set written at once (its command buffer isn't pending). A free slot
-holds the default texture, so every entry is valid.
+slots that changed since it was last written. A free slot holds the default
+texture, so every entry is valid.
+
+The frame being recorded gets a change at once (a texture made or freed
+while it draws: the UI bakes a font page the first time it draws a size).
+Its set can't be written once a draw of the command buffer bound it: that
+makes the command buffer invalid (the layout isn't made for update after
+bind), and the draws before should read the slot as it was. So the change
+goes in the next of the frame slot's VK_TEXTURE_ARRAY_SETS sets, a copy of
+the current one, which the draws after bind; the frame keeps it as its set.
+With every one of them bound in the command buffer, the frame so far is
+submitted and waited for (VK_FlushAndWait), and the new command buffer has
+none bound.
 
 ====================================================================
 */
@@ -911,6 +921,40 @@ void VK_TextureArrayUpdate( vkFrame_t *frame ) {
 	}
 }
 
+// the frame being recorded gets the dirty slots now: in a copy of its set
+// when a draw of the command buffer bound it
+static void VK_TextureArrayUpdateRecording( void ) {
+	vkFrame_t *frame = vk.frame;
+	VkCopyDescriptorSet copy;
+	int next;
+
+	if ( !frame ) {
+		return;
+	}
+	if ( frame->textureArrayBound && frame->textureArrayCount == VK_TEXTURE_ARRAY_SETS ) {
+		// (a new command buffer: textureArrayBound cleared)
+		VK_FlushAndWait();
+	}
+	if ( frame->textureArrayBound ) {
+		next = ( frame->textureArrayIndex + 1 ) % VK_TEXTURE_ARRAY_SETS;
+		// (unless every slot is written anyway)
+		if ( !vk_textureArrayAll[frame - vk.frames] ) {
+			Com_Memset( &copy, 0, sizeof( copy ) );
+			copy.sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+			copy.srcSet = frame->textureArraySet;
+			copy.dstSet = frame->textureArraySets[next];
+			copy.descriptorCount = VK_MAX_TEXTURES;
+			qvkUpdateDescriptorSets( vk.device, 0, NULL, 1, &copy );
+		}
+		frame->textureArrayIndex = next;
+		frame->textureArraySet = frame->textureArraySets[next];
+		frame->textureArrayCount++;
+		frame->textureArrayBound = qfalse;
+		vk.stats.textureArrayCopies++;
+	}
+	VK_TextureArrayUpdate( frame );
+}
+
 // a slot changed: every frame's set, the frame being recorded at once
 static void VK_TextureArrayMark( int slot ) {
 	int f;
@@ -921,9 +965,7 @@ static void VK_TextureArrayMark( int slot ) {
 	for ( f = 0; f < VK_MAX_FRAMES; f++ ) {
 		vk_textureArrayDirty[f][slot >> 6] |= (uint64_t)1 << ( slot & 63 );
 	}
-	if ( vk.frame ) {
-		VK_TextureArrayUpdate( vk.frame );
-	}
+	VK_TextureArrayUpdateRecording();
 }
 
 static void VK_TextureArrayMarkAll( void ) {
@@ -935,9 +977,7 @@ static void VK_TextureArrayMarkAll( void ) {
 	for ( f = 0; f < VK_MAX_FRAMES; f++ ) {
 		vk_textureArrayAll[f] = qtrue;
 	}
-	if ( vk.frame ) {
-		VK_TextureArrayUpdate( vk.frame );
-	}
+	VK_TextureArrayUpdateRecording();
 }
 
 // the slots of a draw's units for firstInstance: unit 0 | unit 1 << 12 (the
@@ -953,23 +993,33 @@ void VK_TextureArrayInit( void ) {
 	VkDescriptorPoolCreateInfo poolInfo;
 	VkDescriptorPoolSize poolSize;
 	VkDescriptorSetAllocateInfo allocInfo;
+	VkDescriptorSetLayout layouts[VK_TEXTURE_ARRAY_SETS];
 	int i;
 
 	poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	poolSize.descriptorCount = VK_MAX_TEXTURES * VK_MAX_FRAMES;
+	poolSize.descriptorCount = VK_MAX_TEXTURES * VK_TEXTURE_ARRAY_SETS * VK_MAX_FRAMES;
 	Com_Memset( &poolInfo, 0, sizeof( poolInfo ) );
 	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-	poolInfo.maxSets = VK_MAX_FRAMES;
+	poolInfo.maxSets = VK_TEXTURE_ARRAY_SETS * VK_MAX_FRAMES;
 	poolInfo.poolSizeCount = 1;
 	poolInfo.pPoolSizes = &poolSize;
 	VK_CHECK( qvkCreateDescriptorPool( vk.device, &poolInfo, NULL, &vk_textureArrayPool ) );
+	for ( i = 0; i < VK_TEXTURE_ARRAY_SETS; i++ ) {
+		layouts[i] = vk.textureArrayLayout;
+	}
 	for ( i = 0; i < VK_MAX_FRAMES; i++ ) {
+		vkFrame_t *frame = &vk.frames[i];
+
 		Com_Memset( &allocInfo, 0, sizeof( allocInfo ) );
 		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 		allocInfo.descriptorPool = vk_textureArrayPool;
-		allocInfo.descriptorSetCount = 1;
-		allocInfo.pSetLayouts = &vk.textureArrayLayout;
-		VK_CHECK( qvkAllocateDescriptorSets( vk.device, &allocInfo, &vk.frames[i].textureArraySet ) );
+		allocInfo.descriptorSetCount = VK_TEXTURE_ARRAY_SETS;
+		allocInfo.pSetLayouts = layouts;
+		VK_CHECK( qvkAllocateDescriptorSets( vk.device, &allocInfo, frame->textureArraySets ) );
+		frame->textureArraySet = frame->textureArraySets[0];
+		frame->textureArrayIndex = 0;
+		frame->textureArrayCount = 1;
+		frame->textureArrayBound = qfalse;
 		vk_textureArrayAll[i] = qtrue;
 	}
 	Com_Memset( vk_slotFreedSerial, 0, sizeof( vk_slotFreedSerial ) );
@@ -983,7 +1033,9 @@ void VK_TextureArrayShutdown( void ) {
 		vk_textureArrayPool = VK_NULL_HANDLE;
 	}
 	for ( i = 0; i < VK_MAX_FRAMES; i++ ) {
+		Com_Memset( vk.frames[i].textureArraySets, 0, sizeof( vk.frames[i].textureArraySets ) );
 		vk.frames[i].textureArraySet = VK_NULL_HANDLE;
+		vk.frames[i].textureArrayBound = qfalse;
 		vk_textureArrayAll[i] = qfalse;
 	}
 	Com_Memset( vk_textureArrayDirty, 0, sizeof( vk_textureArrayDirty ) );
@@ -1173,10 +1225,11 @@ void vk_resize_texture( image_t *image, int width, int height ) {
 	if ( old->lastUseSegment == vk.segment ) {
 		VK_FlushAndWait();
 	}
-	// (in TRANSFER_DST_OPTIMAL in the upload command buffer, or SHADER_READ_ONLY_OPTIMAL: given back after)
-	const VkImageLayout layout = old->uploadPending ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 	vk_slots[old->slot].texture = NULL;
 	vk_create_texture( image, width, height, 1, TEXFMT_RGBA8 );
+	// (in TRANSFER_DST_OPTIMAL in the upload command buffer, or SHADER_READ_ONLY_OPTIMAL: given back after; read
+	// after vk_create_texture, which may submit the frame so far and its uploads: VK_TextureArrayUpdateRecording)
+	const VkImageLayout layout = old->uploadPending ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 	VK_ImageBarrier( VK_GetUploadCommandBuffer(), old->image, VK_IMAGE_ASPECT_COLOR_BIT, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT );
 	// (a blit at the same size, nearest: a copy)

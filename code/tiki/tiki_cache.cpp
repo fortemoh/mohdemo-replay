@@ -44,6 +44,11 @@ con_map<pchar, dtikianim_t *> *tikianimcache;
 con_map<pchar, dtiki_t *>     *tikicache;
 static skeletor_c             *skel_entity_cache[TIKI_MAX_ENTITY_CACHE];
 
+// Paths that failed to load since the last TIKI_FreeAll. A player's custom
+// skin the server does not have was searched for and logged again at every
+// respawn; the next map forgets the list.
+static con_map<str, qboolean> *tikianimmissing;
+
 template<>
 int HashCode<pchar>(const pchar& key)
 {
@@ -119,6 +124,10 @@ dtikianim_t *TIKI_RegisterTikiAnimFlags(const char *path, qboolean use)
         tikianimcache = new con_map<pchar, dtikianim_t *>;
     }
 
+    if (tikianimmissing && tikianimmissing->find(filename)) {
+        return NULL;
+    }
+
     tiki = TIKI_LoadTikiAnim(filename);
     if (tiki) {
         if (use) {
@@ -127,6 +136,11 @@ dtikianim_t *TIKI_RegisterTikiAnimFlags(const char *path, qboolean use)
         }
 
         (*tikianimcache)[tiki->name] = tiki;
+    } else {
+        if (!tikianimmissing) {
+            tikianimmissing = new con_map<str, qboolean>;
+        }
+        (*tikianimmissing)[filename] = qtrue;
     }
 
     return tiki;
@@ -284,6 +298,10 @@ void TIKI_FreeAll()
         }
 
         tikianimcache->clear();
+    }
+
+    if (tikianimmissing) {
+        tikianimmissing->clear();
     }
 
     tiki_loading = true;

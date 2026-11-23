@@ -66,7 +66,6 @@ static void S_OMAHA_SaveData(soundsystemsavegame_t *pSave);
 static void S_OMAHA_ReLoad(soundsystemsavegame_t *pSave);
 static void S_OMAHA_LoadData(soundsystemsavegame_t *pSave);
 static qboolean S_OMAHA_MUSIC_LoadSoundtrackFile(const char *filename);
-static qboolean S_OMAHA_MUSIC_SongValid(const char *mood);
 static qboolean S_OMAHA_MUSIC_Loaded(void);
 static void S_OMAHA_Music_Update(void);
 static void S_OMAHA_MUSIC_SongEnded(void);
@@ -141,10 +140,6 @@ static constexpr int OM_STREAM_REFILL_MAX = 8;
 static constexpr float s_fVolumeGain = 1.f; // = 84.f;
 /* Miles sample volume was 0–127 after ×84; full-knob content ceiling = 127/84. */
 static constexpr float OM_CONTENT_VOLUME_MAX = 127.f / 84.f;
-/* Added in MoHAA Reloaded: the most one of its own sounds (OM_OWN_SOUNDS) may ask for, past that ceiling. */
-static constexpr float OM_OWN_VOLUME_MAX = 8.f;
-/* Added in MoHAA Reloaded: its own sounds' folder (the hitmarker's three, shipped beside the client), none of the game's. */
-static const char OM_OWN_SOUNDS[] = "sound/prom/hitmarkers/";
 
 static cvar_t *s_milesdriver;
 static cvar_t *s_show_cpu;
@@ -721,28 +716,6 @@ static float S_OMAHA_ClampContentVolume(float fVolume)
         return OM_CONTENT_VOLUME_MAX;
     }
     return fVolume;
-}
-
-/*
-==============
-S_OMAHA_ClampSfxVolume
-
-Added in MoHAA Reloaded: a one-shot's content volume. The game's sounds stay at
-the Miles ceiling (S_OMAHA_ClampContentVolume); MoHAA Reloaded's own
-(OM_OWN_SOUNDS) may ask for up to OM_OWN_VOLUME_MAX, so the hitmarker's 10 dB
-over the stock dings' is heard over the player's own shot (as the metal
-branch's driver lets its own sounds past the ceiling, SNM_VolumeOwn).
-==============
-*/
-static float S_OMAHA_ClampSfxVolume(const sfx_t *pSfx, float fVolume)
-{
-    if (Q_stricmpn(pSfx->name, OM_OWN_SOUNDS, sizeof(OM_OWN_SOUNDS) - 1)) {
-        return S_OMAHA_ClampContentVolume(fVolume);
-    }
-    if (fVolume < 0.f) {
-        return 1.f;
-    }
-    return fVolume < OM_OWN_VOLUME_MAX ? fVolume : OM_OWN_VOLUME_MAX;
 }
 
 /*
@@ -1803,9 +1776,8 @@ static void S_OMAHA_Start2DSound(
     }
     pChannel->force_free();
 
-    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. Changed in MoHAA Reloaded:
-     * its own sounds up to OM_OWN_VOLUME_MAX. */
-    fVolume = S_OMAHA_ClampSfxVolume(pSfx, fVolume);
+    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. */
+    fVolume = S_OMAHA_ClampContentVolume(fVolume);
 
     /* Added in Omaha: category mix multipliers; the category also feeds the music duck. */
     pChannel->iCategory = (int)S_OMAHA_ResolveCategory(pSfx, iEntChannel);
@@ -2309,9 +2281,8 @@ void S_OMAHA_StartSound(
         fMaxDist = fMinDist * 64;
     }
 
-    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. Changed in MoHAA Reloaded:
-     * its own sounds up to OM_OWN_VOLUME_MAX. */
-    fVolume = S_OMAHA_ClampSfxVolume(pSfx, fVolume);
+    /* Changed in Omaha: content ≤ 127/84 (Miles ceiling); OM_MIX_* may raise afterward. */
+    fVolume = S_OMAHA_ClampContentVolume(fVolume);
 
     /* Added in Omaha: category mix multipliers (local/other for FIRE). */
     cat = S_OMAHA_ResolveCategory(pSfx, iEntChannel);
@@ -4505,6 +4476,21 @@ void MUSIC_FlushCaches()
 
 /*
 ==============
+S_OMAHA_MUSIC_SongOff
+
+Added in MoHAA Reloaded: the song isn't played or read. s_ambientvolume 0: no
+song; Cinematic (s_cinematic 1): none of the soundtrack's ambiences, the songs
+not in sound/music/ (the maps' background loops of sound/amb_stereo), what the
+stock "cinematic" command was typed to stop; its music (the win music) plays on.
+==============
+*/
+static qboolean S_OMAHA_MUSIC_SongOff(const song_t *song)
+{
+    return s_ambientVolume->value <= 0 || (s_cinematic->integer && Q_stricmpn(song->path, "sound/music/", 12));
+}
+
+/*
+==============
 S_OMAHA_MUSIC_LoadSoundtrackFile
 ==============
 */
@@ -4653,9 +4639,9 @@ qboolean S_OMAHA_MUSIC_LoadSoundtrackFile(const char *filename)
             music_songs[music_numsongs].mood_num    = MusicMood_NameToNum(alias);
             music_numsongs++;
 
-            // read into memory and scanned (s_soundtrackCache); with
-            // s_ambientvolume 0 no song is opened (S_OMAHA_MUSIC_AmbientOff)
-            if (s_ambientVolume->value > 0) {
+            // read into memory and scanned (s_soundtrackCache); a song off
+            // isn't opened (S_OMAHA_MUSIC_SongOff, S_OMAHA_MUSIC_AmbientOff)
+            if (!S_OMAHA_MUSIC_SongOff(psong)) {
                 S_StreamMemory_Prefetch(psong->path);
             }
         }
@@ -4677,16 +4663,6 @@ qboolean S_OMAHA_MUSIC_LoadSoundtrackFile(const char *filename)
     }
 
     return true;
-}
-
-/*
-==============
-S_OMAHA_MUSIC_SongValid
-==============
-*/
-qboolean S_OMAHA_MUSIC_SongValid(const char *mood)
-{
-    return S_OMAHA_MUSIC_FindSong(mood) != -1;
 }
 
 /*
@@ -4713,7 +4689,8 @@ none is opened, decoded or mixed. The songs playing, fading or paused stop and
 free their streams, and the files read into memory at the load
 (s_soundtrackCache) are dropped. Raised again, the mood's song starts
 (music_currentsong -1: not playing) where it stopped; the triggered music
-(s_musicvolume) isn't the soundtrack and plays on.
+(s_musicvolume) isn't the soundtrack and plays on. Cinematic on, the
+ambiences playing stop the same way (S_OMAHA_MUSIC_SongOff), the music plays.
 ==============
 */
 static qboolean S_OMAHA_MUSIC_AmbientOff(void)
@@ -4722,6 +4699,17 @@ static qboolean S_OMAHA_MUSIC_AmbientOff(void)
 
     if (s_ambientVolume->value > 0) {
         music_ambientOff = qfalse;
+        if (s_cinematic->integer) {
+            for (i = 0; i < MAX_SOUNDSYSTEM_SONGS; i++) {
+                if ((omaha.chan_song[i].is_playing() || omaha.chan_song[i].is_paused())
+                    && S_OMAHA_MUSIC_SongOff(&music_songs[omaha.chan_song[i].song_number])) {
+                    S_OMAHA_MUSIC_StopChannel(i);
+                }
+            }
+            if (music_currentsong >= 0 && S_OMAHA_MUSIC_SongOff(&music_songs[music_currentsong])) {
+                music_currentsong = -1;
+            }
+        }
         return qfalse;
     }
 
@@ -4802,8 +4790,12 @@ static void S_OMAHA_MUSIC_UpdateSongs(void)
             S_OMAHA_MUSIC_StopAllSongs();
         }
     } else if (music_current_mood != currentsong) {
-        const char *mood = MusicMood_NumToName(music_current_mood);
-        if (S_OMAHA_MUSIC_SongValid(mood) && S_OMAHA_MUSIC_Loaded() && strlen(current_soundtrack)) {
+        const char *mood    = MusicMood_NumToName(music_current_mood);
+        const int   songnum = S_OMAHA_MUSIC_FindSong(mood);
+
+        // (a song off isn't tried: S_OMAHA_MUSIC_SongOff)
+        if (songnum != -1 && !S_OMAHA_MUSIC_SongOff(&music_songs[songnum]) && S_OMAHA_MUSIC_Loaded()
+            && strlen(current_soundtrack)) {
             Com_DebugPrintf("Playing %s.\n", mood);
             S_OMAHA_MUSIC_PlaySong(mood);
         }
@@ -5157,9 +5149,9 @@ qboolean S_OMAHA_MUSIC_PlaySong(const char *alias)
 
     song = &music_songs[songnum];
 
-    // Added in MoHAA Reloaded: s_ambientvolume 0, no song, and not taken as
-    // the current one (S_OMAHA_MUSIC_AmbientOff)
-    if (s_ambientVolume->value <= 0) {
+    // Added in MoHAA Reloaded: a song off (s_ambientvolume 0, Cinematic's
+    // ambiences) isn't played or taken as the current one (S_OMAHA_MUSIC_SongOff)
+    if (S_OMAHA_MUSIC_SongOff(song)) {
         return true;
     }
 

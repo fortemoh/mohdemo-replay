@@ -1,0 +1,25 @@
+MoHAA Reloaded's dedicated server, version @VERSION@
+================================================
+
+The server for Medal of Honor: Allied Assault, Spearhead and Breakthrough. The game data is not
+included: the server needs a retail copy's main/ (Pak0.pk3 to Pak6.pk3), and mainta/ or maintt/ for
+Spearhead or Breakthrough. Windows needs the Microsoft Visual C++ 2015-2022 Redistributable (x64):
+https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+1. Copy mohreloaded-server and game.so (Windows: mohreloaded-server.exe and game.dll) into the game
+   folder, next to main/.
+
+2. Start it there, with your server's config in main/ (server.cfg here):
+     ./mohreloaded-server +set com_target_game 0 +exec server.cfg    Allied Assault
+     ./mohreloaded-server +set com_target_game 1 +exec server.cfg    Spearhead
+     ./mohreloaded-server +set com_target_game 2 +exec server.cfg    Breakthrough
+   On Windows: mohreloaded-server.exe with the same arguments.
+
+3. Let UDP port 12203 through the firewall (+set net_port changes it).
+
+The settings, with an example config:
+https://github.com/fortemoh/MoHAA-Reloaded/blob/vulkan/docs/markdown/02-running/02-running-server.md
+
+MoHAA Reloaded is free software under the GNU General Public License, version 2 (COPYING.txt).
+Built from commit @COMMIT@ of https://github.com/fortemoh/MoHAA-Reloaded (the full source code of
+this build) by its CI.

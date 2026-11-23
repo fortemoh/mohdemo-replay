@@ -1810,8 +1810,13 @@ qboolean Weapon::ReadyToFire(firemode_t mode, qboolean playsound)
         return qtrue;
     }
 
-    // Make sure the weapon is in the ready state and the weapon has ammo
-    if (m_eLastFireMode != mode || level.time > (m_fLastFireTime + FireDelay(mode))) {
+    // Make sure the weapon is in the ready state and the weapon has ammo.
+    // Add the delay in double: the original game keeps this sum on the x87
+    // stack unrounded, and rounding it to float makes a delay that is a
+    // whole number of frames ready one frame late more often.
+    // Switching fire mode skips the delay only in Spearhead and Breakthrough.
+    if ((g_target_game > TG_MOH && m_eLastFireMode != mode)
+        || level.time > (double)m_fLastFireTime + (double)FireDelay(mode)) {
         if (HasAmmoInClip(mode)) {
             if (m_fMaxFireMovement >= 1.f) {
                 return qtrue;

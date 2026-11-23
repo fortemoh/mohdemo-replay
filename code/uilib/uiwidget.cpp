@@ -341,6 +341,15 @@ Event EV_Layout_WidthCvar
     "The widget's shape drawn the cvar's fraction of its width, about its middle (or from its left: left)"
 );
 
+Event EV_Layout_Shadow
+(
+    "shadow",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "The widget's shape with the drop shadow of the faces' s under it"
+);
+
 Event EV_Layout_FlowAfter
 (
     "flowafter",
@@ -477,6 +486,7 @@ CLASS_DECLARATION(USignal, UIWidget, NULL) {
     {&EV_Layout_AlphaCvar,          &UIWidget::LayoutAlphaCvar         },
     {&EV_Layout_ColorCvar,          &UIWidget::LayoutColorCvar         },
     {&EV_Layout_WidthCvar,          &UIWidget::LayoutWidthCvar         },
+    {&EV_Layout_Shadow,             &UIWidget::LayoutShadow            },
     {&EV_Layout_FlowAfter,          &UIWidget::LayoutFlowAfter         },
     {&EV_Layout_FlowBefore,         &UIWidget::LayoutFlowBefore        },
     {&EV_Layout_FlowBelow,          &UIWidget::LayoutFlowBelow         },
@@ -638,6 +648,7 @@ UIWidget::UIWidget()
     m_shapeHandle = 0;
     m_shapeDynamic = false;
     m_widthLeft   = false;
+    m_shadow      = false;
     memset(m_cvars, 0, sizeof(m_cvars));
     m_colorCount = -1;
     VectorSet2D(m_anchor, -1, -1);
@@ -823,26 +834,30 @@ void UIWidget::PropogateCoordinateSystem(void)
     }
 }
 
-void UIWidget::set2D(void)
+// Changed: margin, the window and the scissor that many pixels wider all
+// round, its place on the screen the same (a shape's shadow past its box)
+void UIWidget::set2D(float margin)
 {
+    const float m = margin;
+
     uii.Rend_Set2D(
-        m_screenframe.pos.x,
-        uid.vidHeight - (int)(m_screenframe.size.height + m_screenframe.pos.y),
-        m_screenframe.size.width,
-        m_screenframe.size.height,
-        m_clippedorigin.x,
-        m_clippedorigin.x + m_screenframe.size.width,
-        m_clippedorigin.y + m_screenframe.size.height,
-        m_clippedorigin.y,
+        m_screenframe.pos.x - m,
+        uid.vidHeight - (int)(m_screenframe.size.height + m_screenframe.pos.y) - m,
+        m_screenframe.size.width + 2 * m,
+        m_screenframe.size.height + 2 * m,
+        m_clippedorigin.x - m,
+        m_clippedorigin.x + m_screenframe.size.width + m,
+        m_clippedorigin.y + m_screenframe.size.height + m,
+        m_clippedorigin.y - m,
         -1.0,
         1.0
     );
 
     uii.Rend_Scissor(
-        m_clippedframe.pos.x,
-        uid.vidHeight - (int)(m_clippedframe.size.height + m_clippedframe.pos.y),
-        m_clippedframe.size.width,
-        m_clippedframe.size.height
+        m_clippedframe.pos.x - m,
+        uid.vidHeight - (int)(m_clippedframe.size.height + m_clippedframe.pos.y) - m,
+        m_clippedframe.size.width + 2 * m,
+        m_clippedframe.size.height + 2 * m
     );
 
     //
@@ -1278,6 +1293,11 @@ void UIWidget::LayoutWidthCvar(Event *ev)
     m_widthLeft = ev->NumArgs() > 1 && !str::icmp(ev->GetString(2), "left");
 }
 
+void UIWidget::LayoutShadow(Event *ev)
+{
+    m_shadow = true;
+}
+
 /*
 ================
 CvarOf
@@ -1410,6 +1430,8 @@ $cvar in them changes, as a new picture), drawn, turned by rotatecvar
 void UIWidget::DrawShapes(void)
 {
     const int w = (int)(m_frame.size.width + 0.5f), h = (int)(m_frame.size.height + 0.5f);
+    // (with the shadow: baked m pixels wider all round, drawn past the box)
+    const int m = m_shadow ? UI_ShadowMargin(m_vVirtualScale[0]) : 0;
 
     BakeShapes();
     if (!m_shapeHandle) {
@@ -1425,27 +1447,43 @@ void UIWidget::DrawShapes(void)
         color[3] *= m_local_alpha;
         uii.Rend_SetColor(color);
     }
+    if (m) {
+        set2D(m);
+    }
     if (m_widthCvar.length()) {
         // a fraction of its width, about its middle or from its left
         const float fw = CvarOf(3, m_widthCvar) ? floorf(w * Q_clamp_float(m_cvars[3]->value, 0.0f, 1.0f) + 0.5f) : 0.0f;
+        const float x  = m_widthLeft ? 0 : floorf((w - fw) * 0.5f);
 
-        if (fw >= 1.0f) {
-            uii.Rend_DrawPicStretched(m_widthLeft ? 0 : floorf((w - fw) * 0.5f), 0, fw, h, 0, 0, 1, 1, m_shapeHandle);
+        if (fw >= 1.0f && !m) {
+            uii.Rend_DrawPicStretched(x, 0, fw, h, 0, 0, 1, 1, m_shapeHandle);
+        } else if (fw >= 1.0f) {
+            // the shadow's ends as baked, the middle stretched
+            const float e = m / (float)(w + 2 * m);
+
+            uii.Rend_DrawPicStretched(x - m, -m, m, h + 2 * m, 0, 0, e, 1, m_shapeHandle);
+            uii.Rend_DrawPicStretched(x, -m, fw, h + 2 * m, e, 0, 1 - e, 1, m_shapeHandle);
+            uii.Rend_DrawPicStretched(x + fw, -m, m, h + 2 * m, 1 - e, 0, 1, 1, m_shapeHandle);
         }
     } else if (m_rotateCvar.length()) {
         const float a = CvarOf(2, m_rotateCvar) ? DEG2RAD(m_cvars[2]->value) : 0.0f;
 
-        uii.Rend_DrawPicStretched2(0, 0, w, h, 0, 0, 1, 1, cosf(a), sinf(a), m_shapeHandle);
+        uii.Rend_DrawPicStretched2(-m, -m, w + 2 * m, h + 2 * m, 0, 0, 1, 1, cosf(a), sinf(a), m_shapeHandle);
     } else {
-        uii.Rend_DrawPicStretched(0, 0, w, h, 0, 0, 1, 1, m_shapeHandle);
+        uii.Rend_DrawPicStretched(-m, -m, w + 2 * m, h + 2 * m, 0, 0, 1, 1, m_shapeHandle);
+    }
+    if (m) {
+        set2D();
     }
 }
 
 void UIWidget::BakeShapes(void)
 {
     const int   w = (int)(m_frame.size.width + 0.5f), h = (int)(m_frame.size.height + 0.5f);
-    const char *layers[32];
-    str         text, resolved[32];
+    // (the shadow: the layers in the box, m pixels in from the picture's edges, the shadow under them)
+    const int   m = m_shadow ? UI_ShadowMargin(m_vVirtualScale[0]) : 0;
+    const char *layers[33];
+    str         text, resolved[33];
     int         i, n = Q_min(m_shapes.NumObjects(), 32);
 
     // (the same lines, size and pictures: what was baked)
@@ -1455,6 +1493,11 @@ void UIWidget::BakeShapes(void)
     for (i = 0; i < n; i++) {
         const char *p = m_shapes.ObjectAt(i + 1).c_str();
 
+        if (m) {
+            const float u = m / m_vVirtualScale[0];
+
+            resolved[i] = va("in %gpx %gpx -%gpx -%gpx ", u, u, u, u);
+        }
         // $name: the cvar's value
         while (*p) {
             if (*p == '$') {
@@ -1481,11 +1524,14 @@ void UIWidget::BakeShapes(void)
         text += resolved[i];
         text += "\n";
     }
+    if (n && m) {
+        layers[n++] = "shadow";
+    }
     if (n && UI_BakeAhead()) {
         // (made ahead: baked, and kept, when asked for again)
-        UI_BakeShape("w", layers, n, w, h, m_vVirtualScale[0]);
+        UI_BakeShape("w", layers, n, w + 2 * m, h + 2 * m, m_vVirtualScale[0]);
     } else if (n && (m_shapeStamp != UI_BakeStamp() || w != m_shapeW || h != m_shapeH || text != m_shapeText)) {
-        m_shapeHandle = UI_BakeShape("w", layers, n, w, h, m_vVirtualScale[0]);
+        m_shapeHandle = UI_BakeShape("w", layers, n, w + 2 * m, h + 2 * m, m_vVirtualScale[0]);
         m_shapeStamp  = UI_BakeStamp();
         m_shapeW      = w;
         m_shapeH      = h;

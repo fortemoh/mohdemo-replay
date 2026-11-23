@@ -1,7 +1,7 @@
 /*
  * libstacks.so -- wall-clock stack sampler for the game's main thread
  *
- *   STACKS_OUT=file LD_PRELOAD=libstacks.so ./openmohaa ...
+ *   STACKS_OUT=file LD_PRELOAD=libstacks.so ./mohreloaded ...
  *
  * Interrupts the thread that loaded it (the main thread) every
  * STACKS_INTERVAL_US microseconds (default 1000) of wall-clock time on

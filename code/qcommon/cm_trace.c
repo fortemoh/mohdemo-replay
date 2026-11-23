@@ -20,6 +20,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "cm_local.h"
+#include "cm_patch.h"
 
 // always use bbox vs. bbox collision and never capsule vs. bbox or vice versa
 //#define ALWAYS_BBOX_VS_BBOX
@@ -772,6 +773,27 @@ void CM_TraceThroughBrush( traceWork_t *tw, cbrush_t *brush ) {
 
 /*
 ================
+CM_TraceMissesBounds
+
+The swept box stays clear of mins maxs on an axis by more than the clip
+epsilon (and a unit for rounding), so nothing inside them can touch the
+trace: a brush's first six sides are its bounds, and a patch's facets are
+beveled inside its bounds (as CM_TestBoxInBrush and
+CM_PositionTestInPatchCollide already assume): the same result, without
+tracing it. Only for a box: a capsule (sphere.use) can reach past the box
+on a pitched or rolled bmodel
+================
+*/
+static qboolean CM_TraceMissesBounds( const traceWork_t *tw, const vec3_t mins, const vec3_t maxs ) {
+	const float margin = SURFACE_CLIP_EPSILON + 1.0f;
+
+	return tw->bounds[ 0 ][ 0 ] > maxs[ 0 ] + margin || tw->bounds[ 1 ][ 0 ] < mins[ 0 ] - margin
+		|| tw->bounds[ 0 ][ 1 ] > maxs[ 1 ] + margin || tw->bounds[ 1 ][ 1 ] < mins[ 1 ] - margin
+		|| tw->bounds[ 0 ][ 2 ] > maxs[ 2 ] + margin || tw->bounds[ 1 ][ 2 ] < mins[ 2 ] - margin;
+}
+
+/*
+================
 CM_TraceToLeaf
 ================
 */
@@ -780,6 +802,7 @@ void CM_TraceToLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 	cbrush_t *b;
 	cPatch_t *patch;
 	cTerrain_t *terrain;
+	const qboolean box = !sphere.use;	// CM_TraceMissesBounds: not a capsule
 
 	// test box position against all brushes in the leaf
 	for( k = 0; k<leaf->numLeafBrushes; k++ ) {
@@ -790,6 +813,10 @@ void CM_TraceToLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 		b->checkcount = cm.checkcount;
 
 		if( !( b->contents & tw->contents ) ) {
+			continue;
+		}
+
+		if( box && CM_TraceMissesBounds( tw, b->bounds[ 0 ], b->bounds[ 1 ] ) ) {
 			continue;
 		}
 
@@ -816,6 +843,10 @@ void CM_TraceToLeaf( traceWork_t *tw, cLeaf_t *leaf ) {
 			patch->checkcount = cm.checkcount;
 
 			if( !( patch->contents & tw->contents ) ) {
+				continue;
+			}
+
+			if( box && CM_TraceMissesBounds( tw, patch->pc->bounds[ 0 ], patch->pc->bounds[ 1 ] ) ) {
 				continue;
 			}
 

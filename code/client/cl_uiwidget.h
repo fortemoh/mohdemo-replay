@@ -32,7 +32,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <vector>
 
 /*
-ReloadedMenu: "screen weapon|esc|scoreboard|loading|main|confirm|end|connect|options|hdrblack|hdrpeak",
+ReloadedMenu: "screen weapon|team|esc|scoreboard|loading|main|confirm|end|connect|options|hdrblack|hdrpeak",
 "layer back|front". The back layer draws what is under the 3D model views and
 places them (labels the menu names); the front layer draws what is over
 them and takes the mouse and the keys. Both lay the screen out alike from
@@ -40,13 +40,36 @@ the same data
 */
 
 // (SCR_HDRBLACK, SCR_HDRPEAK: the HDR calibration's, r_hdrOutputTest: the black level's, the peak's)
-enum { SCR_WEAPON, SCR_ESC, SCR_SCOREBOARD, SCR_LOADING, SCR_MAIN, SCR_CONFIRM, SCR_END, SCR_CONNECT, SCR_OPTIONS, SCR_HDRBLACK, SCR_HDRPEAK, SCR_NUM };
-
+enum {
+    SCR_WEAPON,
+    SCR_TEAM,
+    SCR_ESC,
+    SCR_SCOREBOARD,
+    SCR_LOADING,
+    SCR_MAIN,
+    SCR_CONFIRM,
+    SCR_END,
+    SCR_CONNECT,
+    SCR_OPTIONS,
+    SCR_HDRBLACK,
+    SCR_HDRPEAK,
+    SCR_NUM
+};
 
 typedef struct {
     int x, y, w, h; // pixels
     int id;
 } rlHit_t;
+
+// a tile of the in-game block (the weapon page's, the Esc menu's): its label in the corner (a state, a class; warn:
+// a refusal, red), its picture (an outline, picW across at most, 0: as in a tile two a row; NULL: the caller draws it),
+// its name under it, in the colours of team (-1 none); off: dimmed, not chosen; marked: the last pick's dot
+typedef struct {
+    const char *label, *name, *outline;
+    float       picW;
+    int         team;
+    bool        off, warn, marked;
+} rlTile_t;
 
 struct rlInfo_t;
 
@@ -71,7 +94,8 @@ public:
     }
 
     void SetScreen(Event *ev);
-    void SetLayer(Event *ev) { m_back = !str::icmp(ev->GetString(1), "back"); }
+    void SetLayer(Event *ev);
+    void AllowKeys(void);
     void MouseUp(Event *ev);
     void MouseButtons(Event *ev);
     void Draw(void) override;
@@ -88,16 +112,25 @@ public:
     int  HitAt(int x, int y);
     bool Hot(int id) const { return m_focus == id; }
     void Choose(int id);
-    void PlaceFigure(const rlView_t& v, float cx, float headY, float width);
+    // a figure's view (a label of the menu's, its modelscale scale, mid model units up from his feet in its middle)
+    // placed with his head's top at headY, k units a model unit, width wide about cx
+    void PlaceFigure(const rlView_t& v, const char *name, float scale, float mid, float cx, float headY, float k, float width);
     // a view (a label of the menu's) placed over x y w h, in units (none across: hidden)
     void PlaceView(const rlView_t& v, const char *name, float x, float y, float w, float h);
+    // the in-game block's tile at x y w h (its hit id), drawn; the picture's middle (the caller's to draw when
+    // t.outline is NULL) is x + w / 2, y + h * RL_TILEPIC
+    void Tile(const rlView_t& v, float x, float y, float w, float h, int id, const rlTile_t& t);
+    // a side's model cycler, its middle at cx cy, w across h high: the chevrons at its ends (idPrev, idPrev + 2), the
+    // model previewed between, its place in the list after it; false: no other model to cycle to (the chevrons off)
+    bool ModelCycler(const rlView_t& v, float cx, float cy, float w, float h, int side, int idPrev, float nameSize, float countSize);
 
     void DrawWeapon(const rlView_t& v, const rlInfo_t& in);
+    void DrawTeam(const rlView_t& v, const rlInfo_t& in);
     void DrawEsc(const rlView_t& v, const rlInfo_t& in);
     void DrawScoreboard(const rlView_t& v, const rlInfo_t& in);
     void DrawEnd(const rlView_t& v, const rlInfo_t& in);
 
-    // the main menu, its confirmations, the connect's box and Options over the game (cl_uimain.cpp)
+    // the main menu, its confirmations, the connect screen and Options over the game (cl_uimain.cpp)
     bool     Main(void) const { return m_screen == SCR_MAIN || m_screen == SCR_CONFIRM || m_screen == SCR_CONNECT || m_screen == SCR_OPTIONS; }
     void     DrawMain(const rlView_t& v);
     void     DrawOptions(const rlView_t& v);
@@ -118,11 +151,8 @@ public:
     void     HdrTick(void);
 };
 
-// Options over the Esc menu clicked off its page, at x y (a ReloadedMenu's, all of them the screen's): the Esc menu's
-// item there chosen, Options closed first (cl_uimenus.cpp); false: none there
-bool        RL_EscClick(int x, int y);
-// the page over the Esc menu (ui/reloaded_options.urc: the main menu's page beside the Esc menu's rail): Options, or
-// VOTE's (Spearhead's and Breakthrough's matches; cl_uimain.cpp)
+// the page over the Esc menu (ui/reloaded_options.urc: the main menu's page over the game, the Esc menu's block
+// hidden under it): Options, or CALL A VOTE's (Spearhead's and Breakthrough's matches; cl_uimain.cpp)
 enum { RL_OVER_OPTIONS, RL_OVER_VOTE };
 // that page shown (over the Esc menu up, else the Esc menu opened, the page shown over it from its Tick: RL_OverTick);
 // the one shown, -1 none
@@ -135,23 +165,32 @@ void        RL_VoteRead(int part, const char *text);
 // KEYS: Options' KEYS tab (in a game the Options over the Esc menu's, the main menu's page kept unless it is up)
 enum { RL_SHOW_PLAY, RL_SHOW_MISSIONS, RL_SHOW_SAVES, RL_SHOW_KEYS };
 void        RL_MainShow(int what);
-// the rail (the main menu's, the Esc menu's; cl_uimain.cpp): the lockup at its head (head: the match under it, a title
-// over two lines), the items from 380 down (on: the id of the one filled brass, -1 none), the foot's up from its foot (a
-// glyph before each; the last muted, those over it red)
+// the Esc menu's QUIT GAME (quit) or DISCONNECT (LEAVE MISSION in a mission) asked first: the main menu's confirmation
+// over it; DISCONNECT's answer shows the main menu on its page show (RL_SHOW_*) after leaving
+void        RL_EscConfirm(bool quit, int show);
+// the in-game block's width (the Esc menu's, the weapon page's) in v's units (a view at the menus' size)
+float       RL_BlockWidth(const rlView_t& v);
+// an item of the main menu's top bar (its pages, its foot's: a glyph before each; cl_uimain.cpp)
 typedef struct {
     int         id;
     const char *label, *glyph;
-} rlRailItem_t;
-void        RL_Rail(UIReloadedMenu *m, const rlView_t& v, const rlRailItem_t *items, int n, int on, const rlRailItem_t *foot, int nf,
-                    const std::string *head = NULL);
+} rlBarItem_t;
 // the Esc menu's caption in a mission ("MISSION 2  ·  SCUTTLING THE U-529  ·  MEDIUM")
 std::string RL_MissionLine(const char *map);
 // a Spearhead or Breakthrough level's painting (its load screen's, else its mission's; the missions' crop),
 // registered, the shape its aspect; 0 none (Allied Assault's: the end screen's own)
 qhandle_t   RL_LevelPainting(const char *map, float *aspect);
-// the main menu's button (primary: brass; off: dimmed; lit while m's hot item); its hit (id) added to m
+// Omaha's slant (the tabs' slashes', about 19 degrees): an edge leaning forward, its top this much right of its foot for
+// each unit of its height; a box's edges slanted: none, its left, its right, both
+#define RL_SLANT 0.34f
+enum { RL_SL_NONE, RL_SL_LEFT, RL_SL_RIGHT, RL_SL_BOTH };
+// a box with its left and/or right edge slanted (edges: RL_SL_*), the slant's middle on the box's edge (boxes side by
+// side tile, the gaps between them as wide at every height); a straight edge as RL_Box's
+void        RL_SlantBox(const rlView_t& v, float x, float y, float w, float h, int edges, rlColor_t c);
+// the main menu's button (primary: brass; off: dimmed; lit while m's hot item; edges: RL_SL_*, those slanted; its label
+// size high, the in-game block's its names' size); its hit (id) added to m
 void        RL_Button(UIReloadedMenu *m, const rlView_t& v, float x, float y, float w, float h, const char *label, bool primary, int id,
-                      bool off = false);
+                      bool off = false, int edges = RL_SL_BOTH, float size = 18.0f);
 
 // the player models a side can pick, in the order of their names (PM_FilenameToDisplayname)
 typedef struct {
@@ -179,9 +218,25 @@ byte       *RL_MenuPhoto(class Menu *stock, int *width, int *height);
 // a photo (RGBA, shown photo wide a unit high) as a screen-shaped texture rows
 // texels high, blurred, its light times dim, darker to the corners, registered as name
 qhandle_t   RL_Blur(const char *name, const byte *pic, int pw, int ph, int rows, float dim, float photo = 4.0f / 3.0f);
-// the connect's box shown for a stock error menu (its name: errormessage, servertimeout, ...)
+// the connect screen shown for a stock error menu (its name: errormessage, servertimeout, ...)
 void        RL_ConnectError(const char *stock);
 // the server's last word (its "disconnect" command's reason)
 void        RL_ConnectDropped(const char *reason);
-// a map of the server's loads (its serverinfo; the map "dm/mohdm6"): its name and map for a drop's box
+// a map of the server's loads (its serverinfo; the map "dm/mohdm6"): its name and map, for the connect screen should
+// it drop the player
 void        RL_ConnectLoaded(const char *info, const char *map);
+// the load screen's layout, one screen from a connect to the game (the load screen's, the connect screen's;
+// cl_uimenus.cpp): the card 4:3, 720 wide at most, in the middle (x y w h), the bar under it, the line under the bar
+typedef struct {
+    float x, y, w, h;
+    float bar, line;
+} rlLoadLayout_t;
+rlLoadLayout_t RL_LoadLayout(const rlView_t& v);
+// the load screen's look on it: map, the pictures of the map the load screen or RL_LoadMap made (its blurred copy
+// over the screen, its photo in the card), else the card empty over the caller's backdrop; framed; the title over the
+// card on the left (made smaller, then cut, to leave the word its room), the word on its right in wordColor; the bar
+// (frac how far, < 0 a dash sweeping)
+void        RL_LoadDraw(const rlView_t& v, const rlLoadLayout_t& l, bool map, const char *title, const char *word, rlColor_t wordColor,
+                        float frac);
+// the load screen's pictures made for a map ("dm/mohdm6") ahead of its load: the connect screen's, the browser's map
+void        RL_LoadMap(const char *map);

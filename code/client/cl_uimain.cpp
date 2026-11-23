@@ -23,10 +23,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_uimain.cpp: the Reloaded main menu (Added), ui/reloaded_main.urc, shown
 // for the stock "main" (cl_uimenus.cpp's aliases), its confirmations (Quit,
 // Disconnect, Delete), ui/reloaded_confirm.urc, shown over it, the
-// connect's box, ui/reloaded_connect.urc (CONNECTING), and the HDR
+// connect screen, ui/reloaded_connect.urc (CONNECTING), and the HDR
 // calibration's screens, ui/hdr_calibrate_*.urc. Project: Omaha's
-// screens, stripped down, in our look: a side rail (the star and the
-// wordmark, MULTIPLAYER / CAMPAIGN / HOST / OPTIONS, QUIT at its foot) over
+// screens, stripped down, in our look: a top bar (the star and the
+// wordmark, MULTIPLAYER / CAMPAIGN / HOST / OPTIONS, QUIT at its right) over
 // maps' photos blurred once to the screen's shape (no map loaded behind
 // it); MULTIPLAYER is Omaha's server browser (the game's master server
 // lists, queried only while the menu is up) and its profile (the name, each
@@ -34,13 +34,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // "axis"); CAMPAIGN the single player missions and saved games.
 //
 // Sizes are design units (cl_uidraw.h): a 1080-line screen, the width what
-// the screen's shape gives; the screens beside the rail from x 480 (420
-// under 1700 units across), 48 from the edges, 1640 across at most.
+// the screen's shape gives; the screens under the top bar, 48 from it and
+// from the edges, 1824 across at most (16:9's), in the middle.
 
 #include "client.h"
 #include "cl_ui.h"
 #include "cl_uiwidget.h"
 #include "cl_uimenus.h"
+#include "cl_mouseturn.h"
 #include "../uilib/uibake.h"
 #include "../gamespy/goaceng.h"
 #include "../gamespy/sv_gamespy.h"
@@ -55,25 +56,36 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <tuple>
 #include <vector>
 
-// the palette's panels (Omaha's surfaces, ours)
-static const rlColor_t RL_PANEL = {10 / 255.0f, 11 / 255.0f, 12 / 255.0f, 218 / 255.0f};
+// the front end's palette (Project: Omaha's navy panels, cool greys; the
+// accent the game's, RL_BRASS; the in-game screens keep cl_uidraw.h's):
+// text, softer, labels, off
+static const rlColor_t RL_FG       = {234 / 255.0f, 237 / 255.0f, 242 / 255.0f, 1};
+static const rlColor_t RL_FG_SOFT  = {194 / 255.0f, 200 / 255.0f, 210 / 255.0f, 1};
+static const rlColor_t RL_FG_MUTED = {140 / 255.0f, 148 / 255.0f, 160 / 255.0f, 1};
+static const rlColor_t RL_FG_FAINT = {96 / 255.0f, 103 / 255.0f, 114 / 255.0f, 1};
+// the favourites' star (Omaha's gold, whatever the game's accent)
+static const rlColor_t RL_GOLD = {228 / 255.0f, 182 / 255.0f, 47 / 255.0f, 1};
+// the panels (navy), their heads, their lines
+static const rlColor_t RL_PANEL = {10 / 255.0f, 12 / 255.0f, 17 / 255.0f, 236 / 255.0f};
 static const rlColor_t RL_HEAD  = {0, 0, 0, 70 / 255.0f};
 static const rlColor_t RL_LINE  = {1, 1, 1, 24 / 255.0f};
-static const rlColor_t RL_SOFT  = {200 / 255.0f, 196 / 255.0f, 186 / 255.0f, 1};
-static const rlColor_t RL_SEL   = {222 / 255.0f, 178 / 255.0f, 80 / 255.0f, 44 / 255.0f};
+// the secondary buttons (REFRESH, DEFAULTS, CANCEL), the choices not chosen, the model pickers: dark, lighter under the mouse
+static const rlColor_t RL_DARK     = {30 / 255.0f, 34 / 255.0f, 42 / 255.0f, 1};
+static const rlColor_t RL_DARK_HOT = {44 / 255.0f, 50 / 255.0f, 62 / 255.0f, 1};
 
 #define RL_GLYPH(name) RL_OUTLINES "glyphs/" name ".svg"
 
-// the lines things line up on: the screens 48 from the screen's edges, 16
-// inside their panels, their foot a 64-unit row of controls 42 high
-// (REFRESH, JOIN, the model pickers) whose middle the rail's foot shares;
-// the rail's buttons from x 54 (the logo's left edge too), their labels from 72
-#define RL_EDGE   48.0f
-#define RL_PAD    16.0f
-#define RL_FOOT   64.0f
-#define RL_CTRL   42.0f
-#define RL_RAILX  54.0f
-#define RL_LABELX 72.0f
+// the lines things line up on: the screens 48 from the screen's edges (and
+// the top bar's foot), 16 inside their panels, their foot a 64-unit row of
+// controls 42 high (REFRESH, JOIN, the model pickers)
+#define RL_EDGE 48.0f
+#define RL_PAD  16.0f
+#define RL_FOOT 64.0f
+#define RL_CTRL 42.0f
+// the main menu's top bar this high, its lockup this high, its pages' labels this size
+#define RL_BAR     84.0f
+#define RL_BARLOGO 56.0f
+#define RL_BARTEXT 22.0f
 
 enum { PAGE_PLAY, PAGE_CAMPAIGN, PAGE_HOST, PAGE_OPTIONS, PAGE_VOTE }; // (the vote's only over the Esc menu)
 enum { CT_MISSIONS, CT_SAVES }; // Campaign's tabs
@@ -81,7 +93,7 @@ enum { HF_TIME, HF_FRAG, HF_PLAYERS, HF_BOTS, HF_NAME, HF_NUM }; // Host's field
 // the field typed in: the browser's search, the name, a crosshair code, a slider's value, a vote's number or text,
 // Host's (F_HOST + its)
 enum { F_NONE, F_SEARCH, F_NAME, F_CODE, F_VALUE, F_VOTE, F_HOST };
-enum { OT_CONTROLS, OT_VIDEO, OT_AUDIO, OT_GAMEPLAY, OT_HUD, OT_NUM }; // Options' tabs (the mouse and the keys: CONTROLS)
+enum { OT_CONTROLS, OT_VIDEO, OT_AUDIO, OT_GAMEPLAY, OT_HUD, OT_NUM }; // Options' tabs (the keys: CONTROLS; the mouse: GAMEPLAY)
 
 // the browser's gametype tabs (Omaha's; round-based, Tug of War and Liberation under OTHER) and sortable columns
 enum { TAB_ALL, TAB_FFA, TAB_TDM, TAB_OBJ, TAB_OTHER, TAB_NUM };
@@ -188,7 +200,14 @@ static struct {
     int         confirm; // what the confirmation asks: ID_QUIT, ID_DISCONNECT, ID_CDELETE or ID_KEYMOVE
     int         clickAt;
     int         serial; // changes with all of the above
-} rl_mm = {PAGE_PLAY, F_NONE, "", "", TAB_ALL, COL_PING, true, "", 0, 1, -1, 0, "", ID_QUIT, 0, 0};
+} rl_mm = {PAGE_PLAY, F_NONE, "", "", TAB_ALL, COL_PLAYERS, false, "", 0, 1, -1, 0, "", ID_QUIT, 0, 0}; // (the most players first)
+
+// the confirmation's asker: esc, the Esc menu (RL_EscConfirm: the box as wide as its block; DISCONNECT's answer shows
+// the main menu on the page show after leaving), else the main menu
+static struct {
+    bool esc;
+    int  show;
+} rl_ask = {false, RL_SHOW_PLAY};
 
 static std::set<std::string> rl_favs;
 static cvar_t               *ui_favoriteservers;
@@ -203,6 +222,18 @@ static struct {
 static void RL_Changed(void)
 {
     rl_mm.serial++;
+}
+
+// the confirmation shown over the menu up, asking what (ID_QUIT, ID_DISCONNECT, ID_CDELETE, ID_KEYMOVE; rl_ask's
+// esc and show: the Esc menu's)
+static void RL_Ask(int what, bool esc = false, int show = RL_SHOW_PLAY)
+{
+    rl_mm.confirm = what;
+    rl_ask.esc    = esc;
+    rl_ask.show   = show;
+    // (its words drawn again: the last confirmation's are cached)
+    RL_Changed();
+    menuManager.ShowMenu("reloaded_confirm");
 }
 
 static const char *RL_SvString(GServer s, const char *key)
@@ -409,13 +440,15 @@ static void RL_SvShown(void)
             c = x.ping - y.ping;
             break;
         }
-        if (!c) {
-            c = Q_stricmp(x.name.c_str(), y.name.c_str());
+        if (c) {
+            return rl_mm.asc ? c < 0 : c > 0;
         }
-        if (!c) {
-            c = x.addr.compare(y.addr);
+        // a tie whichever way: as many players, the lowest ping first; then by name, A first
+        if (rl_mm.sort == COL_PLAYERS && x.ping != y.ping) {
+            return x.ping < y.ping;
         }
-        return rl_mm.asc ? c < 0 : c > 0;
+        c = Q_stricmp(x.name.c_str(), y.name.c_str());
+        return c ? c < 0 : x.addr.compare(y.addr) < 0;
     });
     rl_mm.top = Q_max(0, Q_min(rl_mm.top, (int)rl_vis.rows.size() - rl_mm.fit));
 }
@@ -450,15 +483,20 @@ static void RL_SvFavorite(const std::string& addr)
 
 CONNECTING
 
-The connect's box (shown for the stock "connecting" and the menus its end
-opens: cl_uimenus.cpp's aliases): the server's name (its address while
-not known), its map's photo, its mode, players and ping, from the
-browser's row on its JOIN, else asked of the server once as the connect
-begins (getinfo); the steps and CANCEL. A refusal or a drop in the same
-box: what happened in plain words, RETRY and BACK, the password typed
-there when the server wants one. Whatever ends a connect, the main menu
-shows Multiplayer next. Over the main menu's backdrop; black for the
-game's own server (a mission's, Host's), joined in a moment
+The connect screen (shown for the stock "connecting" and the menus its
+end opens: cl_uimenus.cpp's aliases), the load screen's first stage: one
+screen from a connect to the game, the same layout and pictures
+(RL_LoadLayout, RL_LoadDraw), so nothing moves when the load screen takes
+over. Joined from the browser, its row's map is known: its pictures made
+as the connect begins (RL_LoadMap), its name the title; else (a direct
+connect, the launcher's, a typed address) the title is the server's name
+or address, the card empty over the main menu's backdrop dimmed, until
+the map loads. Nothing more is asked of the server. What goes on under
+the bar, CANCEL in the card; a refusal or a drop in the card: what
+happened in plain words, RETRY and BACK, the password typed there when
+the server wants one. Whatever ends a connect, the main menu shows
+Multiplayer next. Black for the game's own server (a mission's, Host's),
+joined in a moment
 
 ====================================================================
 */
@@ -467,18 +505,15 @@ game's own server (a mission's, Host's), joined in a moment
 enum { CE_NONE, CE_FULL, CE_PASSWORD, CE_BANNED, CE_KICKED, CE_VERSION, CE_TIMEOUT, CE_ADDRESS, CE_DROPPED, CE_OTHER };
 
 static struct {
-    std::string addr;                      // as connected to
-    std::string name, map, mode;           // the server's name, its map's file ("dm/mohdm6"), its mode: "" not known
-    int         players, maxPlayers, ping; // -1 not known
-    bool        given;                     // the browser's row gave them: not asked
-    bool        joined;                    // a map of it loaded: its end a drop
-    netadr_t    asked;                     // asked for its info there
-    int         askedAt;                   // Sys_Milliseconds then, 0 no answer awaited
-    char        challenge[16];             // the question's, echoed
-    int         end;                       // CE_*
-    std::string said;                      // the server's word (a refusal, a drop's reason)
-    std::string typed;                     // the password typed
-} rl_cn = {"", "", "", "", -1, -1, -1};
+    std::string addr;       // as connected to
+    std::string name;       // the server's (the browser's row's, a map's serverinfo's): "" not known
+    std::string map;        // its map's file ("dm/mohdm6": the browser's row's, the map it loaded): "" not known
+    int         maxPlayers; // its places (the browser's row's), -1 not known
+    bool        joined;     // a map of it loaded: its end a drop
+    int         end;        // CE_*
+    std::string said;       // the server's word (a refusal, a drop's reason)
+    std::string typed;      // the password typed
+} rl_cn = {"", "", "", -1};
 
 // another server: nothing known of it
 static void RL_ConnectTo(const char *addr)
@@ -486,30 +521,11 @@ static void RL_ConnectTo(const char *addr)
     rl_cn.addr = addr;
     rl_cn.name.clear();
     rl_cn.map.clear();
-    rl_cn.mode.clear();
-    rl_cn.players = rl_cn.maxPlayers = rl_cn.ping = -1;
-    rl_cn.given = rl_cn.joined = false;
-    rl_cn.askedAt = 0;
+    rl_cn.maxPlayers = -1;
+    rl_cn.joined     = false;
 }
 
-// what the server says it is: its name, its map (its file's; a spawn point after a $), its mode ("" not said)
-static void RL_ConnectNamed(std::string name, std::string map, const std::string& mode)
-{
-    name.erase(0, name.find_first_not_of(' '));
-    name.erase(name.find_last_not_of(' ') + 1);
-    map.erase(std::min(map.find('$'), map.size()));
-    if (!name.empty()) {
-        rl_cn.name = name;
-    }
-    if (!map.empty()) {
-        rl_cn.map = RL_SvMap(map.c_str()).first;
-    }
-    if (!mode.empty()) {
-        rl_cn.mode = mode;
-    }
-}
-
-void UI_Menus_Connect(const char *server, const netadr_t *adr)
+void UI_Menus_Connect(const char *server)
 {
     if (rl_cn.addr != server) {
         RL_ConnectTo(server);
@@ -517,47 +533,26 @@ void UI_Menus_Connect(const char *server, const netadr_t *adr)
     rl_cn.end    = CE_NONE;
     rl_cn.joined = false;
     rl_cn.typed.clear();
-    rl_cn.askedAt = 0;
     // (whatever ends it, the main menu shows Multiplayer next)
     rl_mm.page = PAGE_PLAY;
-    // its name, map, players and ping asked for once (unless the browser's row gave them; the game's own server not)
-    if (!rl_cn.given && !NET_IsLocalAddress(*adr)) {
-        Com_sprintf(rl_cn.challenge, sizeof(rl_cn.challenge), "%d", rand());
-        rl_cn.asked   = *adr;
-        rl_cn.askedAt = Q_max(1, Sys_Milliseconds());
-        CL_NET_OutOfBandPrint(*adr, "getinfo %s", rl_cn.challenge);
-    }
-    rl_cn.given = false;
     RL_Changed();
-}
-
-qboolean UI_Menus_ServerInfo(const netadr_t *from, const char *info)
-{
-    if (!rl_cn.askedAt || !NET_CompareAdr(*from, rl_cn.asked) || strcmp(Info_ValueForKey(info, "challenge"), rl_cn.challenge)) {
-        return qfalse;
-    }
-    // (copied one at a time: Info_ValueForKey's buffers are two)
-    const std::string name = Info_ValueForKey(info, "hostname"), map = Info_ValueForKey(info, "mapname");
-
-    RL_ConnectNamed(name, map, Info_ValueForKey(info, "gametypestring"));
-    rl_cn.players    = atoi(Info_ValueForKey(info, "clients"));
-    rl_cn.maxPlayers = atoi(Info_ValueForKey(info, "sv_maxclients"));
-    rl_cn.ping       = Sys_Milliseconds() - rl_cn.askedAt;
-    rl_cn.askedAt    = 0;
-    RL_Changed();
-    return qtrue;
 }
 
 void RL_ConnectLoaded(const char *info, const char *map)
 {
-    const std::string name = Info_ValueForKey(info, "sv_hostname"), mode = Info_ValueForKey(info, "g_gametypestring");
+    std::string name = Info_ValueForKey(info, "sv_hostname");
 
     // (a local game's server: localhost)
     if (rl_cn.addr != clc.servername) {
         RL_ConnectTo(clc.servername);
     }
     rl_cn.joined = true;
-    RL_ConnectNamed(name, map, mode);
+    rl_cn.map    = map;
+    name.erase(0, name.find_first_not_of(' '));
+    name.erase(name.find_last_not_of(' ') + 1);
+    if (!name.empty()) {
+        rl_cn.name = name;
+    }
 }
 
 void RL_ConnectDropped(const char *reason)
@@ -632,15 +627,12 @@ static void RL_SvJoin(void)
         return;
     }
     RL_SvHalt();
-    // (the connect's box shows the row: nothing asked of the server)
+    // (the connect screen names the server as the row does, its map's pictures made now: the load screen's)
     RL_ConnectTo(r.addr.c_str());
     rl_cn.name       = r.name;
     rl_cn.map        = r.file;
-    rl_cn.mode       = r.mode;
-    rl_cn.players    = r.players;
     rl_cn.maxPlayers = r.maxPlayers;
-    rl_cn.ping       = r.ping;
-    rl_cn.given      = true;
+    RL_LoadMap(r.file.c_str());
     Cbuf_AddText(va("connect %s\n", r.addr.c_str()));
 }
 
@@ -1321,43 +1313,61 @@ static void RL_Head(const rlView_t& v, float x, float y, float w, float h)
     RL_Box(v, x, y + h, w, 1, RL_LINE);
 }
 
-// the divider between tabs: a line a pixel wide at the tabs' edge, x + 6
+// the divider between tabs: Omaha's slash, three fifths of h high, its middle at the tabs' edge, x + 6
 static void RL_Divider(const rlView_t& v, float x, float y, float h)
 {
-    const float m  = h * 0.18f;
-    const int   x0 = RL_P(v, x + 6);
+    const float m = h * 0.2f, sw = (h - 2 * m) * 0.34f;
+    const int   x0 = RL_P(v, x + 6 - sw / 2), y0 = RL_P(v, y + m);
 
-    RL_BoxPx(x0, RL_P(v, y + m), x0 + 1, RL_P(v, y + h - m), RL_Rgb(255, 255, 255, 97));
+    RL_Shape(x0, y0, RL_P(v, x + 6 + sw / 2) - x0, RL_P(v, y + h - m) - y0, "poly 1 1 1 1 0.84 0 1 0 0.16 1 0 1", RL_Rgb(255, 255, 255, 84), v.s);
 }
 
-void RL_Button(UIReloadedMenu *m, const rlView_t& v, float x, float y, float w, float h, const char *label, bool primary, int id, bool off)
+// a box with slanted edges (cl_uiwidget.h): the middle a box, each slanted edge a triangle baked once a size
+void RL_SlantBox(const rlView_t& v, float x, float y, float w, float h, int edges, rlColor_t c)
+{
+    const int x0 = RL_P(v, x), y0 = RL_P(v, y), x1 = RL_P(v, x + w), y1 = RL_P(v, y + h);
+    const int sp = (int)((y1 - y0) * RL_SLANT * 0.5f + 0.5f); // (half the slant, pixels)
+    const int l = edges & RL_SL_LEFT ? sp : 0, r = edges & RL_SL_RIGHT ? sp : 0;
+
+    RL_BoxPx(x0 + l, y0, x1 - r, y1, c);
+    if (l) {
+        RL_Shape(x0 - l, y0, 2 * l, y1 - y0, "poly 1 1 1 1 1 0 1 1 0 1", c, v.s);
+    }
+    if (r) {
+        RL_Shape(x1 - r, y0, 2 * r, y1 - y0, "poly 1 1 1 1 0 0 1 0 0 1", c, v.s);
+    }
+}
+
+// a button: primary the accent, else Omaha's dark one, its label softer (off: faint); edges slanted: RL_SL_*
+void RL_Button(UIReloadedMenu *m, const rlView_t& v, float x, float y, float w, float h, const char *label, bool primary, int id, bool off,
+               int edges, float size)
 {
     const bool      hot  = m->Hot(id);
-    const rlColor_t fill = primary ? (hot ? RL_BRASS_HOT : RL_BRASS) : RL_Rgb(255, 255, 255, hot ? 44 : 26);
+    const rlColor_t fill = primary ? (hot ? RL_BRASS_HOT : RL_BRASS) : hot ? RL_DARK_HOT : RL_DARK;
 
-    RL_Box(v, x, y, w, h, off ? RL_Rgb(255, 255, 255, 14) : fill);
-    RL_Text(v, x + w / 2, y + h / 2, label, 18, off ? RL_FAINT : primary ? RL_INK : RL_TEXT, true, RL_CENTER, 2, RL_MID);
+    RL_SlantBox(v, x, y, w, h, edges, off ? RL_Rgb(255, 255, 255, 14) : fill);
+    RL_Text(v, x + w / 2, y + h / 2, label, size, off ? RL_FG_FAINT : primary ? RL_INK : hot ? RL_FG : RL_FG_SOFT, true, RL_CENTER, 2.4f, RL_MID);
     m->Hit(v, x, y, w, h, id);
 }
 
 // a text field: the text (typed in: its end, should it not fit, and a caret; else cut), the placeholder when empty
 static void RL_Field(const rlView_t& v, float x, float y, float w, float h, const std::string& text, const char *placeholder, bool editing,
-                     bool hot)
+                     bool hot, int edges = RL_SL_NONE)
 {
     const float tx = x + 16, room = w - 32;
     std::string shown = editing ? text : RL_Ellipsize(v, text.c_str(), 17, false, room);
 
-    RL_Box(v, x, y, w, h, RL_Rgb(255, 255, 255, editing ? 70 : hot ? 48 : 30));
-    RL_Box(v, x + 1, y + 1, w - 2, h - 2, RL_Rgb(0, 0, 0, 120));
+    RL_SlantBox(v, x, y, w, h, edges, RL_Rgb(255, 255, 255, editing ? 70 : hot ? 44 : 20));
+    RL_SlantBox(v, x + 1, y + 1, w - 2, h - 2, edges, RL_Rgb(0, 0, 0, 130));
     if (text.empty() && !editing) {
-        RL_Text(v, tx, y + h / 2, placeholder, 17, RL_MUTED, false, RL_LEFT, 0, RL_MID, room);
+        RL_Text(v, tx, y + h / 2, placeholder, 17, RL_FG_MUTED, false, RL_LEFT, 0, RL_MID, room);
         return;
     }
     while (editing && !shown.empty() && RL_TextW(v, shown.c_str(), 17, false) > room) {
         shown.erase(0, 1);
     }
     {
-        const float tw = shown.empty() ? 0.0f : RL_Text(v, tx, y + h / 2, shown.c_str(), 17, RL_TEXT, false, RL_LEFT, 0, RL_MID);
+        const float tw = shown.empty() ? 0.0f : RL_Text(v, tx, y + h / 2, shown.c_str(), 17, RL_FG, false, RL_LEFT, 0, RL_MID);
 
         if (editing && (cls.realtime / 530) % 2 == 0) {
             RL_Box(v, tx + tw + 2, y + h / 2 - 11, 2, 22, RL_BRASS);
@@ -1382,14 +1392,6 @@ static void RL_Star(const rlView_t& v, float cx, float cy, float d, rlColor_t c)
     RL_Shape(RL_P(v, cx) - pd / 2, RL_P(v, cy) - pd / 2, pd, pd, poly.c_str(), c, v.s);
 }
 
-// a small triangle, pointing down (or up), in w x h
-static void RL_Arrow(const rlView_t& v, float x, float y, float w, float h, bool up, rlColor_t c)
-{
-    const int x0 = RL_P(v, x), y0 = RL_P(v, y);
-
-    RL_Shape(x0, y0, RL_P(v, x + w) - x0, RL_P(v, y + h) - y0, up ? "poly 1 1 1 1 0.5 0 1 1 0 1" : "poly 1 1 1 1 0 0 1 0 0.5 1", c, v.s);
-}
-
 // a photo (shown 4:3, as the stock load screens show theirs; a saved game's
 // shot as the screen it was taken of) filling a box, cut to its shape
 static void RL_Photo(const rlView_t& v, qhandle_t shot, float x, float y, float w, float h, float aspect = 4.0f / 3.0f)
@@ -1399,7 +1401,7 @@ static void RL_Photo(const rlView_t& v, qhandle_t shot, float x, float y, float 
     const float cs = k < 1.0f ? (1.0f - k) / 2 : 0.0f, ct = k > 1.0f ? (1.0f - 1.0f / k) / 2 : 0.0f;
 
     if (shot <= 0) {
-        RL_Box(v, x, y, w, h, RL_Rgb(22, 24, 26));
+        RL_Box(v, x, y, w, h, RL_Rgb(20, 24, 31));
         return;
     }
     if (!rl_bakeOnly) {
@@ -1420,8 +1422,8 @@ static float RL_Segments(UIReloadedMenu *m, const rlView_t& v, float x, float y,
         const float w = RL_TextW(v, labels[i], 15, true, 1.6f) + 36;
         const bool  hot = !off && m->Hot(id + i), chosen = !off && i == on;
 
-        RL_Box(v, x, y, w, h, chosen ? RL_BRASS : RL_Rgb(255, 255, 255, off ? 10 : hot ? 36 : 18));
-        RL_Text(v, x + w / 2, y + h / 2, labels[i], 15, chosen ? RL_INK : off ? RL_FAINT : hot ? RL_TEXT : RL_SOFT, true, RL_CENTER, 1.6f, RL_MID);
+        RL_SlantBox(v, x, y, w, h, (i ? RL_SL_LEFT : 0) | (i < n - 1 ? RL_SL_RIGHT : 0), chosen ? RL_BRASS : off ? RL_Rgb(255, 255, 255, 10) : hot ? RL_DARK_HOT : RL_DARK);
+        RL_Text(v, x + w / 2, y + h / 2, labels[i], 15, chosen ? RL_INK : off ? RL_FG_FAINT : hot ? RL_FG : RL_FG_SOFT, true, RL_CENTER, 1.6f, RL_MID);
         if (!off) {
             m->Hit(v, x, y, w, h, id + i);
         }
@@ -1441,9 +1443,9 @@ static void RL_Tabs(UIReloadedMenu *m, const rlView_t& v, float x, float y, cons
         const bool  hot = m->Hot(id + i);
 
         if (i == on || hot) {
-            RL_Box(v, x, y + 1, tw, 47, i == on ? RL_BRASS : RL_Rgb(255, 255, 255, 16));
+            RL_SlantBox(v, x, y + 1, tw, 47, i ? RL_SL_BOTH : RL_SL_RIGHT, i == on ? RL_BRASS : RL_Rgb(255, 255, 255, 16));
         }
-        RL_Text(v, x + tw / 2, y + 24, labels[i], size, i == on ? RL_INK : hot ? RL_TEXT : RL_MUTED, true, RL_CENTER, 2, RL_MID);
+        RL_Text(v, x + tw / 2, y + 24, labels[i], size, i == on ? RL_INK : hot ? RL_FG : RL_FG_SOFT, true, RL_CENTER, 2, RL_MID);
         m->Hit(v, x, y, tw, 48, id + i);
         x += tw;
         if (i < n - 1 && i != on && i + 1 != on && !hot && !m->Hot(id + i + 1)) {
@@ -1455,14 +1457,14 @@ static void RL_Tabs(UIReloadedMenu *m, const rlView_t& v, float x, float y, cons
 // a label over its control: the label's middle at y, the control 16 under it
 static void RL_Label(const rlView_t& v, float x, float y, const char *label)
 {
-    RL_Text(v, x, y, label, 14, RL_MUTED, true, RL_LEFT, 1.6f, RL_MID);
+    RL_Text(v, x, y, label, 14, RL_FG_MUTED, true, RL_LEFT, 1.6f, RL_MID);
 }
 
 // a list's row's mark: picked brass-marked, else hot (and its hit)
 static void RL_RowMark(UIReloadedMenu *m, const rlView_t& v, float x, float y, float w, float h, bool sel, int id)
 {
     if (sel) {
-        RL_Box(v, x + 2, y, w - 3, h, RL_SEL);
+        RL_Box(v, x + 2, y, w - 3, h, RL_Alpha(RL_BRASS, 48));
         RL_Box(v, x + 2, y, 3, h, RL_BRASS);
     } else if (m->Hot(id)) {
         RL_Box(v, x + 2, y, w - 3, h, RL_Rgb(255, 255, 255, 14));
@@ -1479,14 +1481,16 @@ static void RL_ListRow(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
 
     RL_RowMark(m, v, x, y, w, h, sel, id);
     RL_Photo(v, shot, x + RL_PAD, y + 8, tw, th, aspect);
-    RL_Text(v, tx, y + h / 2 - 11, RL_Ellipsize(v, title, 19, sel, room).c_str(), 19, RL_TEXT, sel, RL_LEFT, 0, RL_MID);
-    RL_Text(v, tx, y + h / 2 + 15, caption, 14, RL_MUTED, false, RL_LEFT, 0.6f, RL_MID, room);
+    RL_Text(v, tx, y + h / 2 - 11, RL_Ellipsize(v, title, 19, sel, room).c_str(), 19, RL_FG, sel, RL_LEFT, 0, RL_MID);
+    RL_Text(v, tx, y + h / 2 + 15, caption, 14, RL_FG_MUTED, false, RL_LEFT, 0.6f, RL_MID, room);
 }
 
-// the scroll bar of a list over y h, its right edge at x: shown of total, from at
+// the scroll bar of a list over y h, its right edge at x (a panel's edge or a divider: its line's left): Omaha's, a
+// dark track 4 wide, the part shown (shown of total, from at) in the accent
 static void RL_ScrollBar(const rlView_t& v, float x, float y, float h, float at, float shown, float total)
 {
-    RL_Box(v, x - 8, y + 4 + (h - 8) * at / total, 3, Q_max(24.0f, (h - 8) * shown / total), RL_Rgb(255, 255, 255, 60));
+    RL_Box(v, x - 5, y, 4, h, RL_Rgb(0, 0, 0, 90));
+    RL_Box(v, x - 5, y + h * at / total, 4, Q_max(24.0f, h * shown / total), RL_BRASS);
 }
 
 // a panel's foot row (its top at foot): its band, a line over it; its controls' top
@@ -1505,7 +1509,7 @@ static void RL_Picture(const rlView_t& v, qhandle_t shot, float aspect, float x,
         const int x0 = RL_P(v, x), y0 = RL_P(v, y + h - 72);
 
         RL_Shape(x0, y0, RL_P(v, x + w) - x0, RL_P(v, y + h) - y0, "vgradient 0 1 0 0 0 0 0 0 0 0.75", RL_Rgb(255, 255, 255), v.s);
-        RL_Text(v, x + RL_PAD, y + h - RL_PAD - 8, name, 28, RL_TEXT, true, RL_LEFT, 0, RL_BASE, w - 2 * RL_PAD);
+        RL_Text(v, x + RL_PAD, y + h - RL_PAD - 8, name, 28, RL_FG, true, RL_LEFT, 0, RL_BASE, w - 2 * RL_PAD);
     }
 }
 
@@ -1635,104 +1639,24 @@ static void RL_BgDraw(const rlView_t& v, float x, float y, float w, float h)
 static void RL_Background(const rlView_t& v)
 {
     if (!rl_bg.shader[rl_bg.cur] && !RL_BgCampaign()) {
-        RL_Box(v, 0, 0, v.dw, v.dh, RL_Rgb(8, 9, 10));
+        RL_Box(v, 0, 0, v.dw, v.dh, RL_Rgb(8, 10, 14));
     }
     RL_BgDraw(v, 0, 0, v.dw, v.dh);
 }
 
-/*
-================
-The rail (the main menu's, the Esc menu's): 440 units, dark, fading out
-past 400; the star and the wordmark (92 high) at its head, level with the
-screens' top and the buttons' left edge; the Esc menu's match under them
-(the title, two lines; a title too wide on two lines), on the labels' line;
-the items from 380 down (the main menu's MULTIPLAYER / CAMPAIGN / HOST /
-OPTIONS, the page shown filled brass); the foot's up from its foot, QUIT's
-level with the screens' foot row, their labels under the buttons' and
-their icons ending at their edge (DISCONNECT, LEAVE MISSION in single
-player, over QUIT while in a game: level with the browser's status row)
-================
-*/
-static const rlRailItem_t rl_pages[] = {
+// the main menu's pages (its top bar's)
+static const rlBarItem_t rl_pages[] = {
     {ID_PLAY,     "MULTIPLAYER", NULL},
     {ID_CAMPAIGN, "CAMPAIGN",    NULL},
     {ID_HOST,     "HOST",        NULL},
     {ID_OPTIONS,  "OPTIONS",     NULL},
 };
 
-void RL_Rail(UIReloadedMenu *m, const rlView_t& v, const rlRailItem_t *items, int n, int on, const rlRailItem_t *foot, int nf,
-             const std::string *head)
-{
-    const float qy = v.dh - RL_EDGE - RL_FOOT / 2, room = RL_RAILX + 300 - RL_LABELX;
-
-    RL_Box(v, 0, 0, 400, v.dh, RL_Rgb(10, 11, 12, 232));
-    RL_HGradient(v, 400, 0, 240, v.dh, RL_Rgb(10, 11, 12, 232), RL_Rgb(10, 11, 12, 0));
-    {
-        // the lockup, the game's: its icon 92 across (Allied Assault's star), a gap of a fifth, its wordmark as high
-        static const char *const icons[3] = {RL_GLYPH("star"), RL_GLYPH("spearhead"), RL_GLYPH("breakthrough")};
-        static const char *const marks[3] = {RL_GLYPH("wordmark"), RL_GLYPH("wordmark-spearhead"), RL_GLYPH("wordmark-breakthrough")};
-        const int                g        = Q_max(0, Q_min(2, com_target_game->integer));
-        float                    sw, sh;
-
-        RL_Outline(v, icons[g], RL_RAILX + 46, RL_EDGE + 46, 92, 92, RL_Rgb(255, 255, 255));
-        if (UI_OutlineSize(marks[g], &sw, &sh)) {
-            const float ww = 92 * sw / sh;
-
-            RL_Outline(v, marks[g], RL_RAILX + 92 * 1.2f + ww / 2, RL_EDGE + 46, ww, 92, RL_Rgb(255, 255, 255));
-        }
-    }
-    if (head) {
-        std::string title = head[0], more;
-        float       y     = 218;
-
-        if (RL_TextW(v, title.c_str(), 34, true) > room) {
-            // (at the last space that leaves the first line fitting)
-            for (size_t at = title.rfind(' '); at != std::string::npos && at > 0; at = title.rfind(' ', at - 1)) {
-                if (RL_TextW(v, title.substr(0, at).c_str(), 34, true) <= room) {
-                    more  = title.substr(at + 1);
-                    title = title.substr(0, at);
-                    break;
-                }
-            }
-        }
-        if (!more.empty()) {
-            RL_Text(v, RL_LABELX, y - 19, title.c_str(), 34, RL_TEXT, true, RL_LEFT, 0, RL_MID, room);
-            title = more;
-            y += 19;
-        }
-        RL_Text(v, RL_LABELX, y, title.c_str(), 34, RL_TEXT, true, RL_LEFT, 0, RL_MID, room);
-        RL_Text(v, RL_LABELX, y + 44, head[1].c_str(), 15, RL_MUTED, false, RL_LEFT, 2.4f, RL_MID, room);
-        RL_Text(v, RL_LABELX, y + 72, head[2].c_str(), 15, RL_MUTED, false, RL_LEFT, 2.4f, RL_MID, room);
-    }
-    // (78 apart, 64 high; closer where the foot leaves them too little room: the Esc menu's six at 900 lines)
-    const float limit = qy - (nf - 1) * 52 - 32, step = 380 + (n - 1) * 78.0f + 64 <= limit ? 78.0f : (limit - 366) / n, ih = step - 14;
-
-    for (int i = 0; i < n; i++) {
-        const float y = 380 + i * step;
-        const bool  lit = items[i].id == on, hot = m->Hot(items[i].id);
-
-        if (lit || hot) {
-            RL_Box(v, RL_RAILX, y, 300, ih, lit ? RL_BRASS : RL_Rgb(255, 255, 255, 18));
-        }
-        RL_Text(v, RL_LABELX, y + ih / 2, items[i].label, 28, lit ? RL_INK : hot ? RL_TEXT : RL_SOFT, true, RL_LEFT, 3, RL_MID);
-        m->Hit(v, RL_RAILX, y, 300, ih, items[i].id);
-    }
-    for (int i = 0; i < nf; i++) {
-        // (the last at the foot, muted; those over it red)
-        const rlRailItem_t& f = foot[i];
-        const float         y = qy - (nf - 1 - i) * 52;
-        const rlColor_t     c = m->Hot(f.id) ? RL_TEXT : i == nf - 1 ? RL_MUTED : RL_Rgb(214, 120, 100);
-
-        RL_Outline(v, f.glyph, RL_RAILX - 12, y, 24, 24, c);
-        RL_Text(v, RL_LABELX, y, f.label, 20, c, true, RL_LEFT, 2.4f, RL_MID);
-        m->Hit(v, RL_RAILX - 24, y - 24, 260, 48, f.id);
-    }
-}
-
 /*
 ================
 MULTIPLAYER: Omaha's server browser. The gametype tabs, the columns (the one
-sorted by marked, clicked again for the other way), a row a server (a
+sorted by marked, clicked again for the other way; PLAYERS at first, the most
+first), a row a server (a
 star to keep it a favourite; picked: brass; joined with a double click
 or JOIN), the status row (servers and players shown, the lists' state),
 REFRESH, the search, JOIN. Narrower than 800 units (4:3), no GAMETYPE
@@ -1764,7 +1688,7 @@ static void RL_Browser(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
         if (!share[c + 1]) {
             continue;
         }
-        const float lw = RL_Text(v, cx[c + 1], hy + 20, rl_colNames[c], 14, hot ? RL_TEXT : RL_MUTED, true, RL_LEFT, 1.6f, RL_MID);
+        const float lw = RL_Text(v, cx[c + 1], hy + 20, rl_colNames[c], 14, hot ? RL_FG : RL_FG_MUTED, true, RL_LEFT, 1.6f, RL_MID);
 
         if (rl_mm.sort == c) {
             // (down: from the least, Omaha's)
@@ -1781,26 +1705,26 @@ static void RL_Browser(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
         const rlServer_t& r   = rl_sv.rows[rl_vis.rows[at]];
         const bool        sel = r.addr == rl_mm.sel, fav = rl_favs.count(r.addr) > 0;
         const float       yy = ry + i * rh, mid = yy + rh / 2;
-        const rlColor_t   soft = r.otherVersion ? RL_FAINT : RL_SOFT;
+        const rlColor_t   soft = r.otherVersion ? RL_FG_FAINT : RL_FG_SOFT;
 
         if (sel) {
-            RL_Box(v, x + 2, yy, w - 4, rh, RL_SEL);
+            RL_Box(v, x + 2, yy, w - 4, rh, RL_Alpha(RL_BRASS, 48));
             RL_Box(v, x + 2, yy, 3, rh, RL_BRASS);
         } else if (m->Hot(ID_ROW + i) || m->Hot(ID_FAV + i)) {
             RL_Box(v, x + 2, yy, w - 4, rh, RL_Rgb(255, 255, 255, 14));
         } else if (at % 2) {
             RL_Box(v, x + 2, yy, w - 4, rh, RL_Rgb(255, 255, 255, 6));
         }
-        RL_Star(v, cx[0] + iw * 0.025f, mid, 18, fav ? RL_BRASS : m->Hot(ID_FAV + i) ? RL_Rgb(255, 255, 255, 120) : RL_Rgb(255, 255, 255, 40));
+        RL_Star(v, cx[0] + iw * 0.025f, mid, 18, fav ? RL_GOLD : m->Hot(ID_FAV + i) ? RL_Rgb(255, 255, 255, 120) : RL_Rgb(255, 255, 255, 40));
         RL_Text(v, cx[1], mid, RL_Ellipsize(v, r.name.empty() ? "?" : r.name.c_str(), 17, sel, iw * share[1] - 12).c_str(), 17,
-                r.otherVersion ? RL_FAINT : RL_TEXT, sel, RL_LEFT, 0, RL_MID);
+                r.otherVersion ? RL_FG_FAINT : RL_FG, sel, RL_LEFT, 0, RL_MID);
         RL_Text(v, cx[2], mid, RL_Ellipsize(v, r.map.c_str(), 17, false, iw * share[2] - 12).c_str(), 17, soft, false, RL_LEFT, 0, RL_MID);
         RL_Text(v, cx[3], mid, va("%d/%d", r.players, r.maxPlayers), 17, soft, false, RL_LEFT, 0, RL_MID);
         if (share[4]) {
             RL_Text(v, cx[4], mid, RL_Ellipsize(v, r.mode.c_str(), 17, false, iw * share[4] - 12).c_str(), 17, soft, false, RL_LEFT, 0, RL_MID);
         }
         RL_Text(v, cx[5], mid, va("%d", r.ping), 17,
-                r.otherVersion ? RL_FAINT
+                r.otherVersion ? RL_FG_FAINT
                 : r.ping < 60  ? RL_Rgb(150, 196, 120)
                 : r.ping < 100 ? RL_Rgb(222, 178, 80)
                                : RL_Rgb(214, 120, 100),
@@ -1814,7 +1738,7 @@ static void RL_Browser(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
                           : !rl_sv.rows.empty()    ? "No server matches."
                                                    : "No servers.";
 
-        RL_Text(v, x + w / 2, ry + 3 * rh, empty, 17, RL_MUTED, false, RL_CENTER, 0, RL_MID);
+        RL_Text(v, x + w / 2, ry + 3 * rh, empty, 17, RL_FG_MUTED, false, RL_CENTER, 0, RL_MID);
     } else if ((int)rl_vis.rows.size() > rl_mm.fit) {
         RL_ScrollBar(v, x + w, ry, y + h - foot - ry, rl_mm.top, rl_mm.fit, rl_vis.rows.size());
     }
@@ -1842,11 +1766,11 @@ static void RL_Browser(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
         } else {
             state = "READY";
         }
-        RL_Box(v, x + 1, sy, w - 2, 40, RL_Rgb(255, 255, 255, 12));
-        RL_Box(v, x, sy, w, 1, RL_LINE);
-        RL_Text(v, x + RL_PAD, sy + 20, va("%d SERVERS", (int)rl_vis.rows.size()), 15, RL_TEXT, true, RL_LEFT, 1.6f, RL_MID);
-        RL_Text(v, x + w / 2, sy + 20, state, 15, RL_BRASS, true, RL_CENTER, 2, RL_MID);
-        RL_Text(v, x + w - RL_PAD, sy + 20, va("%d PLAYERS", rl_vis.players), 15, RL_TEXT, true, RL_RIGHT, 1.6f, RL_MID);
+        // (Omaha's: a strip in the accent, the panel's width, over its edges)
+        RL_Box(v, x, sy, w, 40, RL_BRASS);
+        RL_Text(v, x + RL_PAD, sy + 20, va("%d SERVERS", (int)rl_vis.rows.size()), 15, RL_INK, true, RL_LEFT, 1.6f, RL_MID);
+        RL_Text(v, x + w / 2, sy + 20, state, 15, RL_INK, true, RL_CENTER, 2, RL_MID);
+        RL_Text(v, x + w - RL_PAD, sy + 20, va("%d PLAYERS", rl_vis.players), 15, RL_INK, true, RL_RIGHT, 1.6f, RL_MID);
     }
     {
         // the actions
@@ -1855,10 +1779,10 @@ static void RL_Browser(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
         const bool  busy = RL_SvBusy();
 
         RL_Box(v, x + 1, ay, w - 2, RL_FOOT - 1, RL_HEAD);
-        RL_Button(m, v, x + RL_PAD, by, 150, bh, "REFRESH", false, ID_REFRESH, busy);
-        RL_Field(v, fx, by, fw, bh, rl_mm.search, "Search", rl_mm.edit == F_SEARCH, m->Hot(ID_SEARCH));
+        RL_Button(m, v, x + RL_PAD, by, 150, bh, "REFRESH", false, ID_REFRESH, busy, RL_SL_RIGHT);
+        RL_Field(v, fx, by, fw, bh, rl_mm.search, "Search", rl_mm.edit == F_SEARCH, m->Hot(ID_SEARCH), RL_SL_BOTH);
         m->Hit(v, fx, by, fw, bh, ID_SEARCH);
-        RL_Button(m, v, x + w - RL_PAD - jw, by, jw, bh, "JOIN", true, ID_JOIN);
+        RL_Button(m, v, x + w - RL_PAD - jw, by, jw, bh, "JOIN", true, ID_JOIN, false, RL_SL_LEFT);
     }
 }
 
@@ -1895,28 +1819,23 @@ static void RL_Profile(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
         }
         return;
     }
-    RL_Text(v, x + RL_PAD, y + 24, "PROFILE", 20, RL_TEXT, true, RL_LEFT, 2, RL_MID);
-    RL_Text(v, x + RL_PAD, y + 76, "NAME", 14, RL_MUTED, true, RL_LEFT, 1.6f, RL_MID);
-    RL_Field(v, x + RL_PAD, y + 92, w - 2 * RL_PAD - aw - 4, 40, rl_mm.name, "", rl_mm.edit == F_NAME, m->Hot(ID_NAME));
+    RL_Text(v, x + RL_PAD, y + 24, "PROFILE", 20, RL_FG, true, RL_LEFT, 2, RL_MID);
+    RL_Text(v, x + RL_PAD, y + 76, "NAME", 14, RL_FG_MUTED, true, RL_LEFT, 1.6f, RL_MID);
+    RL_Field(v, x + RL_PAD, y + 92, w - 2 * RL_PAD - aw - 4, 40, rl_mm.name, "", rl_mm.edit == F_NAME, m->Hot(ID_NAME), RL_SL_RIGHT);
     m->Hit(v, x + RL_PAD, y + 92, w - 2 * RL_PAD - aw - 4, 40, ID_NAME);
-    RL_Button(m, v, x + w - RL_PAD - aw, y + 92, aw, 40, "APPLY", true, ID_APPLY);
+    RL_Button(m, v, x + w - RL_PAD - aw, y + 92, aw, 40, "APPLY", true, ID_APPLY, false, RL_SL_LEFT);
     RL_Box(v, x, y + 148, w, 1, RL_LINE);
     for (int t = 0; t < 2; t++) {
         const float     cx  = x + RL_PAD + t * (cw + 10), fh = RL_CTRL;
         const int       own = RL_OwnIndex(t);
         const bool      hot = m->Hot(ID_SELECT + t) || rl_mm.pick == t;
-        const rlColor_t edge = hot ? RL_Rgb(255, 255, 255, 70) : RL_Rgb(255, 255, 255, 30);
 
         RL_TeamIcon(v, t, cx + cw / 2, vy - 48, 44);
-        RL_Box(v, cx, fy, cw, fh, RL_Rgb(0, 0, 0, 110));
-        RL_BoxPx(RL_P(v, cx), RL_P(v, fy), RL_P(v, cx + cw), RL_P(v, fy) + 1, edge);
-        RL_BoxPx(RL_P(v, cx), RL_P(v, fy + fh) - 1, RL_P(v, cx + cw), RL_P(v, fy + fh), edge);
-        RL_BoxPx(RL_P(v, cx), RL_P(v, fy), RL_P(v, cx) + 1, RL_P(v, fy + fh), edge);
-        RL_BoxPx(RL_P(v, cx + cw) - 1, RL_P(v, fy), RL_P(v, cx + cw), RL_P(v, fy + fh), edge);
+        RL_Box(v, cx, fy, cw, fh, hot ? RL_DARK_HOT : RL_DARK);
         RL_Text(v, cx + 14, fy + fh / 2,
                 RL_Ellipsize(v, own >= 0 ? rl_models[t][own].name.c_str() : RL_ModelName(RL_OwnModel(t).c_str()).c_str(), 16, false, cw - 48).c_str(),
-                16, RL_TEXT, false, RL_LEFT, 0, RL_MID);
-        RL_Arrow(v, cx + cw - 26, fy + fh / 2 - 4, 12, 8, rl_mm.pick == t, hot ? RL_TEXT : RL_MUTED);
+                16, RL_FG, false, RL_LEFT, 0, RL_MID);
+        RL_Arrow(v, cx + cw - 26, fy + fh / 2 - 4, 12, 8, rl_mm.pick == t, hot ? RL_FG : RL_FG_MUTED);
         m->Hit(v, cx, fy, cw, fh, ID_SELECT + t);
     }
     if (rl_mm.pick >= 0) {
@@ -1928,19 +1847,19 @@ static void RL_Profile(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
         const int                     own = RL_OwnIndex(rl_mm.pick);
 
         rl_mm.pickTop = Q_max(0, Q_min(rl_mm.pickTop, n - fit));
-        RL_Panel(v, px, ly, lw, lh, RL_Rgb(12, 13, 15, 250));
+        RL_Panel(v, px, ly, lw, lh, RL_Rgb(12, 15, 21, 250));
         for (int i = 0; i < fit && rl_mm.pickTop + i < n; i++) {
             const int   k  = rl_mm.pickTop + i;
             const float iy = ly + 4 + i * ih;
 
             if (k == own) {
-                RL_Box(v, px + 2, iy, lw - 4, ih, RL_SEL);
+                RL_Box(v, px + 2, iy, lw - 4, ih, RL_Alpha(RL_BRASS, 48));
                 RL_Box(v, px + 2, iy, 3, ih, RL_BRASS);
             } else if (m->Hot(ID_PICK + k)) {
                 RL_Box(v, px + 2, iy, lw - 4, ih, RL_Rgb(255, 255, 255, 18));
             }
             RL_Text(v, px + 14, iy + ih / 2, RL_Ellipsize(v, list[k].name.c_str(), 16, k == own, lw - 28).c_str(), 16,
-                    k == own ? RL_BRASS : RL_TEXT, k == own, RL_LEFT, 0, RL_MID);
+                    k == own ? RL_BRASS : RL_FG, k == own, RL_LEFT, 0, RL_MID);
             m->Hit(v, px + 2, iy, lw - 4, ih, ID_PICK + k);
         }
     }
@@ -1967,7 +1886,7 @@ static void RL_Host(UIReloadedMenu *m, const rlView_t& v, float x, float y, floa
 
     RL_Panel(v, x, y, w, h, RL_PANEL);
     RL_Head(v, x, y, w, 48);
-    RL_Text(v, x + RL_PAD, y + 24, "HOST A GAME", 20, RL_TEXT, true, RL_LEFT, 2, RL_MID);
+    RL_Text(v, x + RL_PAD, y + 24, "HOST A GAME", 20, RL_FG, true, RL_LEFT, 2, RL_MID);
     RL_Box(v, x + lw, y + 49, 1, foot - (y + 49), RL_LINE);
     // the maps
     RL_Label(v, x + RL_PAD, y + 76, "MAP");
@@ -1978,7 +1897,7 @@ static void RL_Host(UIReloadedMenu *m, const rlView_t& v, float x, float y, floa
         RL_ListRow(m, v, x, ly + i * rh, lw, rh, RL_Shot(map), 4.0f / 3.0f, RL_MapName(map.c_str()), map.c_str(), map == rl_host.map, ID_MAP + i);
     }
     if (!n) {
-        RL_Text(v, x + RL_PAD, ly + rh / 2, "No maps for this mode.", 17, RL_MUTED, false, RL_LEFT, 0, RL_MID);
+        RL_Text(v, x + RL_PAD, ly + rh / 2, "No maps for this mode.", 17, RL_FG_MUTED, false, RL_LEFT, 0, RL_MID);
     } else if (n > fit) {
         RL_ScrollBar(v, x + lw, ly, foot - ly, rl_host.top, fit, n);
     }
@@ -2004,7 +1923,7 @@ static void RL_Host(UIReloadedMenu *m, const rlView_t& v, float x, float y, floa
     {
         const float by = RL_FootRow(v, x, foot, w);
 
-        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "START", true, ID_START, rl_host.map.empty());
+        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "START", true, ID_START, rl_host.map.empty(), RL_SL_LEFT);
     }
 }
 
@@ -2038,19 +1957,19 @@ static void RL_Card(UIReloadedMenu *m, const rlView_t& v, const rlCard_t& c, flo
     while (size > 20 && RL_TextW(v, c.name.c_str(), size, true) > room) {
         size--;
     }
-    RL_Text(v, x, y + 30, RL_Ellipsize(v, c.name.c_str(), size, true, room).c_str(), size, c.dim ? RL_FAINT : RL_TEXT, true, RL_LEFT, 0, RL_BASE);
-    RL_Text(v, x + w, y + 30, c.tag.c_str(), 14, c.dim ? RL_FAINT : RL_BRASS, true, RL_RIGHT, 2.6f, RL_BASE);
+    RL_Text(v, x, y + 30, RL_Ellipsize(v, c.name.c_str(), size, true, room).c_str(), size, c.dim ? RL_FG_FAINT : RL_FG, true, RL_LEFT, 0, RL_BASE);
+    RL_Text(v, x + w, y + 30, c.tag.c_str(), 14, c.dim ? RL_FG_FAINT : RL_BRASS, true, RL_RIGHT, 2.6f, RL_BASE);
     RL_Photo(v, c.photo, x, py, w, ph, c.aspect);
     if (c.locked) {
-        RL_Box(v, x, py, w, ph, RL_Rgb(8, 9, 10, 158));
-        RL_Outline(v, RL_GLYPH("lock"), x + w / 2, py + ph / 2, 34, 34, RL_Rgb(238, 234, 224, 210));
+        RL_Box(v, x, py, w, ph, RL_Rgb(8, 10, 14, 158));
+        RL_Outline(v, RL_GLYPH("lock"), x + w / 2, py + ph / 2, 34, 34, RL_Rgb(234, 237, 242, 210));
     }
     RL_Frame(v, x, py, w, ph, on ? Q_max(2, RL_P(v, 2)) : 1, on ? RL_BRASS : RL_Rgb(255, 255, 255, m->Hot(id) ? 120 : 40));
     RL_Box(v, x, by, w, 4, on ? RL_BRASS : RL_Rgb(255, 255, 255, 30));
-    RL_Text(v, x, by + 24, RL_Ellipsize(v, c.left.c_str(), 16, false, w - rw - 12).c_str(), 16, c.dim ? RL_FAINT : RL_MUTED, false, RL_LEFT, 0,
+    RL_Text(v, x, by + 24, RL_Ellipsize(v, c.left.c_str(), 16, false, w - rw - 12).c_str(), 16, c.dim ? RL_FG_FAINT : RL_FG_MUTED, false, RL_LEFT, 0,
             RL_MID);
     if (rw) {
-        RL_Text(v, x + w, by + 24, c.right.c_str(), 16, RL_TEXT, true, RL_RIGHT, 0, RL_MID);
+        RL_Text(v, x + w, by + 24, c.right.c_str(), 16, RL_FG, true, RL_RIGHT, 0, RL_MID);
     }
     if (!c.dim) {
         m->Hit(v, x, y, w, by + 36 - y, id);
@@ -2103,9 +2022,9 @@ static void RL_CampMissions(UIReloadedMenu *m, const rlView_t& v, float x, float
         const char *says = !rl_camp.card ? "The saved game keeps its own." : training ? "Training is the same for everyone." : rl_diffSays[rl_camp.diff];
 
         RL_Label(v, x + RL_PAD, foot + RL_FOOT / 2, "DIFFICULTY");
-        RL_Text(v, ex + 16, foot + RL_FOOT / 2, RL_Ellipsize(v, says, 17, false, x + w - RL_PAD - 190 - 16 - (ex + 16)).c_str(), 17, RL_SOFT,
+        RL_Text(v, ex + 16, foot + RL_FOOT / 2, RL_Ellipsize(v, says, 17, false, x + w - RL_PAD - 190 - 16 - (ex + 16)).c_str(), 17, RL_FG_SOFT,
                 false, RL_LEFT, 0, RL_MID);
-        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "START", true, ID_CSTART, !rl_camp.card && rl_camp.saves.empty());
+        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "START", true, ID_CSTART, !rl_camp.card && rl_camp.saves.empty(), RL_SL_LEFT);
     }
 }
 
@@ -2130,7 +2049,7 @@ static void RL_CampSaves(UIReloadedMenu *m, const rlView_t& v, float x, float y,
                    &r == s, ID_SAVE + i);
     }
     if (!n) {
-        RL_Text(v, x + RL_PAD, ly + rh / 2, "No saved games yet.", 17, RL_MUTED, false, RL_LEFT, 0, RL_MID);
+        RL_Text(v, x + RL_PAD, ly + rh / 2, "No saved games yet.", 17, RL_FG_MUTED, false, RL_LEFT, 0, RL_MID);
     } else if (n > rl_camp.fit) {
         RL_ScrollBar(v, x + lw, ly, foot - ly, rl_camp.top, rl_camp.fit, n);
     }
@@ -2149,7 +2068,7 @@ static void RL_CampSaves(UIReloadedMenu *m, const rlView_t& v, float x, float y,
             const float fx = rx + (k % 2) * (col + RL_PAD);
 
             RL_Label(v, fx, fy, rows[k][0].c_str());
-            RL_Text(v, fx, fy + 34, rows[k][1].c_str(), 20, RL_TEXT, false, RL_LEFT, 0, RL_MID, col);
+            RL_Text(v, fx, fy + 34, rows[k][1].c_str(), 20, RL_FG, false, RL_LEFT, 0, RL_MID, col);
             fy += k % 2 ? 74 : 0;
         }
     } else {
@@ -2159,11 +2078,11 @@ static void RL_CampSaves(UIReloadedMenu *m, const rlView_t& v, float x, float y,
     {
         const float by = RL_FootRow(v, x, foot, w);
 
-        RL_Button(m, v, x + RL_PAD, by, 150, RL_CTRL, "DELETE", false, ID_CDELETE, !s);
+        RL_Button(m, v, x + RL_PAD, by, 150, RL_CTRL, "DELETE", false, ID_CDELETE, !s, RL_SL_RIGHT);
         if (RL_InMission()) {
             RL_Button(m, v, x + w - RL_PAD - 190 - 8 - 150, by, 150, RL_CTRL, "SAVE", false, ID_CSAVE);
         }
-        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "LOAD", true, ID_CLOAD, !s);
+        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "LOAD", true, ID_CLOAD, !s, RL_SL_LEFT);
     }
 }
 
@@ -2175,7 +2094,7 @@ static void RL_Campaign(UIReloadedMenu *m, const rlView_t& v, float x, float y, 
     RL_Panel(v, x, y, w, h, RL_PANEL);
     RL_Head(v, x, y, w, 48);
     RL_Tabs(m, v, x + 4, y, rl_campTabs, 2, rl_camp.tab, ID_CTAB, 17, 22);
-    RL_Text(v, x + w - RL_PAD, y + 24, RL_GAME.title, 15, RL_MUTED, true, RL_RIGHT, 2.6f, RL_MID);
+    RL_Text(v, x + w - RL_PAD, y + 24, RL_GAME.title, 15, RL_FG_MUTED, true, RL_RIGHT, 2.6f, RL_MID);
     if (rl_camp.tab == CT_MISSIONS) {
         RL_CampMissions(m, v, x, y, w, y + h - RL_FOOT);
     } else {
@@ -2191,7 +2110,7 @@ OPTIONS
 Omaha's settings: tabs, sections titled in brass, a row a setting: its
 label and a line describing it on the left, its control on the right (a
 choice of segments, a slider with its value, a switch, colour swatches, a
-text field). Two columns (the right one the crosshair's), one
+text field, a button). Two columns (the right one the crosshair's), one
 under 1100 units across, scrolled when it doesn't fit. A setting is set as
 it changes; those the renderer or the sound take at a restart wait for
 APPLY; DEFAULTS resets the settings shown
@@ -2201,26 +2120,35 @@ APPLY; DEFAULTS resets the settings shown
 
 static const char *const rl_optTabs[OT_NUM] = {"CONTROLS", "VIDEO", "AUDIO", "GAMEPLAY", "HUD"};
 
-enum { OC_SECTION, OC_SEG, OC_CYCLE, OC_SLIDER, OC_TOGGLE, OC_SWATCH, OC_PREVIEW, OC_CODE, OC_KEYS };
+enum { OC_SECTION, OC_SEG, OC_CYCLE, OC_SLIDER, OC_TOGGLE, OC_SWATCH, OC_PREVIEW, OC_CODE, OC_KEYS, OC_BUTTON };
 
 #define OF_RIGHT   1   // a section in the right column (the second)
 #define OF_PCT     2   // a slider's value shown as a percentage
+#define OF_RP      4   // off (greyed, no clicks) while Remote Prediction (cg_remotePrediction) is off
 #define OF_NOT     8   // a switch on at 0
 #define OF_NEG     16  // a switch on below 0, the value's sign (the mouse inverted: m_pitch)
 #define OF_DISPLAY 64  // r_fullscreen and r_noborder: fullscreen, windowed, borderless
-#define OF_ANISO   128 // r_ext_texture_filter_anisotropic and r_ext_max_anisotropy: off, or how much
+#define OF_LEVEL   128 // a switch and its level in one row (segments): OFF, or how much (the level's cvar: other)
 #define OF_RES     256 // r_mode: the desktop's, or a size of the display's (r_customwidth, r_customheight)
 #define OF_THIRD   512 // a section in the third column (CONTROLS' alone have three; else the right one)
 #define OF_LEFT2   2048 // a section in the left column where there are two (else its own)
 #define OF_FONT    4096 // cg_hud_font: a cycle of the HUD's fonts (rl_fonts), each name in its own font
+#define OF_HDRCAL  8192 // a button on while HDR or the HDR look runs (r_hdrOutputActive) and nothing waits for APPLY
+#define OF_UNDER   16384 // off (greyed, no clicks) while Enhanced Rendering (r_temporal, as APPLY will take it) is off
+#define OF_TURN    32  // m_turn: shows the turn distance there is (0 there: not kept), cl_mouseturn.cpp
+#define OF_NOTCS   1024  // off (greyed, no clicks) while CS Mode (m_csmode) sets it
+#define OF_CS      32768 // off while CS Mode is off
+#define OF_CSGOHUD 65536  // shown only while the HUD Style is CS:GO's (cg_hudstyle 1)
+#define OF_CS2HUD  131072 // shown only while it is CS2's (cg_hudstyle 2)
 
 typedef struct {
     int                kind, tab, flags; // the tab: a section's
     const char        *label, *desc;     // a section's title
     const char        *cvar, *def;
     const char *const *choices; // segments, a cycle: their labels; swatches: their colours (RRGGBB); NULL-ended
-    const char *const *values;  // segments, a cycle: their values (NULL: their places)
+    const char *const *values;  // segments, a cycle: their values (NULL: their places); OF_LEVEL: the levels' (from the 2nd)
     float              lo, hi, step; // a slider's; swatches: step the swatches a row (0: one row)
+    const char        *other;        // OF_LEVEL: the level's cvar; a button: its command (def: its label)
 } rlOpt_t;
 
 #define O_SECTION(tab, title, flags)                             {OC_SECTION, tab, flags, title, "", NULL, NULL, NULL, NULL, 0, 0, 0}
@@ -2229,6 +2157,10 @@ typedef struct {
 #define O_SLIDER(label, desc, cvar, def, lo, hi, step, flags)    {OC_SLIDER, 0, flags, label, desc, cvar, def, NULL, NULL, lo, hi, step}
 #define O_TOGGLE(label, desc, cvar, def, flags)                  {OC_TOGGLE, 0, flags, label, desc, cvar, def, NULL, NULL, 0, 0, 0}
 #define O_SWATCH(label, desc, cvar, def, colours, across)        {OC_SWATCH, 0, 0, label, desc, cvar, def, colours, NULL, 0, 0, across}
+// a switch and its level: OFF (the switch 0), or the switch 1 and the level's cvar (other) at the choice's value
+#define O_LEVEL(label, desc, cvar, def, other, choices, values, flags) {OC_SEG, 0, OF_LEVEL | (flags), label, desc, cvar, def, choices, values, 0, 0, 0, other}
+// a button (its label, then the command it runs) at the row's right
+#define O_BUTTON(label, desc, button, command, flags)            {OC_BUTTON, 0, flags, label, desc, NULL, button, NULL, NULL, 0, 0, 0, command}
 // a row of keys a stock action (ui/bind.scr's), from the action of command from up to the next O_KEYS's
 #define O_KEYS(from)                                             {OC_KEYS, 0, 0, from, "", NULL, NULL, NULL, NULL, 0, 0, 0}
 
@@ -2241,6 +2173,12 @@ static const char *const rl_oAniso[]       = {"OFF", "2X", "4X", "8X", "16X", NU
 static const char *const rl_oAnisoValues[] = {"0", "2", "4", "8", "16", NULL};
 static const char *const rl_oMsaa[]        = {"OFF", "2X", "4X", "8X", NULL};
 static const char *const rl_oMsaaValues[]  = {"0", "2", "4", "8", NULL};
+// Enhanced Rendering's: r_aoQuality 0 to 3; r_motionBlurQuality and r_dofQuality 0 to 2
+static const char *const rl_oAo[]          = {"OFF", "LOW", "MEDIUM", "HIGH", "ULTRA", NULL};
+static const char *const rl_oAoValues[]    = {"", "0", "1", "2", "3", NULL};
+static const char *const rl_oBlur[]        = {"OFF", "LOW", "MEDIUM", "HIGH", NULL};
+static const char *const rl_oBlurValues[]  = {"", "0", "1", "2", NULL};
+static const char *const rl_oHdr[]         = {"OFF", "HDR", "HDR LOOK", NULL}; // r_hdrOutput 0, 1, 2
 static const char *const rl_oShadows[]     = {"OFF", "BLOB", "FULL", NULL};
 static const char *const rl_oDlights[]     = {"4", "8", "16", "32", "64", NULL};
 static const char *const rl_oDetail[]      = {"LOW", "MEDIUM", "HIGH", NULL};
@@ -2271,9 +2209,6 @@ static const char *const rl_oOutlines[]    = {"OFF", "FULL", "HALF", NULL};
 
 // (the defaults the cvars' own, set here for those the game makes later, at a map's load)
 static const rlOpt_t rl_opts[] = {
-    O_SECTION(OT_CONTROLS, "MOUSE", 0),
-    O_SLIDER("Sensitivity", "How far the view turns.", "sensitivity", "5", 0.1f, 20, 0.05f, 0),
-    O_TOGGLE("Invert Mouse", "Moving the mouse up looks down.", "m_pitch", "0.022", OF_NEG),
     O_SECTION(OT_CONTROLS, "ATTACK", OF_RIGHT | OF_LEFT2),
     O_KEYS("+attackprimary"),
     O_SECTION(OT_CONTROLS, "MOVEMENT", 0),
@@ -2300,27 +2235,39 @@ static const rlOpt_t rl_opts[] = {
     O_TOGGLE("Flat Model Lighting", "On is recommended. Off makes players and guns much darker.", "r_fastentlight", "1", 0),
     O_SECTION(OT_VIDEO, "PICTURE", OF_RIGHT),
     O_SLIDER("Brightness", "", "r_gamma", "1", 0.5f, 3, 0.05f, 0),
+    O_SLIDER("Contrast", "", "r_contrast", "1", 0.5f, 2, 0.05f, 0),
+    O_SLIDER("Colour", "Stronger or paler colours, the whole screen.", "r_vibrance", "1", 0, 2, 0.05f, 0),
     O_SEG("Texture Quality", "", "r_picmip", "0", rl_oTextures, rl_oTextureMips, 0),
     O_SEG("Filtering", "", "r_textureMode", "GL_LINEAR_MIPMAP_LINEAR", rl_oFilters, rl_oFilterModes, 0),
-    O_SEG("Anisotropic", "", "r_ext_texture_filter_anisotropic", "0", rl_oAniso, rl_oAnisoValues, OF_ANISO),
-    O_SEG("Multisampling", "Smoother edges.", "r_ext_multisample", "0", rl_oMsaa, rl_oMsaaValues, 0),
+    O_LEVEL("Anisotropic", "", "r_ext_texture_filter_anisotropic", "0", "r_ext_max_anisotropy", rl_oAniso, rl_oAnisoValues, 0),
+    O_SEG("Multisampling", "Smoother edges. Not with Enhanced Rendering.", "r_ext_multisample", "0", rl_oMsaa, rl_oMsaaValues, 0),
     O_SECTION(OT_VIDEO, "EFFECTS", OF_RIGHT),
     O_SEG("Effect Detail", "Smoke, sparks, debris.", "cg_effectdetail", "1.0", rl_oDetail, rl_oDetailValues, 0),
     O_TOGGLE("Volumetric Smoke", "Smoke grenades' clouds.", "vss_draw", "1", 0),
     O_TOGGLE("Weather", "Rain and snow.", "cg_rain", "1", 0),
     O_TOGGLE("Bullet Holes", "The marks shots leave.", "cg_marks_add", "1", 0),
+    // Project: Omaha's ENHANCEMENTS (its 70c35fc5), one row an effect, behind Enhanced Rendering, its master switch
+    // (as notuern asked): the effects' rows are off while it is, and it off turns them off (cl_effects.cpp)
+    O_SECTION(OT_VIDEO, "ENHANCED RENDERING", OF_RIGHT),
+    O_TOGGLE("Enhanced Rendering", "Turns on the rows below. Not with Multisampling.", "r_temporal", "0", 0),
+    O_TOGGLE("Anti-Aliasing (TAA)", "Smooth edges from recent frames.", "r_taa", "0", OF_UNDER),
+    O_LEVEL("Ambient Occlusion", "Soft shadows where things meet.", "r_ao", "0", "r_aoQuality", rl_oAo, rl_oAoValues, OF_UNDER),
+    O_LEVEL("Motion Blur", "Smears the picture in fast turns.", "r_motionBlur", "0", "r_motionBlurQuality", rl_oBlur, rl_oBlurValues, OF_UNDER),
+    O_LEVEL("Depth of Field", "Blurs what the crosshair isn't on.", "r_dof", "0", "r_dofQuality", rl_oBlur, rl_oBlurValues, OF_UNDER),
+    O_SEG("HDR", "HDR: an HDR display. HDR Look: with Enhanced Rendering.", "r_hdrOutput", "0", rl_oHdr, NULL, 0),
+    O_BUTTON("Calibrate HDR", "With HDR on: the black level, the brightest white.", "CALIBRATE", "set r_hdrOutputTest 1", OF_HDRCAL),
     O_SECTION(OT_AUDIO, "VOLUME", 0),
     O_SLIDER("Master", "Every sound.", "s_volume", "0.9", 0, 1, 0.01f, OF_PCT),
     O_SLIDER("Music", "The music the maps' scripts play.", "s_musicvolume", "0.9", 0, 1, 0.01f, OF_PCT),
-    O_SLIDER("Soundtrack", "The songs. 0: none loaded.", "s_ambientvolume", "1", 0, 1, 0.01f, OF_PCT),
     O_SECTION(OT_AUDIO, "SPEAKERS", OF_RIGHT),
     O_CYCLE("Speaker Setup", "Headphones: sounds behind, above, below.", "s_speaker_type", "0", rl_oSpeakers, NULL, 0),
     O_SEG("Sound Quality", "Headphones: always 48.", "s_khz", "44", rl_oKhz, rl_oKhzValues, 0),
     O_SECTION(OT_AUDIO, "SOUNDS", OF_RIGHT),
     O_TOGGLE("Taunts From Other Players", "Their voices; the chat line stays.", "cg_tauntsounds", "1", 0),
+    O_TOGGLE("Cinematic", "On: no background ambience, planes flying over or rivers.", "s_cinematic", "0", 0),
     O_SEG("Hit Sound", "Played when you hit someone.", "cg_hitmarker_sound", "none", rl_oHitSounds, rl_oHitSoundValues, 0),
     O_SECTION(OT_GAMEPLAY, "GENERAL", 0),
-    O_SLIDER("Field of View", "How wide you see, in degrees.", "cg_fov", "80", 65, 120, 1, 0),
+    O_SLIDER("Field of View", "How wide you see, in degrees.", "cg_fov", "80", 65, 120, 1, OF_NOTCS),
     O_SEG("Show Weapon", "", "cg_drawviewmodel", "2", rl_oWeapon, NULL, 0),
     O_TOGGLE("Left-Handed", "The weapon in the left hand.", "cg_righthand", "1", OF_NOT),
     O_SLIDER("Weapon Dip", "How far it dips as you run: none (CS2's) to the game's own.", "cg_viewmodel_movedrop", "1", 0, 1, 0.05f, OF_PCT),
@@ -2328,6 +2275,19 @@ static const rlOpt_t rl_opts[] = {
     O_TOGGLE("Server Lag Icon", "Shown while the server stops answering.", "cg_drawsvlag", "1", 0),
     O_SEG("Lagometer", "The connection: ping, loss, updates.", "cg_lagometer", "0", rl_oLagometer, NULL, 0),
     O_TOGGLE("Remote Prediction", "Players drawn where your shots will find them.", "cg_remotePrediction", "1", 0),
+    O_TOGGLE("Smooth Lagging Players", "A player whose updates come late keeps moving, not freezing.", "cg_remotePredictionPush", "1", OF_RP),
+    O_TOGGLE("Scoreboard Cursor", "Right-click while TAB is held: a cursor to sort the columns.", "cl_scoreboardcursor", "0", 0),
+    // (the models: MULTIPLAYER's profile's, dm_playermodel and dm_playergermanmodel; cg_modelanim.c)
+    O_SECTION(OT_GAMEPLAY, "PLAYERS", 0),
+    O_TOGGLE("Force Models", "Everyone else in the Allied and Axis models you picked.", "cg_forceModel", "0", 0),
+    // (by the Field of View, which turns the view faster as it widens: cl_mouseturn_logic.h)
+    O_SECTION(OT_GAMEPLAY, "MOUSE", OF_RIGHT),
+    O_SLIDER("Sensitivity", "How far the view turns.", "sensitivity", "5", 0.1f, 20, 0.05f, OF_NOTCS),
+    O_SLIDER("Mouse DPI", "Your mouse's dots per inch (its software shows it).", "m_dpi", "800", 100, 6400, 50, 0),
+    O_SLIDER("Turn Distance", "Centimetres of mouse travel for a full turn (cm/360).", "m_turn", "0", 5, 100, 0.1f, OF_TURN | OF_NOTCS),
+    O_TOGGLE("CS Mode", "Field of View 90 and your Counter-Strike sensitivity: the same turn.", "m_csmode", "0", 0),
+    O_SLIDER("CS Sensitivity", "As in CS 1.6, CS:GO or CS2 (its m_yaw 0.022).", "m_cssens", "1.25", 0.1f, 10, 0.01f, OF_CS),
+    O_TOGGLE("Invert Mouse", "Moving the mouse up looks down.", "m_pitch", "0.022", OF_NEG),
     O_SECTION(OT_GAMEPLAY, "MOVEMENT", OF_RIGHT),
     O_SEG("Movement Rate", "Moves a second, apart from the frame rate.", "cl_movefps", "100", rl_oMoveRates, rl_oMoveValues, 0),
     O_TOGGLE("Shots and Jumps Sooner", "Sent half a move sooner.", "cl_movesubgrid", "1", 0),
@@ -2336,15 +2296,21 @@ static const rlOpt_t rl_opts[] = {
     O_TOGGLE("Record Every Match", "A demo of each match you play.", "cl_autoRecordDemo", "0", 0),
     // Changed in OPM: demos have a video export here, so the row is back
     O_SLIDER("Video Export FPS", "A demo's video, frames a second.", "cl_aviFrameRate", "25", 10, 120, 1, 0),
+    O_SECTION(OT_GAMEPLAY, "SPECTATING", OF_RIGHT),
+    O_TOGGLE("First-Person Spectating", "The player you follow, through their eyes. Any server.", "cg_spectatefirstperson", "0", 0),
     O_SECTION(OT_HUD, "HUD", 0),
     O_SEG("HUD Style", "Classic: the chat along the top, as the original.", "cg_hudstyle", "1", rl_oHudStyles, rl_oHudValues, 0),
     O_SEG("Classic Kills", "Classic only: in the chat, or beside or under the timer.", "cg_hud_classic_kills", "0", rl_oClassicKills, NULL, 0),
     O_CYCLE("HUD Font", "Chat, messages, kill feed and names.", "cg_hud_font", "oswald", NULL, NULL, OF_FONT),
     O_SLIDER("HUD Scale", "Bigger or smaller, the whole HUD.", "cg_hud_scale", "1", 0.25f, 2, 0.05f, 0),
     O_SLIDER("Radar Size", "Bigger or smaller, the radar alone.", "cg_hud_radar_size", "1", 0.5f, 1.5f, 0.05f, OF_PCT),
+    O_SLIDER("Radar Map Zoom", "Lower shows more of the map.", "cg_hud_radar_zoom", "0.5", 0.25f, 1, 0.05f, 0),
+    O_TOGGLE("Radar Centers The Player", "Off: near the map's edge, more map.", "cg_hud_radar_centered", "1", 0),
     O_SWATCH("Accent Colour", "The HUD's highlight.", "cg_hud_accent", "f6f67a", rl_oAccents, 13),
     O_SLIDER("Low Health", "Health turns red below this.", "cg_hud_lowhealth", "0.4", 0, 1, 0.05f, OF_PCT),
-    O_TOGGLE("Players Alive", "A count of each side by the score, not a card each.", "cg_hud_alivecount", "0", 0),
+    // (each style its own: CS:GO's on by default, CS2's off; Classic has neither)
+    O_TOGGLE("Players Alive", "A count of each side by the score, not a card each.", "cg_hud_csgo_alivecount", "1", OF_CSGOHUD),
+    O_TOGGLE("Players Alive", "A count of each side by the score, not a card each.", "cg_hud_alivecount", "0", OF_CS2HUD),
     O_TOGGLE("Damage Indicator", "Red marks round the crosshair toward a hit.", "cg_hud_damage", "1", 0),
     O_TOGGLE("Hitmarker", "A white X round the crosshair when you hit.", "cg_hitmarker", "0", 0),
     O_SECTION(OT_HUD, "CROSSHAIR", OF_RIGHT),
@@ -2371,6 +2337,7 @@ static const char *const rl_optRestart[] = {
     "r_gamma",
 #endif
     "r_picmip", "r_ext_texture_filter_anisotropic", "r_ext_max_anisotropy", "r_ext_multisample", "r_maxDlights", "r_fastdlights",
+    "r_temporal", "r_hdrOutput",
     "s_khz",
 };
 
@@ -2482,11 +2449,58 @@ static void RL_EachLine(const char *file, F fn)
     FS_FreeFile(text);
 }
 
-// the stock list read; an O_KEYS's actions: from its command's to the next O_KEYS's found (the first found from the list's start)
+// our own actions, after the stock list's (shown last, in its last section), and the key each gets: once in a
+// profile where both are free (RL_DefaultBinds), and from DEFAULTS
+static const struct {
+    const char *name, *cmd, *key;
+} rl_ourActs[] = {
+    {"Spectator View", "toggle cg_spectatefirstperson", "f"},
+};
+
+/*
+----------------
+RL_DefaultBinds
+
+At the client's start, the configs read: each of our actions not given its key yet (cl_reloadedbinds, how many
+have been) gets it if neither is bound already, so a player's own keys stay and one let go stays let go
+----------------
+*/
+void RL_DefaultBinds(void)
+{
+    const int given = Q_max(Cvar_Get("cl_reloadedbinds", "0", CVAR_ARCHIVE)->integer, 0);
+
+    for (int i = given; i < (int)ARRAY_LEN(rl_ourActs); i++) {
+        const int   key   = Key_StringToKeynum(rl_ourActs[i].key);
+        const char *bound = Key_GetBinding(key);
+
+        if (Key_GetKey(rl_ourActs[i].cmd) < 0 && (!bound || !*bound)) {
+            Key_SetBinding(key, rl_ourActs[i].cmd);
+        }
+    }
+    if (given < (int)ARRAY_LEN(rl_ourActs)) {
+        Cvar_SetValue("cl_reloadedbinds", ARRAY_LEN(rl_ourActs));
+    }
+}
+
+// an action's place in the list, -1 not in it
+static int RL_ActIndex(const std::vector<rlAct_t>& acts, const char *cmd)
+{
+    for (int a = 0; a < (int)acts.size(); a++) {
+        if (!Q_stricmp(acts[a].cmd.c_str(), cmd)) {
+            return a;
+        }
+    }
+    return -1;
+}
+
+// the stock list read, Lean Left and Right moved under Strafe Right (Allied Assault's list has them last, in
+// MULTIPLAYER; Spearhead's under Move Backward); an O_KEYS's actions: from its command's to the next O_KEYS's found
+// (the first found from the list's start)
 static void RL_KeysRead(void)
 {
     std::vector<rlAct_t>& acts  = rl_keys.acts;
     int                   first = INT_MAX;
+    const char           *after = "+moveright";
 
     RL_EachLine("ui/bind.scr", [&acts] {
         const char *name = Cmd_Argv(1);
@@ -2495,6 +2509,20 @@ static void RL_KeysRead(void)
             acts.push_back({Q_stricmpn(name, "DM ", 3) ? name : name + 3, Cmd_Argv(2), {-1, -1}});
         }
     });
+    for (const char *cmd : {"+leanleft", "+leanright"}) {
+        const int from = RL_ActIndex(acts, cmd);
+
+        if (from >= 0 && RL_ActIndex(acts, after) >= 0) {
+            const rlAct_t act = acts[from];
+
+            acts.erase(acts.begin() + from);
+            acts.insert(acts.begin() + RL_ActIndex(acts, after) + 1, act);
+            after = cmd;
+        }
+    }
+    for (const auto& ours : rl_ourActs) {
+        acts.push_back({ours.name, ours.cmd, {-1, -1}});
+    }
     for (int i = 0; i < RL_OPTS; i++) {
         rl_keys.from[i] = -1;
         for (int a = 0; rl_opts[i].kind == OC_KEYS && a < (int)acts.size() && rl_keys.from[i] < 0; a++) {
@@ -2576,13 +2604,22 @@ static void RL_OptRead(void)
     }
 }
 
-// a setting shown: its tab's (an O_KEYS with actions)
-static bool RL_OptShown(int i)
+// a setting shown: its tab's (an O_KEYS with actions; OF_CSGOHUD's and OF_CS2HUD's with their HUD Style, unless
+// anyStyle)
+static bool RL_OptShown(int i, bool anyStyle = false)
 {
     const rlOpt_t& o = rl_opts[i];
 
     if (o.kind == OC_KEYS && rl_keys.from[i] >= rl_keys.to[i]) {
         return false;
+    }
+    if (!anyStyle && (o.flags & (OF_CSGOHUD | OF_CS2HUD))) {
+        cvar_t *style = RL_OptCvar("cg_hudstyle", "1", CVAR_ARCHIVE);
+
+        UI_DrawDep(style);
+        if (style->integer != ((o.flags & OF_CSGOHUD) ? 1 : 2)) {
+            return false;
+        }
     }
     return rl_opts[rl_opt.sec[i]].tab == rl_opt.tab;
 }
@@ -2596,7 +2633,7 @@ the later ones' in the last, OF_LEFT2's in the first of two), a
 section's title 40 high, 14 over it past the first, a row 66 (keys 44;
 swatches 34 more a row past the first), the preview 0.32 of its column
 (220 at most) and 12 under it. The
-columns: CONTROLS' alone (the mouse and the keys) alike, three as the
+columns: CONTROLS' alone (the keys) alike, three as the
 width has room for (two, one); else 0.55 and 0.45 of it, one below 1100.
 The content's height; the columns' lines (their x)
 ----------------
@@ -2631,7 +2668,7 @@ static float RL_OptLayout(float x, float w, std::vector<rlOptPlace_t>& out, std:
             secs.push_back(s);
         }
     }
-    // CONTROLS' alone (the mouse and the keys)
+    // CONTROLS' alone (the keys)
     const bool  alone = rl_opt.tab == OT_CONTROLS && !secs.empty();
     const int   n  = alone ? (w >= 1300 ? 3 : w >= 860 ? 2 : 1) : w < 1100 ? 1 : 2;
     const float lw = floorf(w * 0.55f + 0.5f);
@@ -2676,6 +2713,14 @@ static float RL_OptLayout(float x, float w, std::vector<rlOptPlace_t>& out, std:
 
 static const char *RL_OptValue(int i)
 {
+    if (rl_opts[i].flags & OF_TURN) {
+        // (the distance there is, kept or not: drawn again when what it comes from changes)
+        UI_DrawDep(Cvar_Get("sensitivity", "5", CVAR_ARCHIVE));
+        UI_DrawDep(Cvar_Get("m_yaw", "0.022", CVAR_ARCHIVE));
+        UI_DrawDep(Cvar_Get("m_dpi", "800", CVAR_ARCHIVE));
+        UI_DrawDep(Cvar_Get("cg_fov", "80", CVAR_ARCHIVE));
+        return va("%g", CL_MouseTurn_Distance());
+    }
     return RL_Latched(rl_opt.cv[i]);
 }
 
@@ -2721,13 +2766,13 @@ static int RL_OptChoice(int i)
     if (o.flags & OF_FONT) {
         return (int)(RL_FindFont(value) - rl_fonts);
     }
-    if (o.flags & OF_ANISO && !atoi(value)) {
+    if (o.flags & OF_LEVEL && !atoi(value)) {
         return 0;
     }
     for (int k = 0; o.choices[k]; k++) {
-        const char *const is = o.flags & OF_ANISO ? RL_Latched(RL_OptOther("r_ext_max_anisotropy")) : value;
+        const char *const is = o.flags & OF_LEVEL ? RL_Latched(RL_OptOther(o.other)) : value;
 
-        if ((o.flags & OF_ANISO) ? k && RL_OptIs(is, o.values[k]) : o.values ? RL_OptIs(is, o.values[k]) : RL_OptIs(is, va("%d", k))) {
+        if ((o.flags & OF_LEVEL) ? k && RL_OptIs(is, o.values[k]) : o.values ? RL_OptIs(is, o.values[k]) : RL_OptIs(is, va("%d", k))) {
             return k;
         }
     }
@@ -2790,10 +2835,10 @@ static void RL_OptPick(int i, int k)
     if (o.flags & OF_DISPLAY) {
         RL_OptCvarSet("r_fullscreen", k ? "0" : "1");
         RL_OptCvarSet("r_noborder", k == 2 ? "1" : "0");
-    } else if (o.flags & OF_ANISO) {
-        RL_OptCvarSet("r_ext_texture_filter_anisotropic", k ? "1" : "0");
+    } else if (o.flags & OF_LEVEL) {
+        RL_OptCvarSet(o.cvar, k ? "1" : "0");
         if (k) {
-            RL_OptCvarSet("r_ext_max_anisotropy", o.values[k]);
+            RL_OptCvarSet(o.other, o.values[k]);
         }
     } else if (o.flags & OF_RES) {
         int w, h;
@@ -2816,7 +2861,8 @@ static void RL_OptFlip(int i)
     if (rl_opts[i].flags & OF_NEG) {
         RL_OptSet(i, va("%g", -atof(RL_OptValue(i))));
     } else {
-        RL_OptSet(i, atoi(RL_OptValue(i)) ? "0" : "1");
+        // (on: the default when that is a level (ms, say), else 1)
+        RL_OptSet(i, atoi(RL_OptValue(i)) ? "0" : atoi(rl_opts[i].def) > 1 ? rl_opts[i].def : "1");
     }
 }
 
@@ -2843,16 +2889,12 @@ static const char *RL_OptShow(int i)
     return va("%.*f", o.step < 0.01f ? 3 : o.step < 0.1f ? 2 : o.step < 1 ? 1 : 0, value);
 }
 
-// the crosshair code typed (none: the clipboard's) imported by crosshair_import, which keeps it in cg_crosshair_code
+// the crosshair code typed (none: the clipboard's) imported as crosshair_import does, kept in cg_crosshair_code; the
+// note says how it went
 static void RL_OptImport(void)
 {
-    cvar_t   *kept = Cvar_Get("cg_crosshair_code", "", CVAR_ARCHIVE);
-    const int was  = kept->modificationCount;
-
-    Cmd_ExecuteString(va("crosshair_import %s", rl_opt.code.c_str()));
-    rl_opt.note = kept->modificationCount != was || (!rl_opt.code.empty() && !strcmp(kept->string, rl_opt.code.c_str())) ? "CROSSHAIR IMPORTED"
-                                                                                                                       : "NOT A CS2 CROSSHAIR CODE";
-    rl_mm.edit = F_NONE;
+    rl_opt.note = CL_CrosshairImportNote(rl_opt.code.empty() ? NULL : rl_opt.code.c_str());
+    rl_mm.edit  = F_NONE;
 }
 
 // the boxes synced to the bindings when they changed (key_serial): a box's key bound to another command let go, an
@@ -2940,8 +2982,7 @@ static void RL_KeyPressed(int key)
     } else if (on && *on && Q_stricmp(on, a.cmd.c_str())) {
         rl_keys.ask[0] = box;
         rl_keys.ask[1] = key;
-        rl_mm.confirm  = ID_KEYMOVE;
-        menuManager.ShowMenu("reloaded_confirm");
+        RL_Ask(ID_KEYMOVE);
     } else {
         RL_KeyBind(box, key);
     }
@@ -2995,6 +3036,12 @@ static void RL_KeysDefaults(void)
             Key_SetBinding(Key_StringToKeynum(Cmd_Argv(1)), Cmd_ArgsFrom(2));
         }
     });
+    // ours, as default.cfg would
+    for (const auto& ours : rl_ourActs) {
+        if (is(ours.cmd)) {
+            Key_SetBinding(Key_StringToKeynum(ours.key), ours.cmd);
+        }
+    }
 }
 
 // DEFAULTS: the settings shown back to their defaults (and the cvars a choice stands for with them), the keys shown too
@@ -3003,12 +3050,12 @@ static void RL_OptDefaults(void)
     for (int i = 0; i < RL_OPTS; i++) {
         const int flags = rl_opts[i].flags;
 
-        if (!rl_opts[i].cvar || !RL_OptShown(i)) {
+        if (!rl_opts[i].cvar || !RL_OptShown(i, true)) {
             continue;
         }
         Cvar_Reset(rl_opts[i].cvar);
-        if (flags & (OF_DISPLAY | OF_ANISO)) {
-            Cvar_Reset(flags & OF_DISPLAY ? "r_noborder" : "r_ext_max_anisotropy");
+        if (flags & (OF_DISPLAY | OF_LEVEL)) {
+            Cvar_Reset(flags & OF_DISPLAY ? "r_noborder" : rl_opts[i].other);
         }
     }
     RL_KeysDefaults();
@@ -3024,28 +3071,33 @@ swatches (28 across, 6 apart, in rows of the setting's step, the one set
 framed)
 ----------------
 */
-static void RL_Slider(UIReloadedMenu *m, const rlView_t& v, int i, float x, float y, int id)
+static void RL_Slider(UIReloadedMenu *m, const rlView_t& v, int i, float x, float y, int id, bool off = false)
 {
     const rlOpt_t& o    = rl_opts[i];
     const float    frac = Q_max(0.0f, Q_min(1.0f, (RL_OptNumber(i) - o.lo) / (o.hi - o.lo))), tw = 190, bx = x + 204;
-    const bool     hot = m->Hot(id) || rl_opt.drag == id, typing = rl_mm.edit == F_VALUE && rl_opt.row == i;
+    const bool     hot = !off && (m->Hot(id) || rl_opt.drag == id), typing = !off && rl_mm.edit == F_VALUE && rl_opt.row == i;
 
-    RL_Box(v, x, y + 12, tw, 4, RL_Rgb(255, 255, 255, 40));
-    RL_Box(v, x, y + 12, tw * frac, 4, RL_BRASS);
-    RL_Round(v, x + tw * frac - 8, y + 6, 16, 16, 8, hot ? RL_BRASS : RL_TEXT);
-    m->Hit(v, x, y, tw, 28, id);
+    // (off: faint, no hits: neither dragged nor typed in)
+    RL_Box(v, x, y + 12, tw, 4, RL_Rgb(255, 255, 255, off ? 20 : 40));
+    RL_Box(v, x, y + 12, tw * frac, 4, off ? RL_Rgb(255, 255, 255, 50) : RL_BRASS);
+    RL_Round(v, x + tw * frac - 8, y + 6, 16, 16, 8, off ? RL_Rgb(255, 255, 255, 70) : hot ? RL_BRASS : RL_FG);
+    if (!off) {
+        m->Hit(v, x, y, tw, 28, id);
+    }
     // the value
     RL_Panel(v, bx, y, 56, 28, RL_Rgb(0, 0, 0, typing ? 160 : 120));
     if (typing) {
-        const float tw2 = RL_Text(v, bx + 6, y + 14, rl_opt.value.c_str(), 16, RL_TEXT, false, RL_LEFT, 0, RL_MID);
+        const float tw2 = RL_Text(v, bx + 6, y + 14, rl_opt.value.c_str(), 16, RL_FG, false, RL_LEFT, 0, RL_MID);
 
         if ((cls.realtime / 530) % 2 == 0) {
             RL_Box(v, bx + 6 + tw2 + 1, y + 4, 2, 20, RL_BRASS);
         }
     } else {
-        RL_Text(v, bx + 28, y + 14, RL_OptShow(i), 16, m->Hot(id + 1) ? RL_BRASS : RL_TEXT, false, RL_CENTER, 0, RL_MID);
+        RL_Text(v, bx + 28, y + 14, RL_OptShow(i), 16, off ? RL_FG_FAINT : m->Hot(id + 1) ? RL_BRASS : RL_FG, false, RL_CENTER, 0, RL_MID);
     }
-    m->Hit(v, bx, y, 56, 28, id + 1);
+    if (!off) {
+        m->Hit(v, bx, y, 56, 28, id + 1);
+    }
 }
 
 // Omaha's cycle: the choice between two arrows (the left one back, the rest on), 260 by 32
@@ -3060,17 +3112,22 @@ static void RL_Cycle(UIReloadedMenu *m, const rlView_t& v, float x, float y, con
             RL_Box(v, ax + 1, y + 1, 30, 30, RL_Rgb(255, 255, 255, 18));
         }
         RL_Shape(x0, y0, RL_P(v, ax + 20) - x0, RL_P(v, y + 22) - y0, k ? "poly 1 1 1 1 0 0 1 0.5 0 1" : "poly 1 1 1 1 1 0 1 1 0 0.5",
-                 m->Hot(id + k) ? RL_BRASS : RL_MUTED, v.s);
+                 m->Hot(id + k) ? RL_BRASS : RL_FG_MUTED, v.s);
     }
-    RL_Text(v, x + 130, y + 16, label, 16, RL_TEXT, false, RL_CENTER, 0, RL_MID, 260 - 72);
+    RL_Text(v, x + 130, y + 16, label, 16, RL_FG, false, RL_CENTER, 0, RL_MID, 260 - 72);
     m->Hit(v, x, y, 32, 32, id);
     m->Hit(v, x + 32, y, 228, 32, id + 1);
 }
 
-static void RL_Toggle(const rlView_t& v, float x, float y, bool on, bool hot)
+static void RL_Toggle(const rlView_t& v, float x, float y, bool on, bool hot, bool off = false)
 {
+    if (off) {
+        RL_Round(v, x, y, 56, 28, 14, RL_Rgb(255, 255, 255, 14));
+        RL_Round(v, x + 3, y + 3, 22, 22, 11, RL_Rgb(255, 255, 255, 40));
+        return;
+    }
     RL_Round(v, x, y, 56, 28, 14, on ? (hot ? RL_BRASS_HOT : RL_BRASS) : RL_Rgb(255, 255, 255, hot ? 64 : 40));
-    RL_Round(v, x + (on ? 31 : 3), y + 3, 22, 22, 11, on ? RL_INK : RL_Rgb(220, 216, 206));
+    RL_Round(v, x + (on ? 31 : 3), y + 3, 22, 22, 11, on ? RL_INK : RL_Rgb(214, 220, 228));
 }
 
 static void RL_Swatches(UIReloadedMenu *m, const rlView_t& v, int i, float right, float top, int id)
@@ -3088,13 +3145,14 @@ static void RL_Swatches(UIReloadedMenu *m, const rlView_t& v, int i, float right
         RL_Round(v, x, y, 28, 28, 3, RL_Rgb(rgb >> 16, (rgb >> 8) & 0xFF, rgb & 0xFF));
         RL_RoundFrame(v, x, y, 28, 28, 3, 1, RL_Rgb(255, 255, 255, 40));
         if (!Q_stricmp(set, c[k]) || m->Hot(id + k)) {
-            RL_RoundFrame(v, x - 3, y - 3, 34, 34, 5, 2, Q_stricmp(set, c[k]) ? RL_Rgb(255, 255, 255, 110) : RL_TEXT);
+            RL_RoundFrame(v, x - 3, y - 3, 34, 34, 5, 2, Q_stricmp(set, c[k]) ? RL_Rgb(255, 255, 255, 110) : RL_FG);
         }
         m->Hit(v, x, y, 28, 28, id + k);
     }
 }
 
-// the crosshair as CG_UpdateCrosshair lays it out at this screen's height, a pixel of it 2 here, centred in x y w h
+// the crosshair as CG_UpdateCrosshair lays it out at this screen's height, life-size (a pixel of it a pixel here: twice
+// as big read as another size from the game's), centred in x y w h
 static void RL_Crosshair(const rlView_t& v, float x, float y, float w, float h)
 {
     static cvar_t *outline[2];
@@ -3140,17 +3198,17 @@ static void RL_Crosshair(const rlView_t& v, float x, float y, float w, float h)
         for (int k = 0; mode && k < n; k++) {
             const int *p = piece[k];
 
-            RL_BoxPx(cx + 2 * (p[0] - 1), cy + 2 * (p[1] - 1), cx + 2 * (p[0] + p[2] + (mode == 1)), cy + 2 * p[1], oc);
-            RL_BoxPx(cx + 2 * (p[0] - 1), cy + 2 * p[1], cx + 2 * p[0], cy + 2 * (p[1] + p[3]), oc);
+            RL_BoxPx(cx + p[0] - 1, cy + p[1] - 1, cx + p[0] + p[2] + (mode == 1), cy + p[1], oc);
+            RL_BoxPx(cx + p[0] - 1, cy + p[1], cx + p[0], cy + p[1] + p[3], oc);
             if (mode == 1) {
-                RL_BoxPx(cx + 2 * (p[0] - 1), cy + 2 * (p[1] + p[3]), cx + 2 * (p[0] + p[2] + 1), cy + 2 * (p[1] + p[3] + 1), oc);
-                RL_BoxPx(cx + 2 * (p[0] + p[2]), cy + 2 * p[1], cx + 2 * (p[0] + p[2] + 1), cy + 2 * (p[1] + p[3]), oc);
+                RL_BoxPx(cx + p[0] - 1, cy + p[1] + p[3], cx + p[0] + p[2] + 1, cy + p[1] + p[3] + 1, oc);
+                RL_BoxPx(cx + p[0] + p[2], cy + p[1], cx + p[0] + p[2] + 1, cy + p[1] + p[3], oc);
             }
         }
         for (int k = 0; k < n; k++) {
             const int *p = piece[k];
 
-            RL_BoxPx(cx + 2 * p[0], cy + 2 * p[1], cx + 2 * (p[0] + p[2]), cy + 2 * (p[1] + p[3]), c);
+            RL_BoxPx(cx + p[0], cy + p[1], cx + p[0] + p[2], cy + p[1] + p[3], c);
         }
     }
 }
@@ -3168,10 +3226,10 @@ static void RL_KeyRow(UIReloadedMenu *m, const rlView_t& v, int a, float x, floa
     const float    mid = y + h / 2;
 
     if (rl_keys.wait >= 0 && rl_keys.wait / 2 == a) {
-        RL_Box(v, x - RL_PAD + 2, y, w + 2 * RL_PAD - 3, h - 1, RL_SEL);
+        RL_Box(v, x - RL_PAD + 2, y, w + 2 * RL_PAD - 3, h - 1, RL_Alpha(RL_BRASS, 48));
         RL_Box(v, x - RL_PAD + 2, y, 3, h - 1, RL_BRASS);
     }
-    RL_Text(v, x, mid, act.name.c_str(), 19, RL_TEXT, false, RL_LEFT, 0, RL_MID, RL_KeyX(x, w, 0) - x - 18);
+    RL_Text(v, x, mid, act.name.c_str(), 19, RL_FG, false, RL_LEFT, 0, RL_MID, RL_KeyX(x, w, 0) - x - 18);
     for (int k = 0; k < 2; k++) {
         const float bx = RL_KeyX(x, w, k);
         const int   id = ID_KEY + a * 2 + k;
@@ -3182,12 +3240,31 @@ static void RL_KeyRow(UIReloadedMenu *m, const rlView_t& v, int a, float x, floa
         if (wait) {
             RL_Text(v, bx + 55, mid, "PRESS A KEY", 13, RL_BRASS, true, RL_CENTER, 1.2f, RL_MID);
         } else {
-            RL_Text(v, bx + 55, mid, act.key[k] >= 0 ? RL_KeyName(act.key[k]) : "\x97", 16, hot ? RL_BRASS : act.key[k] >= 0 ? RL_TEXT : RL_FAINT,
+            RL_Text(v, bx + 55, mid, act.key[k] >= 0 ? RL_KeyName(act.key[k]) : "\x97", 16, hot ? RL_BRASS : act.key[k] >= 0 ? RL_FG : RL_FG_FAINT,
                     false, RL_CENTER, 0, RL_MID, 98);
         }
         m->Hit(v, bx, mid - 16, 110, 32, id);
     }
     RL_Box(v, x, y + h - 2, w, 1, RL_LINE);
+}
+
+static int RL_OptPending(void);
+
+// a button's row on (OF_HDRCAL: calibration shows only while HDR or the HDR look runs, and a restart would end it)
+static bool RL_OptButtonOn(int i)
+{
+    return !(rl_opts[i].flags & OF_HDRCAL) || (RL_OptOther("r_hdrOutputActive")->integer && !(RL_OptPending() & 1));
+}
+
+// a setting's row off: OF_UNDER's while Enhanced Rendering is off (its value waiting for APPLY too), OF_RP's
+// while Remote Prediction is off
+static bool RL_OptOff(int i)
+{
+    const int flags = rl_opts[i].flags;
+
+    return ((flags & OF_UNDER) && !atoi(RL_Latched(RL_OptOther("r_temporal"))))
+        || ((flags & OF_RP) && !atoi(RL_Latched(RL_OptOther("cg_remotePrediction"))))
+        || ((flags & (OF_NOTCS | OF_CS)) && (RL_OptOther("m_csmode")->integer != 0) == ((flags & OF_NOTCS) != 0));
 }
 
 // a setting's row: its label (and its description), its control at the right edge, a line under it
@@ -3196,22 +3273,23 @@ static void RL_OptRow(UIReloadedMenu *m, const rlView_t& v, int i, float x, floa
     const rlOpt_t& o   = rl_opts[i];
     const int      id  = ID_OPT + i * RL_OPT_IDS;
     const float    mid = y + 32, right = x + w;
+    const bool     off = RL_OptOff(i);
 
     if (o.kind == OC_SECTION) {
         // (keys: their boxes' names over them)
         RL_Text(v, x, y + 18, o.label, 15, RL_BRASS, true, RL_LEFT, 2.6f, RL_MID);
         for (int k = 0; rl_opts[i + 1].kind == OC_KEYS && k < 2; k++) {
-            RL_Text(v, RL_KeyX(x, w, k) + 55, y + 18, k ? "ALTERNATE" : "PRIMARY", 12, RL_MUTED, true, RL_CENTER, 1.4f, RL_MID);
+            RL_Text(v, RL_KeyX(x, w, k) + 55, y + 18, k ? "ALTERNATE" : "PRIMARY", 12, RL_FG_MUTED, true, RL_CENTER, 1.4f, RL_MID);
         }
         return;
     }
     if (o.kind == OC_PREVIEW) {
         RL_Frame(v, x, y, w, h - 12, 1, RL_LINE);
         RL_Crosshair(v, x, y, w, h - 12);
-        RL_Text(v, x + 12, y + h - 12 - 18, "PREVIEW, 2X", 12, RL_Rgb(255, 255, 255, 150), true, RL_LEFT, 1.6f, RL_MID);
+        RL_Text(v, x + 12, y + h - 12 - 18, "PREVIEW, LIFE-SIZE", 12, RL_Rgb(255, 255, 255, 150), true, RL_LEFT, 1.6f, RL_MID);
         return;
     }
-    float cw = o.kind == OC_TOGGLE ? 56 : o.kind == OC_CODE ? 364 : 260; // the control's width
+    float cw = o.kind == OC_TOGGLE ? 56 : o.kind == OC_CODE ? 364 : o.kind == OC_BUTTON ? 150 : 260; // the control's width
 
     if (o.cvar) {
         UI_DrawDep(rl_opt.cv[i]);
@@ -3222,13 +3300,13 @@ static void RL_OptRow(UIReloadedMenu *m, const rlView_t& v, int i, float x, floa
             cw += o.kind == OC_SWATCH ? 34 : RL_TextW(v, o.choices[k], 15, true, 1.6f) + 40;
         }
     }
-    RL_Text(v, x, o.desc[0] ? y + 21 : mid, o.label, 19, RL_TEXT, false, RL_LEFT, 0, RL_MID, w - cw - 24);
+    RL_Text(v, x, o.desc[0] ? y + 21 : mid, o.label, 19, off ? RL_FG_MUTED : RL_FG, false, RL_LEFT, 0, RL_MID, w - cw - 24);
     if (o.desc[0]) {
-        RL_Text(v, x, y + 45, o.desc, 14, RL_MUTED, false, RL_LEFT, 0, RL_MID, w - cw - 24);
+        RL_Text(v, x, y + 45, o.desc, 14, off ? RL_FG_FAINT : RL_FG_MUTED, false, RL_LEFT, 0, RL_MID, w - cw - 24);
     }
     switch (o.kind) {
     case OC_SEG:
-        RL_Segments(m, v, right, mid - 16, 32, o.choices, RL_OptChoices(i), RL_OptChoice(i), id, true);
+        RL_Segments(m, v, right, mid - 16, 32, o.choices, RL_OptChoices(i), RL_OptChoice(i), id, true, off);
         break;
     case OC_CYCLE:
         {
@@ -3240,19 +3318,24 @@ static void RL_OptRow(UIReloadedMenu *m, const rlView_t& v, int i, float x, floa
         }
         break;
     case OC_SLIDER:
-        RL_Slider(m, v, i, right - 260, mid - 14, id);
+        RL_Slider(m, v, i, right - 260, mid - 14, id, off);
         break;
     case OC_TOGGLE:
-        RL_Toggle(v, right - 56, mid - 14, RL_OptOn(i), m->Hot(id));
-        m->Hit(v, right - 56, mid - 14, 56, 28, id);
+        RL_Toggle(v, right - 56, mid - 14, RL_OptOn(i), !off && m->Hot(id), off);
+        if (!off) {
+            m->Hit(v, right - 56, mid - 14, 56, 28, id);
+        }
         break;
     case OC_SWATCH:
         RL_Swatches(m, v, i, right, mid - 14, id);
         break;
     case OC_CODE:
-        RL_Field(v, right - 364, mid - 18, 260, 36, rl_opt.code, "CS\x85, or the clipboard's", rl_mm.edit == F_CODE, m->Hot(id));
+        RL_Field(v, right - 364, mid - 18, 260, 36, rl_opt.code, "CS\x85, or the clipboard's", rl_mm.edit == F_CODE, m->Hot(id), RL_SL_BOTH);
         m->Hit(v, right - 364, mid - 18, 260, 36, id);
-        RL_Button(m, v, right - 100, mid - 18, 100, 36, "IMPORT", false, id + 1);
+        RL_Button(m, v, right - 100, mid - 18, 100, 36, "IMPORT", false, id + 1, false, RL_SL_LEFT);
+        break;
+    case OC_BUTTON:
+        RL_Button(m, v, right - 150, mid - 16, 150, 32, o.def, false, id, !RL_OptButtonOn(i), RL_SL_LEFT);
         break;
     }
     RL_Box(v, x, y + h - 2, w, 1, RL_LINE);
@@ -3363,7 +3446,7 @@ static void RL_Options(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
         }
     }
     if (places.empty()) {
-        RL_Text(v, x + RL_PAD, top + 20, "No setting matches.", 17, RL_MUTED, false, RL_LEFT, 0, RL_MID);
+        RL_Text(v, x + RL_PAD, top + 20, "No setting matches.", 17, RL_FG_MUTED, false, RL_LEFT, 0, RL_MID);
     } else if (height > band) {
         RL_ScrollBar(v, x + w, top, band, scroll, band, height);
     }
@@ -3375,12 +3458,12 @@ static void RL_Options(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
         const float dx  = m->m_screen == SCR_OPTIONS ? 150 + 8 : 0; // (BACK's room)
 
         if (dx) {
-            RL_Button(m, v, x + RL_PAD, by, 150, RL_CTRL, "BACK", false, ID_BACK);
+            RL_Button(m, v, x + RL_PAD, by, 150, RL_CTRL, "BACK", false, ID_BACK, false, RL_SL_RIGHT);
         }
-        RL_Button(m, v, x + RL_PAD + dx, by, 150, RL_CTRL, "DEFAULTS", false, ID_DEFAULTS);
+        RL_Button(m, v, x + RL_PAD + dx, by, 150, RL_CTRL, "DEFAULTS", false, ID_DEFAULTS, false, dx ? RL_SL_BOTH : RL_SL_RIGHT);
         // (between the buttons)
         RL_Text(v, x + w / 2 + dx / 2, foot + RL_FOOT / 2, say, 15, RL_BRASS, true, RL_CENTER, 2, RL_MID, w - 2 * (RL_PAD + 190 + 16) - dx);
-        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "APPLY", true, ID_OAPPLY, !pending);
+        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "APPLY", true, ID_OAPPLY, !pending, RL_SL_LEFT);
     }
 }
 
@@ -3403,6 +3486,9 @@ static void RL_OptChoose(int id)
     const int      i = (id - ID_OPT) / RL_OPT_IDS, part = (id - ID_OPT) % RL_OPT_IDS;
     const rlOpt_t& o = rl_opts[i];
 
+    if (RL_OptOff(i)) {
+        return;
+    }
     switch (o.kind) {
     case OC_SEG:
         RL_OptPick(i, part);
@@ -3432,6 +3518,11 @@ static void RL_OptChoose(int id)
             RL_OptImport();
         } else {
             rl_mm.edit = F_CODE;
+        }
+        break;
+    case OC_BUTTON:
+        if (RL_OptButtonOn(i)) {
+            Cbuf_AddText(va("%s\n", o.other));
         }
         break;
     }
@@ -3623,9 +3714,9 @@ static void RL_VoteRow(UIReloadedMenu *m, const rlView_t& v, float x, float y, f
     if (!off) {
         RL_RowMark(m, v, x, y, w, h, sel, id);
     }
-    RL_Text(v, x + RL_PAD + 8, y + h / 2, text, 18, off ? RL_FAINT : sel ? RL_TEXT : RL_SOFT, sel, RL_LEFT, 0, RL_MID, w - 2 * RL_PAD - 8 - cw);
+    RL_Text(v, x + RL_PAD + 8, y + h / 2, text, 18, off ? RL_FG_FAINT : sel ? RL_FG : RL_FG_SOFT, sel, RL_LEFT, 0, RL_MID, w - 2 * RL_PAD - 8 - cw);
     if (caption) {
-        RL_Text(v, x + w - RL_PAD, y + h / 2, caption, 13, RL_MUTED, true, RL_RIGHT, 1.6f, RL_MID);
+        RL_Text(v, x + w - RL_PAD, y + h / 2, caption, 13, RL_FG_MUTED, true, RL_RIGHT, 1.6f, RL_MID);
     }
 }
 
@@ -3652,13 +3743,13 @@ static void RL_Vote(UIReloadedMenu *m, const rlView_t& v, float x, float y, floa
         const int   left = Q_max(0, (30000 - (cl.serverTime - at)) / 1000 + 1);
         const float lx   = RL_Text(v, cx + 24, cy + 30, "VOTE IN PROGRESS", 14, RL_BRASS, true, RL_LEFT, 1.6f, RL_MID);
 
-        RL_Box(v, cx, cy, cw, ch, RL_SEL);
+        RL_Box(v, cx, cy, cw, ch, RL_Alpha(RL_BRASS, 48));
         RL_Box(v, cx, cy, 3, ch, RL_BRASS);
-        RL_Text(v, cx + 24 + lx + 16, cy + 30, va("%d S LEFT", left), 14, RL_MUTED, true, RL_LEFT, 1.6f, RL_MID);
-        RL_Text(v, cx + 24, cy + 68, CL_ConfigString(CS_VOTE_STRING), 26, RL_TEXT, true, RL_LEFT, 0, RL_MID, cw - 24 - 360);
+        RL_Text(v, cx + 24 + lx + 16, cy + 30, va("%d S LEFT", left), 14, RL_FG_MUTED, true, RL_LEFT, 1.6f, RL_MID);
+        RL_Text(v, cx + 24, cy + 68, CL_ConfigString(CS_VOTE_STRING), 26, RL_FG, true, RL_LEFT, 0, RL_MID, cw - 24 - 360);
         RL_Text(v, cx + 24, cy + 104,
                 va("YES  %s      NO  %s      UNDECIDED  %s", CL_ConfigString(CS_VOTE_YES), CL_ConfigString(CS_VOTE_NO), CL_ConfigString(CS_VOTE_UNDECIDED)),
-                15, RL_SOFT, true, RL_LEFT, 1.6f, RL_MID);
+                15, RL_FG_SOFT, true, RL_LEFT, 1.6f, RL_MID);
         if (cl.snap.ps.voted) {
             RL_Text(v, cx + cw - 24, cy + ch / 2, "YOUR VOTE IS IN", 15, RL_BRASS, true, RL_RIGHT, 2, RL_MID);
         } else {
@@ -3670,7 +3761,7 @@ static void RL_Vote(UIReloadedMenu *m, const rlView_t& v, float x, float y, floa
         say = "ONE VOTE AT A TIME";
     }
     if (!on || !got) {
-        RL_Text(v, x + RL_PAD + 8, top + 40, !on ? "Voting is off on this server." : "Asking the server for its votes\x85", 17, RL_MUTED, false, RL_LEFT, 0,
+        RL_Text(v, x + RL_PAD + 8, top + 40, !on ? "Voting is off on this server." : "Asking the server for its votes\x85", 17, RL_FG_MUTED, false, RL_LEFT, 0,
                 RL_MID);
     } else {
         // the server's votes on the left, the one picked's choices on the right
@@ -3701,7 +3792,7 @@ static void RL_Vote(UIReloadedMenu *m, const rlView_t& v, float x, float y, floa
 
             RL_Label(v, rx + RL_PAD + 8, top + 28, RL_Upper(pick->name.c_str()).c_str());
             if (pick->type == VOTE_NO_CHOICES) {
-                RL_Text(v, rx + RL_PAD + 8, ly + rh / 2, "Nothing to choose: CALL VOTE calls it.", 17, RL_MUTED, false, RL_LEFT, 0, RL_MID);
+                RL_Text(v, rx + RL_PAD + 8, ly + rh / 2, "Nothing to choose: CALL VOTE calls it.", 17, RL_FG_MUTED, false, RL_LEFT, 0, RL_MID);
             } else if (typed) {
                 const float fw = Q_min(360.0f, rw - 2 * RL_PAD - 16);
 
@@ -3721,13 +3812,13 @@ static void RL_Vote(UIReloadedMenu *m, const rlView_t& v, float x, float y, floa
                                NULL, rl_vote.choice == c, false, ID_VCHOICE + c);
                 }
                 if (!cn) {
-                    RL_Text(v, rx + RL_PAD + 8, ly + rh / 2, "No one to choose.", 17, RL_MUTED, false, RL_LEFT, 0, RL_MID);
+                    RL_Text(v, rx + RL_PAD + 8, ly + rh / 2, "No one to choose.", 17, RL_FG_MUTED, false, RL_LEFT, 0, RL_MID);
                 } else if (cn > fit) {
                     RL_ScrollBar(v, x + w, ly, foot - ly, rl_vote.ctop, fit, cn);
                 }
             }
         } else if (!at) {
-            RL_Text(v, rx + RL_PAD + 8, ly + rh / 2, "Pick a vote on the left.", 17, RL_MUTED, false, RL_LEFT, 0, RL_MID);
+            RL_Text(v, rx + RL_PAD + 8, ly + rh / 2, "Pick a vote on the left.", 17, RL_FG_MUTED, false, RL_LEFT, 0, RL_MID);
         }
     }
     // the foot row: BACK, CALL VOTE
@@ -3735,9 +3826,9 @@ static void RL_Vote(UIReloadedMenu *m, const rlView_t& v, float x, float y, floa
         const float by    = RL_FootRow(v, x, foot, w);
         const bool  ready = RL_VoteReady();
 
-        RL_Button(m, v, x + RL_PAD, by, 150, RL_CTRL, "BACK", false, ID_BACK);
+        RL_Button(m, v, x + RL_PAD, by, 150, RL_CTRL, "BACK", false, ID_BACK, false, RL_SL_RIGHT);
         RL_Text(v, x + w / 2, foot + RL_FOOT / 2, say, 15, RL_BRASS, true, RL_CENTER, 2, RL_MID, w - 2 * (RL_PAD + 190 + 16));
-        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "CALL VOTE", true, ID_VCALL, !ready);
+        RL_Button(m, v, x + w - RL_PAD - 190, by, 190, RL_CTRL, "CALL VOTE", true, ID_VCALL, !ready, RL_SL_LEFT);
     }
 }
 
@@ -3800,19 +3891,108 @@ profile's panel) or the crosshair's preview (Options' panel), the front
 the rest
 ================
 */
-// the screens beside the rail: their left edge, their width
-static void RL_PageX(const rlView_t& v, float *x, float *w)
+// the main menu's screens: under the top bar, RL_EDGE from it and from the screen's edges, 1824 across at most (16:9's),
+// in the middle
+static void RL_PageRect(const rlView_t& v, float *x, float *y, float *w, float *h)
 {
-    *x = v.dw >= 1700 ? 480.0f : 420.0f;
-    *w = Q_min(v.dw - *x - RL_EDGE, 1640.0f);
+    *w = Q_min(v.dw - 2 * RL_EDGE, 1824.0f);
+    *x = floorf((v.dw - *w) / 2);
+    *y = RL_BAR + RL_EDGE;
+    *h = v.dh - *y - RL_EDGE;
+}
+
+/*
+================
+The main menu's top bar (Project: Omaha's, square): a band RL_BAR high
+across the screen, dark, a line under it; on the screens' edges (x, x +
+w) the game's lockup (RL_BARLOGO high: its icon, a fifth of its height,
+its wordmark) and QUIT (DISCONNECT before it while in a game, LEAVE
+MISSION in single player, red), its icon 18 before its label, 32 between
+the two; the pages in the screens' middle (moved over to stay 48 from the
+lockup and 32 from the foot), each the bar's height, its label 28 in from
+its sides, the one shown filled brass. Where they don't all fit (4:3 in a
+game) the pages' sides narrow to 12, then the foot's labels go (their
+icons stay)
+================
+*/
+static void RL_TopBar(UIReloadedMenu *m, const rlView_t& v, float x, float w, int on, const rlBarItem_t *foot, int nf)
+{
+    static const char *const icons[3] = {RL_GLYPH("star"), RL_GLYPH("spearhead"), RL_GLYPH("breakthrough")};
+    static const char *const marks[3] = {RL_GLYPH("wordmark"), RL_GLYPH("wordmark-spearhead"), RL_GLYPH("wordmark-breakthrough")};
+    const int                g = Q_max(0, Q_min(2, com_target_game->integer)), n = (int)ARRAY_LEN(rl_pages);
+    const float              mid = RL_BAR / 2;
+    float                    ww = 0, sw, sh, labels = 0, fw[2], tail = 0;
+    bool                     named = true;
+
+    if (UI_OutlineSize(marks[g], &sw, &sh)) {
+        ww = RL_BARLOGO * sw / sh;
+    }
+    const float lw = RL_BARLOGO + (ww ? RL_BARLOGO * 0.2f + ww : 0.0f);
+
+    for (int i = 0; i < n; i++) {
+        labels += RL_TextW(v, rl_pages[i].label, RL_BARTEXT, true, 2.4f);
+    }
+    for (int i = 0; i < nf; i++) {
+        fw[i] = 24 + 18 + RL_TextW(v, foot[i].label, 20, true, 2.4f);
+        tail += fw[i] + (i ? 32 : 0);
+    }
+    // (the pages' room: 48 after the lockup, 32 before the foot)
+    const float room = w - lw - 48 - 32 - labels;
+    float       pad  = Q_min(28.0f, (room - tail) / (2 * n));
+
+    if (pad < 12) {
+        named = false;
+        tail  = nf * 24 + (nf - 1) * 32;
+        pad   = Q_min(28.0f, (room - tail) / (2 * n));
+    }
+    RL_Box(v, 0, 0, v.dw, RL_BAR, RL_Rgb(14, 17, 23, 242));
+    RL_Box(v, 0, RL_BAR, v.dw, 1, RL_LINE);
+    RL_Outline(v, icons[g], x + RL_BARLOGO / 2, mid, RL_BARLOGO, RL_BARLOGO, RL_Rgb(255, 255, 255));
+    if (ww) {
+        RL_Outline(v, marks[g], x + RL_BARLOGO * 1.2f + ww / 2, mid, ww, RL_BARLOGO, RL_Rgb(255, 255, 255));
+    }
+    {
+        // (in the screens' middle; moved over where they would come within 48 of the lockup or 32 of the foot)
+        const float all = labels + 2 * n * pad;
+        float       px  = Q_max(x + lw + 48, Q_min(floorf(x + (w - all) / 2), x + w - tail - 32 - all));
+
+        for (int i = 0; i < n; i++) {
+            const rlBarItem_t& it  = rl_pages[i];
+            const float        tw  = RL_TextW(v, it.label, RL_BARTEXT, true, 2.4f) + 2 * pad;
+            const bool         lit = it.id == on, hot = m->Hot(it.id);
+
+            if (lit || hot) {
+                RL_SlantBox(v, px, 0, tw, RL_BAR, RL_SL_BOTH, lit ? RL_BRASS : RL_Rgb(255, 255, 255, 16));
+            }
+            RL_Text(v, px + tw / 2, mid, it.label, RL_BARTEXT, lit ? RL_INK : hot ? RL_FG : RL_FG_SOFT, true, RL_CENTER, 2.4f, RL_MID);
+            m->Hit(v, px, 0, tw, RL_BAR, it.id);
+            px += tw;
+        }
+    }
+    {
+        // (from the right edge: the last, QUIT, muted; the one before it red)
+        float fx = x + w;
+
+        for (int i = nf - 1; i >= 0; i--) {
+            const rlBarItem_t& f  = foot[i];
+            const float        iw = named ? fw[i] : 24;
+            const rlColor_t    c  = m->Hot(f.id) ? RL_FG : i == nf - 1 ? RL_FG_MUTED : RL_Rgb(214, 120, 100);
+
+            RL_Outline(v, f.glyph, fx - iw + 12, mid, 24, 24, c);
+            if (named) {
+                RL_Text(v, fx - iw + 42, mid, f.label, 20, c, true, RL_LEFT, 2.4f, RL_MID);
+            }
+            m->Hit(v, fx - iw - 16, 0, iw + 16, RL_BAR, f.id);
+            fx -= iw + 32;
+        }
+    }
 }
 
 void UIReloadedMenu::DrawMain(const rlView_t& v)
 {
-    const float ay = RL_EDGE, ah = v.dh - 2 * RL_EDGE;
-    float       ax, aw;
+    float ax, ay, aw, ah;
 
-    RL_PageX(v, &ax, &aw);
+    RL_PageRect(v, &ax, &ay, &aw, &ah);
     const float pw = Q_max(270.0f, floorf(aw * 0.28f + 0.5f));
 
     // (the cvars it draws from: the cache draws again when one changes)
@@ -3832,12 +4012,12 @@ void UIReloadedMenu::DrawMain(const rlView_t& v)
         return;
     }
     {
-        // (DISCONNECT over QUIT while in a game)
-        const rlRailItem_t foot[2] = {{ID_DISCONNECT, RL_InMission() ? "LEAVE MISSION" : "DISCONNECT", RL_GLYPH("disconnect")},
-                                      {ID_QUIT, "QUIT", RL_GLYPH("quit")}};
-        const int          in      = clc.state > CA_PRIMED;
+        // (DISCONNECT before QUIT while in a game)
+        const rlBarItem_t foot[2] = {{ID_DISCONNECT, RL_InMission() ? "LEAVE MISSION" : "DISCONNECT", RL_GLYPH("disconnect")},
+                                     {ID_QUIT, "QUIT", RL_GLYPH("quit")}};
+        const int         in      = clc.state > CA_PRIMED;
 
-        RL_Rail(this, v, rl_pages, (int)ARRAY_LEN(rl_pages), ID_PLAY + rl_mm.page, foot + 1 - in, 1 + in);
+        RL_TopBar(this, v, ax, aw, ID_PLAY + rl_mm.page, foot + 1 - in, 1 + in);
     }
     if (rl_mm.page == PAGE_PLAY) {
         RL_Browser(this, v, ax, ay, aw - pw - 20, ah);
@@ -3854,16 +4034,16 @@ void UIReloadedMenu::DrawMain(const rlView_t& v)
 /*
 ================
 DrawOptions: Options over the game (the Esc menu's OPTIONS, shown over it),
-or the vote's page (its VOTE): the page beside the Esc menu's rail where
-the main menu shows it; the game running under them, blurred and dimmed by
-the Esc menu
+or the vote's page (its CALL A VOTE): the page as wide as the main menu's
+screens, in the middle, RL_EDGE from the top and the foot (no top bar over
+the game); the game running under them, blurred and dimmed by the Esc menu
 ================
 */
 void UIReloadedMenu::DrawOptions(const rlView_t& v)
 {
-    float x, w;
+    float x, y, w, h;
 
-    RL_PageX(v, &x, &w);
+    RL_PageRect(v, &x, &y, &w, &h);
     (rl_over == RL_OVER_VOTE ? RL_Vote : RL_Options)(this, v, x, RL_EDGE, w, v.dh - 2 * RL_EDGE);
 }
 
@@ -3871,12 +4051,20 @@ void UIReloadedMenu::DrawOptions(const rlView_t& v)
 ================
 DrawConfirm: Omaha's confirmation, over the main menu: Quit's,
 Disconnect's in a game (Leave mission's in single player), Campaign's
-Delete, KEYS' move of a key another command has
+Delete, KEYS' move of a key another command has; over the Esc menu: its
+QUIT GAME's and DISCONNECT's (LEAVE MISSION's)
 ================
 */
+
+void RL_EscConfirm(bool quit, int show)
+{
+    RL_Ask(quit ? ID_QUIT : ID_DISCONNECT, true, show);
+}
+
 void UIReloadedMenu::DrawConfirm(const rlView_t& v)
 {
-    const float w = 560, h = 230, x = (v.dw - w) / 2, y = (v.dh - h) / 2, by = y + h - 24 - 48;
+    // (over the Esc menu as wide as its block, its edges on the block's)
+    const float w = rl_ask.esc ? RL_BlockWidth(v) : 560.0f, h = 230, x = (v.dw - w) / 2, y = (v.dh - h) / 2, by = y + h - 24 - 48;
     // (the title, the question, the button)
     const char *const says[5][3] = {
         {"QUIT",          "Close the game?",         "QUIT"      },
@@ -3891,12 +4079,13 @@ void UIReloadedMenu::DrawConfirm(const rlView_t& v)
         return;
     }
     RL_Box(v, 0, 0, v.dw, v.dh, RL_Rgb(0, 0, 0, 140));
-    RL_Panel(v, x, y, w, h, RL_Rgb(12, 13, 15, 250));
+    RL_Panel(v, x, y, w, h, RL_Rgb(12, 15, 21, 250));
     RL_Head(v, x, y, w, 56);
-    RL_Text(v, x + 24, y + 28, says[k][0], 22, RL_TEXT, true, RL_LEFT, 2, RL_MID);
-    RL_Text(v, x + 24, y + 100, k == 4 ? RL_KeyQuestion().c_str() : says[k][1], 22, RL_SOFT, false, RL_LEFT, 0, RL_MID, w - 48);
-    RL_Button(this, v, x + w - 24 - 328, by, 150, 48, "CANCEL", false, ID_CANCEL);
-    RL_Button(this, v, x + w - 24 - 170, by, 170, 48, says[k][2], true, ID_CONFIRM);
+    RL_Text(v, x + 24, y + 28, says[k][0], 22, RL_FG, true, RL_LEFT, 2, RL_MID);
+    RL_Text(v, x + 24, y + 100, k == 4 ? RL_KeyQuestion().c_str() : says[k][1], 22, RL_FG_SOFT, false, RL_LEFT, 0, RL_MID, w - 48);
+    // (CANCEL on the left edge, the answer on the right: back left, go right, as the screens' foot rows)
+    RL_Button(this, v, x + 24, by, 150, 48, "CANCEL", false, ID_CANCEL, false, RL_SL_RIGHT);
+    RL_Button(this, v, x + w - 24 - 170, by, 170, 48, says[k][2], true, ID_CONFIRM, false, RL_SL_LEFT);
 }
 
 /*
@@ -3965,20 +4154,20 @@ void UIReloadedMenu::DrawHdr(const rlView_t& v)
     if (out) {
         UI_DrawDep(out);
     }
-    RL_Box(v, 0, top, v.dw, v.dh - top, RL_Rgb(12, 13, 15));
+    RL_Box(v, 0, top, v.dw, v.dh - top, RL_Rgb(12, 15, 21));
     RL_Box(v, 0, top, v.dw, 1, RL_LINE);
-    RL_Text(v, x, y + 12, page ? "PEAK BRIGHTNESS" : "BLACK LEVEL", 24, RL_TEXT, true, RL_LEFT, 2, RL_MID);
+    RL_Text(v, x, y + 12, page ? "PEAK BRIGHTNESS" : "BLACK LEVEL", 24, RL_FG, true, RL_LEFT, 2, RL_MID);
     RL_Text(v, x + w, y + 12, va("HDR CALIBRATION  \xb7  %d OF 2", page + 1), 15, RL_BRASS, true, RL_RIGHT, 2.6f, RL_MID);
-    RL_Text(v, x, y + 46, say, 18, RL_SOFT, false, RL_LEFT, 0, RL_MID, w - 160);
-    RL_Text(v, x + w, y + 46, page ? "ESC  BACK" : "ESC  CLOSES", 15, RL_MUTED, true, RL_RIGHT, 2, RL_MID);
+    RL_Text(v, x, y + 46, say, 18, RL_FG_SOFT, false, RL_LEFT, 0, RL_MID, w - 160);
+    RL_Text(v, x + w, y + 46, page ? "ESC  BACK" : "ESC  CLOSES", 15, RL_FG_MUTED, true, RL_RIGHT, 2, RL_MID);
     // the slider, its value, the button
     RL_Box(v, x, ry + 19, tw, 4, RL_Rgb(255, 255, 255, 40));
     RL_Box(v, x, ry + 19, tw * frac, 4, RL_BRASS);
-    RL_Round(v, x + tw * frac - 10, ry + 11, 20, 20, 10, hot ? RL_BRASS : RL_TEXT);
+    RL_Round(v, x + tw * frac - 10, ry + 11, 20, 20, 10, hot ? RL_BRASS : RL_FG);
     Hit(v, x - 10, ry, tw + 20, RL_CTRL, ID_HDRSLIDE);
     RL_Panel(v, vx, ry, vw, RL_CTRL, RL_Rgb(0, 0, 0, 120));
-    RL_Text(v, vx + vw / 2, ry + RL_CTRL / 2, page ? va("%.0f", cv->value) : va("%.2f", cv->value), 18, RL_TEXT, false, RL_CENTER, 0, RL_MID);
-    RL_Button(this, v, x + w - bw, ry, bw, RL_CTRL, page ? "FINISH" : "NEXT", true, ID_CONFIRM);
+    RL_Text(v, vx + vw / 2, ry + RL_CTRL / 2, page ? va("%.0f", cv->value) : va("%.2f", cv->value), 18, RL_FG, false, RL_CENTER, 0, RL_MID);
+    RL_Button(this, v, x + w - bw, ry, bw, RL_CTRL, page ? "FINISH" : "NEXT", true, ID_CONFIRM, false, RL_SL_LEFT);
 }
 
 // NEXT, FINISH: the menu's command (NEXT pushes the peak's menu over the black level's, FINISH sets r_hdrOutputTest 0)
@@ -4031,12 +4220,16 @@ void UIReloadedMenu::HdrTick(void)
 
 /*
 ================
-DrawConnect: the connect's box (CONNECTING), Omaha's confirmation's
-frame 640 wide: the head (what goes on), the server (its map's photo
-176 by 132, its name over its address, its map, its mode, players and
-ping, the last line on the photo's foot), then the steps over what goes
-on beside CANCEL, or what happened (the password's field under it) over
-BACK and RETRY (JOIN); 24 in from its edges, 24 between its parts
+DrawConnect: the connect screen, the load screen's layout (RL_LoadDraw):
+the title the map's name when known (the browser's, the map a drop left),
+else the server's (its address while not named); the word at its right
+what goes on (CONNECTING, PASSWORD in the accent; CAN'T JOIN, DISCONNECTED
+red); the card the map's photo or empty; the bar a dash sweeping while it
+connects. Under the bar what goes on, the server (or its address) at the
+right. In the card, at its foot, 24 in: CANCEL; or what happened over a
+word more (on a dark band: the map's photo may be under it) and the
+password's field, BACK on the left and RETRY or JOIN on the right, on
+CANCEL's row
 ================
 */
 
@@ -4127,98 +4320,54 @@ static const char *RL_ConnectWords(std::string& what, std::string& more)
 
 void UIReloadedMenu::DrawConnect(const rlView_t& v)
 {
-    static const char *const steps[] = {"CONTACT", "JOIN", "WAIT FOR THE SERVER"};
-    const bool  ended = rl_cn.end != CE_NONE, password = rl_cn.end == CE_PASSWORD;
-    const float w = Q_min(640.0f, v.dw - 2 * RL_EDGE), pad = 24, pw = 176, ph = 132;
-    const float part = ended ? (password ? 152.0f : 92.0f) : 30.0f;
-    const float h = 56 + pad + ph + pad + part + pad + 48 + pad, x = (v.dw - w) / 2, y = (v.dh - h) / 2;
-    const float top = y + 56 + pad, ix = x + pad + pw + 20, iw = x + w - pad - ix, sy = top + ph + pad, by = y + h - pad - 48;
-    const rlColor_t red = RL_Rgb(226, 104, 84);
-    std::string what, more;
-    const char *head = ended ? RL_ConnectWords(what, more) : "CONNECTING";
+    static const char *const steps[] = {"Contacting the server\x85", "Asking to join\x85", "Waiting for the server\x85"};
+    const bool           ended = rl_cn.end != CE_NONE, password = rl_cn.end == CE_PASSWORD;
+    const bool           named = !rl_cn.name.empty(), map = !rl_cn.map.empty();
+    const rlLoadLayout_t l = RL_LoadLayout(v);
+    const float          pad = 24, by = l.y + l.h - pad - 48;
+    // the title the map's (known), else the server's; the other under the bar at the right
+    const std::string    server = named ? rl_cn.name : rl_cn.addr;
+    const std::string    title = map ? RL_MapName(rl_cn.map.c_str()) : server, right = map ? server : named ? rl_cn.addr : "";
+    const float          rw = right.empty() ? 0.0f : Q_min(RL_TextW(v, right.c_str(), 16, false), l.w / 2) + 24;
+    std::string          what, more;
+    const char          *word = ended ? RL_ConnectWords(what, more) : "CONNECTING";
 
     if (RL_ConnectOwn()) {
         RL_Box(v, 0, 0, v.dw, v.dh, RL_Rgb(0, 0, 0));
         return;
     }
-    RL_Background(v);
-    RL_Box(v, 0, 0, v.dw, v.dh, RL_Rgb(0, 0, 0, 90));
-    RL_Panel(v, x, y, w, h, RL_Rgb(12, 13, 15, 250));
-    RL_Head(v, x, y, w, 56);
-    RL_Text(v, x + pad, y + 28, head, 22, ended && !password ? red : RL_TEXT, true, RL_LEFT, 2, RL_MID);
-
-    // the server: its map's photo (none known yet: a frame), its name over its address (none: the address), its map, the rest
-    if (!rl_cn.map.empty()) {
-        RL_Photo(v, RL_Shot(rl_cn.map), x + pad, top, pw, ph);
-    } else {
-        RL_Box(v, x + pad, top, pw, ph, RL_Rgb(255, 255, 255, 10));
-        RL_Text(v, x + pad + pw / 2, top + ph / 2, ended ? "MAP NOT KNOWN" : "MAP NOT KNOWN YET", 12, RL_FAINT, true, RL_CENTER, 2, RL_MID);
+    if (!map) {
+        RL_Background(v);
+        RL_Box(v, 0, 0, v.dw, v.dh, RL_Rgb(8, 9, 10, 200));
     }
-    RL_Frame(v, x + pad, top, pw, ph, 1, RL_Rgb(255, 255, 255, 30));
-    {
-        const bool named = !rl_cn.name.empty();
-        float      fx    = ix;
-
-        RL_Text(v, ix, top, RL_Ellipsize(v, (named ? rl_cn.name : rl_cn.addr).c_str(), 28, true, iw).c_str(), 28, RL_TEXT, true, RL_LEFT, 0,
-                RL_TOP);
-        if (named || (rl_cn.askedAt && !ended)) {
-            RL_Text(v, ix, top + 42, named ? rl_cn.addr.c_str() : "Asking the server for its name and map\x85", 16, RL_MUTED, false,
-                    RL_LEFT, 0, RL_TOP, iw);
-        }
-        if (!rl_cn.map.empty()) {
-            RL_Text(v, ix, top + 80, RL_MapName(rl_cn.map.c_str()), 20, RL_TEXT, false, RL_LEFT, 0, RL_TOP, iw);
-        }
-        // the mode, players and ping (a drop's: its mode, the rest of then)
-        if (!rl_cn.mode.empty()) {
-            fx += RL_Text(v, fx, top + ph, RL_Upper(rl_cn.mode.c_str()).c_str(), 14, RL_MUTED, true, RL_LEFT, 1.5f, RL_BASE);
-        }
-        if (!rl_cn.joined && rl_cn.maxPlayers > 0) {
-            fx += fx > ix ? RL_Text(v, fx, top + ph, "  \xb7  ", 14, RL_MUTED, true, RL_LEFT, 1.5f, RL_BASE) : 0.0f;
-            fx += RL_Text(v, fx, top + ph, va("%d / %d", rl_cn.players, rl_cn.maxPlayers), 14, rl_cn.end == CE_FULL ? red : RL_MUTED, true,
-                          RL_LEFT, 1.5f, RL_BASE);
-        }
-        if (!rl_cn.joined && rl_cn.ping >= 0) {
-            fx += fx > ix ? RL_Text(v, fx, top + ph, "  \xb7  ", 14, RL_MUTED, true, RL_LEFT, 1.5f, RL_BASE) : 0.0f;
-            RL_Text(v, fx, top + ph, va("%d MS", rl_cn.ping), 14, RL_MUTED, true, RL_LEFT, 1.5f, RL_BASE);
-        }
+    RL_LoadDraw(v, l, map, title.c_str(), word, ended && !password ? RL_Rgb(226, 104, 84) : RL_BRASS, ended ? 0.0f : -1.0f);
+    if (!right.empty()) {
+        RL_Text(v, l.x + l.w, l.line, RL_Ellipsize(v, right.c_str(), 16, false, l.w / 2).c_str(), 16, RL_FG_FAINT, false, RL_RIGHT, 0, RL_TOP);
     }
 
     if (!ended) {
-        // the steps: done brass, the one going on a dash sweeping, the rest faint; what goes on (the server's word) beside CANCEL
-        const int   at = clc.state >= CA_CONNECTED ? 2 : clc.state == CA_CHALLENGING ? 1 : 0;
-        const float sw = (w - 2 * pad - 16) / 3;
+        // what goes on (the server's word, else the step); CANCEL
+        const int   at   = clc.state >= CA_CONNECTED ? 2 : clc.state == CA_CHALLENGING ? 1 : 0;
         std::string said = RL_OneLine(clc.serverMessage);
 
-        for (int i = 0; i < 3; i++) {
-            const float sx = x + pad + i * (sw + 8);
-
-            RL_Text(v, sx, sy, steps[i], 13, i < at ? RL_TEXT : i == at ? RL_BRASS : RL_FAINT, true, RL_LEFT, 2, RL_TOP);
-            RL_Box(v, sx, sy + 26, sw, 4, RL_Rgb(255, 255, 255, 30));
-            if (i < at) {
-                RL_Box(v, sx, sy + 26, sw, 4, RL_BRASS);
-            } else if (i == at) {
-                const float dw = sw * 0.3f, dx = (sw + dw) * (cls.realtime % 1400) / 1400.0f - dw;
-
-                RL_Box(v, sx + Q_max(dx, 0.0f), sy + 26, Q_min(dx + dw, sw) - Q_max(dx, 0.0f), 4, RL_BRASS);
-            }
-        }
-        if (said.empty()) {
-            said = at == 0 ? "Contacting the server\x85" : at == 1 ? "Asking to join\x85" : "Waiting for the server\x85";
-        }
-        RL_Text(v, x + pad, by + 24, RL_Ellipsize(v, said.c_str(), 18, false, w - 3 * pad - 150).c_str(), 18,
-                clc.serverMessage[0] ? RL_TEXT : RL_MUTED, false, RL_LEFT, 0, RL_MID);
-        RL_Button(this, v, x + w - pad - 150, by, 150, 48, "CANCEL", false, ID_CANCEL);
+        RL_Text(v, l.x, l.line, RL_Ellipsize(v, said.empty() ? steps[at] : said.c_str(), 20, false, l.w - rw).c_str(), 20,
+                said.empty() ? RL_FG_MUTED : RL_FG, false, RL_LEFT, 0, RL_TOP);
+        RL_Button(this, v, l.x + pad, by, 150, 48, "CANCEL", false, ID_CANCEL, false, RL_SL_RIGHT);
         return;
     }
-    // what happened, a word more; the password's field
-    RL_Box(v, x + pad, sy, w - 2 * pad, 1, RL_LINE);
-    RL_Text(v, x + pad, sy + 24, RL_Ellipsize(v, what.c_str(), 24, true, w - 2 * pad).c_str(), 24, RL_TEXT, true, RL_LEFT, 0, RL_TOP);
-    RL_Text(v, x + pad, sy + 62, RL_Ellipsize(v, more.c_str(), 17, false, w - 2 * pad).c_str(), 17, RL_SOFT, false, RL_LEFT, 0, RL_TOP);
-    if (password) {
-        RL_Field(v, x + pad, sy + 96, w - 2 * pad, 44, std::string(rl_cn.typed.size(), '\x95'), "Password", true, false);
+    {
+        // what happened over a word more, the password's field: at the card's foot over the buttons, on a dark band
+        const float fy = by - 24 - 44, my = (password ? fy : by) - 24 - 18, wy = my - 12 - 26;
+
+        RL_Box(v, l.x, wy - pad, l.w, l.y + l.h - (wy - pad), RL_Rgb(8, 9, 10, 215));
+        RL_Text(v, l.x + pad, wy, RL_Ellipsize(v, what.c_str(), 24, true, l.w - 2 * pad).c_str(), 24, RL_FG, true, RL_LEFT, 0, RL_TOP);
+        RL_Text(v, l.x + pad, my, RL_Ellipsize(v, more.c_str(), 17, false, l.w - 2 * pad).c_str(), 17, RL_FG_SOFT, false, RL_LEFT, 0, RL_TOP);
+        if (password) {
+            RL_Field(v, l.x + pad, fy, l.w - 2 * pad, 44, std::string(rl_cn.typed.size(), '\x95'), "Password", true, false);
+        }
+        RL_Button(this, v, l.x + pad, by, 150, 48, "BACK", false, ID_CANCEL, false, RL_SL_RIGHT);
+        RL_Button(this, v, l.x + l.w - pad - 170, by, 170, 48, password ? "JOIN" : "RETRY", true, ID_CONFIRM, false, RL_SL_LEFT);
     }
-    RL_Button(this, v, x + w - pad - 328, by, 150, 48, "BACK", false, ID_CANCEL);
-    RL_Button(this, v, x + w - pad - 170, by, 170, 48, password ? "JOIN" : "RETRY", true, ID_CONFIRM);
 }
 
 /*
@@ -4279,10 +4428,6 @@ void UIReloadedMenu::ChooseMain(int id)
         rl_keys.swallow = false;
         return;
     }
-    // Options over the Esc menu: a click off its page the Esc menu's
-    if (m_screen == SCR_OPTIONS && id < 0 && RL_EscClick(uid.mouseX - (int)m_screenframe.pos.x, uid.mouseY - (int)m_screenframe.pos.y)) {
-        return;
-    }
     if (m_screen == SCR_OPTIONS && rl_over == RL_OVER_VOTE) {
         RL_VoteChoose(id);
         return;
@@ -4308,10 +4453,16 @@ void UIReloadedMenu::ChooseMain(int id)
             } else if (rl_mm.confirm == ID_KEYMOVE) {
                 RL_KeyBind(rl_keys.ask[0], rl_keys.ask[1]);
             }
-            // (the confirmation closed first: the main menu stays, out of the game)
-            Cbuf_AddText(rl_mm.confirm == ID_QUIT                                        ? "quit\n"
-                         : rl_mm.confirm == ID_CDELETE || rl_mm.confirm == ID_KEYMOVE ? "popmenu 0\n"
-                                                                                       : "popmenu 0\ndisconnect\n");
+            if (rl_mm.confirm == ID_DISCONNECT && rl_ask.esc) {
+                // (asked from the Esc menu: the confirmation and the Esc menu closed, the main menu on its page)
+                RL_MainShow(rl_ask.show);
+                Cbuf_AddText("popmenu 0\ndisconnect;wait 5;popmenu 0;pushmenu main\n");
+            } else {
+                // (the confirmation closed first: the main menu stays, out of the game)
+                Cbuf_AddText(rl_mm.confirm == ID_QUIT                                        ? "quit\n"
+                             : rl_mm.confirm == ID_CDELETE || rl_mm.confirm == ID_KEYMOVE ? "popmenu 0\n"
+                                                                                           : "popmenu 0\ndisconnect\n");
+            }
         } else if (id == ID_CANCEL) {
             Cbuf_AddText("popmenu 0\n");
         }
@@ -4487,8 +4638,7 @@ void UIReloadedMenu::ChooseMain(int id)
         // fall through
     case ID_QUIT:
     case ID_DISCONNECT:
-        rl_mm.confirm = id;
-        menuManager.ShowMenu("reloaded_confirm");
+        RL_Ask(id);
         break;
     case ID_REFRESH:
         RL_SvRefresh();
@@ -4535,8 +4685,7 @@ static qboolean RL_CampKey(int key)
         return qfalse;
     }
     if (key == K_DEL) {
-        rl_mm.confirm = ID_CDELETE;
-        menuManager.ShowMenu("reloaded_confirm");
+        RL_Ask(ID_CDELETE);
         return qtrue;
     }
     if (key == K_UPARROW || key == K_DOWNARROW) {
@@ -4599,6 +4748,20 @@ qboolean UIReloadedMenu::MainKey(int key)
                 text.erase(text.size() - 1);
                 if (rl_mm.edit == F_SEARCH) {
                     rl_vis.dirty = true;
+                }
+            }
+            RL_Changed();
+            return qtrue;
+        }
+        if (key == 'v' && keys[K_CTRL].down && rl_mm.edit == F_CODE) {
+            // Ctrl+V, as in the console: the clipboard's first word for the code (what can be typed of it)
+            const char *clip = Sys_GetWholeClipboard();
+
+            text.clear();
+            if (clip) {
+                clip += strspn(clip, " \t\r\n");
+                for (; *clip && !strchr(" \t\r\n", *clip); clip++) {
+                    MainChar((unsigned char)*clip);
                 }
             }
             RL_Changed();
@@ -4721,13 +4884,9 @@ void UIReloadedMenu::MainTick(bool opened)
     const int page = m_screen != SCR_OPTIONS ? rl_mm.page : rl_over == RL_OVER_VOTE ? PAGE_VOTE : PAGE_OPTIONS;
 
     if (m_screen == SCR_CONNECT) {
-        // the connect's box: the backdrop, its map's photo made
+        // the connect screen: its backdrop
         if (!RL_ConnectOwn()) {
             RL_BgTick(opened);
-            if (!rl_cn.map.empty() && RL_Shot(rl_cn.map) < 0) {
-                RL_ShotMake(rl_cn.map);
-                RL_Changed();
-            }
         }
         return;
     }

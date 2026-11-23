@@ -206,13 +206,19 @@ static void R_TemporalPrimary( unsigned serial ) {
 	vec3_t delta;
 	float cut, dt;
 	int i, prevTable;
+	qboolean timeCut;
 
 	cut = r_temporalCutDist->value;
+	// Omaha's (d243cc60): time going back (Omaha's demo seeking in place) is
+	// a cut too, wherever the camera ends up; a guard here, where the
+	// scene's time never goes back within a map
+	timeCut = rbt.cameraSerial && backEnd.refdef.time < rbt.time;
 
 	// the camera
 	VectorSubtract( backEnd.viewParms.ori.origin, rbt.origin, delta );
 	rbt.history = rbt.cameraSerial && rbt.cameraSerial == serial - 1 && VectorLength( delta ) <= cut
-		&& fabs( backEnd.refdef.fov_x - rbt.fovX ) < 0.01f && fabs( backEnd.refdef.fov_y - rbt.fovY ) < 0.01f;
+		&& fabs( backEnd.refdef.fov_x - rbt.fovX ) < 0.01f && fabs( backEnd.refdef.fov_y - rbt.fovY ) < 0.01f
+		&& !timeCut;
 	if ( rbt.history ) {
 		Com_Memcpy( rbt.prevProjection, rbt.projection, sizeof( rbt.prevProjection ) );
 		Com_Memcpy( rbt.prevVmProjection, rbt.vmProjection, sizeof( rbt.prevVmProjection ) );
@@ -250,7 +256,7 @@ static void R_TemporalPrimary( unsigned serial ) {
 	rbt.current ^= 1;
 	rbt.tableSerial[rbt.current] = serial;
 	table = rbt.tables[rbt.current];
-	last = rbt.tableSerial[prevTable] == serial - 1 ? rbt.tables[prevTable] : NULL;
+	last = rbt.tableSerial[prevTable] == serial - 1 && !timeCut ? rbt.tables[prevTable] : NULL;
 
 	for ( i = 0; i < backEnd.refdef.num_entities && i < MAX_REFENTITIES; i++ ) {
 		const refEntity_t *e = &backEnd.refdef.entities[i].e;

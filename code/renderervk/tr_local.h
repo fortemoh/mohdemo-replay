@@ -1639,6 +1639,9 @@ extern	cvar_t	*r_drawworld;			// disable/enable world rendering
 extern	cvar_t	*r_speeds;				// various levels of information display
 extern  cvar_t	*r_detailTextures;		// enables/disables detail texturing stages
 extern	cvar_t	*r_novis;				// disable/enable usage of PVS
+// Added: the PVS used to draw the world also takes in the clusters within this many units of the
+// view (R_MarkLeaves); 0: the view's cluster's alone
+extern	cvar_t	*r_fatpvs;
 extern	cvar_t	*r_nocull;
 extern	cvar_t	*r_showcull;
 extern	cvar_t	*r_facePlaneCull;		// enables culling of planar surfaces with back side test
@@ -1810,7 +1813,6 @@ extern	cvar_t* r_loadftx;
 
 extern  cvar_t* r_showSkeleton;
 extern  cvar_t* r_developer;
-extern  cvar_t* r_fps;
 
 //====================================================================
 
@@ -3073,7 +3075,6 @@ void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs );
 void R_AddSpriteSurfCmd( drawSurf_t* drawSurfs, int numDrawSurfs );
 void RB_ExecuteRenderCommands( const void *data );
 
-void R_SavePerformanceCounters(void);
 void R_InitCommandBuffers( void );
 void R_ShutdownCommandBuffers( void );
 

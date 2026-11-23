@@ -1,4 +1,4 @@
-// The Reloaded weapon select, shown for SelectPrimaryWeapon[_<nation>] and the team menus (SelectTeam, ObjSelectTeam, SelectFFAModel; cl_uimenus.cpp): one menu for the side, the model and the weapon; the figure of the side and model previewed beside the grid, from the knees up (placed, made and framed by cl_uimenus.cpp: RL_FIG*)
+// The Reloaded weapon page, shown for SelectPrimaryWeapon[_<nation>] (cl_uimenus.cpp): the side's weapons; the figure of the side's model beside the grid, from the knees up (placed, made and framed by cl_uimenus.cpp: RL_FIG*)
 menu "reloaded_weapon" 640 480 NONE 0
 align left top
 fgcolor 1.00 1.00 1.00 1.00

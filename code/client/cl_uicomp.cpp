@@ -48,8 +48,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // the teammates the cgame tracks (CL_InitRadar), and the player's own place in them
 static radarClient_t *g_radarClients;
 static int            g_radarClientNum;
-#define COMP_CARD_H   64 // a team card's height: the score box's (hud_comp_score.urc)
-#define COMP_CARD_W   64 // its most width (square; narrower for a bigger team)
+#define COMP_CARD_H   52 // a team card's height: the score box's (hud_comp_score.urc)
+#define COMP_CARD_W   52 // its most width (square; narrower for a bigger team)
 #define COMP_LINES    8
 #define COMP_KILLS    6
 
@@ -165,9 +165,9 @@ static struct {
     qboolean charging, chargeSecondary;
     int      chargeStart;
 
-    // the damage's arcs
+    // the damage's arcs, and whose view they are for (a followed player's through their eyes, -1 our own's)
     int arcStat[3], arcTime[3];
-    int lastDmg, lastHealth, flashTime;
+    int lastDmg, lastHealth, flashTime, dmgView;
 } comp;
 
 /*
@@ -625,6 +625,7 @@ void UI_CompHud_Clear(void)
     memset(&comp, 0, sizeof(comp));
     comp.sbScore[0] = comp.sbScore[1] = -1;
     comp.lastDmg                      = -999999;
+    comp.dmgView                      = -1;
 }
 
 /*
@@ -761,6 +762,14 @@ static void Comp_Accent(void)
     comp_accentStamp++;
 }
 
+// the switch for each team's count of the alive in place of the players'
+// cards: CS:GO's own (on by default), else CS2's (Classic's top bar has
+// neither)
+static const char *Comp_AliveCount(void)
+{
+    return cg_hudstyle->integer == 2 || cg_hudstyle->integer == 3 ? "cg_hud_alivecount" : "cg_hud_csgo_alivecount";
+}
+
 // cg_hudstyle's menus shown (2 CS2's, 3 Classic's, else CS:GO's); the chat
 // above the health in CS:GO's corners (ui_hud_corners), Classic's along the
 // top (ui_hud_classic: the bottom's hidden, ui_hud_chat_low)
@@ -776,11 +785,11 @@ static void Comp_Layout(void)
     Comp_Set("ui_hud_chat_low", layout != 3 ? "1" : "0");
 }
 
-// each team's count of the alive rather than a card each (cg_hud_alivecount;
-// always in demos, which videos are made of)
-static qboolean Comp_AliveCount(void)
+// each team's count of the alive rather than a card each (Comp_AliveCount's
+// setting; always in demos, which videos are made of)
+static qboolean Comp_AliveCounted(void)
 {
-    return Comp_Int("cg_hud_alivecount") || clc.demoplaying;
+    return Comp_Int(Comp_AliveCount()) || clc.demoplaying;
 }
 
 // who is alive and the cards (round modes), and the silent score requests:
@@ -1093,8 +1102,8 @@ static void Comp_ClassicPlace(void)
         }
         placed[0] = placed[1] = placed[2] = -1.0f;
     }
-    // the bar: the box's right edge (the file's 1006, the menu's middle 960) and its top (0) the margin from the screen's
-    dx = classic ? floorf(960.0f + screenW * 0.5f - COMP_CLASSIC_MARGIN - 1006.0f) : 0.0f;
+    // the bar: the box's right edge (the file's 997, the menu's middle 960) and its top (0) the margin from the screen's
+    dx = classic ? floorf(960.0f + screenW * 0.5f - COMP_CLASSIC_MARGIN - 997.0f) : 0.0f;
     dy = classic ? COMP_CLASSIC_MARGIN : 0.0f;
     if (dx != placed[0] || dy != placed[1]) {
         placed[0] = dx;
@@ -1146,13 +1155,31 @@ static bool Comp_MateShown(const compMates_t& m, int i)
         && cl.snap.serverTime - c->time < m.fresh;
 }
 
-// what the stock compass points at (the compass with no radar, HudMates):
-// shown, an objective (not a teammate), its place from this frame's view
-// (units right and ahead)
+// what the stock compass points at (the compass with no radar, HudMates; the
+// radar where it's a teammate): shown, an objective (not a teammate), its
+// place in the world (x and y) and its distance from the player
 static struct {
     qboolean on, objective;
-    float    right, ahead;
+    qboolean close; // 4.3 m or nearer (the compass's least)
+    float    at[2], units;
 } comp_mate;
+
+// a teammate's place (x, y) is where the stock compass points: within 5 m
+// of it (the compass says 4.3 m for any nearer) or 30% of its distance
+static bool Comp_AtNeedle(float x, float y)
+{
+    return comp_mate.on && !comp_mate.objective
+        && Square(x - comp_mate.at[0]) + Square(y - comp_mate.at[1]) < Square(Q_max(260.0f, 0.3f * comp_mate.units));
+}
+
+// the stock compass points at a teammate the radar and the tracker show
+// (where none of the snapshot's is at it): not at 4.3 m or nearer, where a
+// teammate is nearly always in the snapshot and a stock Freeze-Tag server's
+// needle points 4.3 m behind one whichever way one looks, nobody there
+static bool Comp_NeedleMate(void)
+{
+    return comp_mate.on && !comp_mate.objective && !comp_mate.close;
+}
 
 void UI_CompHud_Frame(void)
 {
@@ -1182,6 +1209,9 @@ void UI_CompHud_Frame(void)
     float       viewYaw;
     int         health = ps->stats[STAT_HEALTH], maxHealth = Q_max(1, ps->stats[STAT_MAXHEALTH]);
     int         i;
+    // a followed player watched through their eyes from a server sending the view from behind: their health
+    // (none when dying) and their hits' arrows as the cgame works them out (cg_followeyes.c)
+    const playerState_t *eyes = CL_FollowEyesPlayerState();
 
     static int  lastSnap = -1, lastChange = -1, lastFull;
 
@@ -1258,8 +1288,13 @@ void UI_CompHud_Frame(void)
         Comp_Set("ui_hud_allies", icon && shown == TEAM_ALLIES ? "1" : "0");
         Comp_Set("ui_hud_axis", icon && shown == TEAM_AXIS ? "1" : "0");
     }
-    if (following && demoShown < 0 && !(ps->stats[STAT_WEAPONS] & 0x3F) && ps->stats[STAT_INFOCLIENT_HEALTH] > 0) {
-        health    = ps->stats[STAT_INFOCLIENT_HEALTH];
+    if (eyes) {
+        health    = eyes->stats[STAT_HEALTH];
+        maxHealth = 100;
+    } else if (following && demoShown < 0 && !(ps->stats[STAT_WEAPONS] & 0x3F)) {
+        // theirs from behind too: the server sends their health itself, 0 or
+        // below while they die (not our own)
+        health    = Q_max(0, ps->stats[STAT_INFOCLIENT_HEALTH]);
         maxHealth = 100;
     }
     Comp_SetI("ui_hud_health", health);
@@ -1305,10 +1340,11 @@ void UI_CompHud_Frame(void)
         Comp_Set("ui_hud_score_r", known[1] ? va("%d", score[1]) : "-");
         Comp_Set("ui_hud_score_lc", teams ? "0.588 0.729 0.871 1" : "0.922 0.933 0.949 1");
         Comp_Set("ui_hud_score_rc", teams ? "0.902 0.478 0.408 1" : "0.922 0.933 0.949 1");
-        // the players' cards, or (cg_hud_alivecount, CS2's) how many of each
-        // team are alive in their place: no cards then (ui_hud_cards_on
-        // says whether either shows; Classic's top bar has neither)
-        const qboolean count = rounds && Comp_AliveCount();
+        // the players' cards, or how many of each team are alive in their
+        // place (Comp_AliveCounted: CS:GO's on by default, CS2's off, always in
+        // demos): no cards then (ui_hud_cards_on says whether either shows;
+        // Classic's top bar has neither)
+        const qboolean count = rounds && Comp_AliveCounted();
 
         Comp_Set("ui_hud_cards_allies", rounds && !count ? comp.cards[0] : "");
         Comp_Set("ui_hud_cards_axis", rounds && !count ? comp.cards[1] : "");
@@ -1415,10 +1451,19 @@ void UI_CompHud_Frame(void)
     // wedge. cg_hud_damage 0 (Options' HUD tab): no crescents, in every
     // frame (the wedge stays)
     {
-        const int      dmg   = ps->stats[STAT_DAMAGEDIR];
-        const qboolean shown = Comp_Int("cg_hud_damage") != 0;
+        const playerState_t *hit   = eyes ? eyes : ps;
+        const int            dmg   = hit->stats[STAT_DAMAGEDIR];
+        const qboolean       shown = Comp_Int("cg_hud_damage") != 0;
+        const int            view  = eyes ? eyes->clientNum : -1;
 
-        if (dmg != comp.lastDmg || (dmg > 0 && ps->stats[STAT_HEALTH] < comp.lastHealth)) {
+        // another's view: no hit (its last direction is no news)
+        if (view != comp.dmgView) {
+            comp.dmgView    = view;
+            comp.lastDmg    = dmg;
+            comp.lastHealth = hit->stats[STAT_HEALTH];
+        }
+        // (through their eyes a hit always moves the direction; one from where isn't known shows none)
+        if (dmg != comp.lastDmg || (!eyes && dmg > 0 && ps->stats[STAT_HEALTH] < comp.lastHealth)) {
             int slot = 0;
 
             for (i = 0; i < 3; i++) {
@@ -1436,7 +1481,7 @@ void UI_CompHud_Frame(void)
             }
         }
         comp.lastDmg    = dmg;
-        comp.lastHealth = ps->stats[STAT_HEALTH];
+        comp.lastHealth = hit->stats[STAT_HEALTH];
         // (a world yaw's angle on screen, clockwise from up the view: the view's yaw less it)
         for (i = 0; i < 3; i++) {
             const int age = cls.realtime - comp.arcTime[i];
@@ -1478,11 +1523,11 @@ void UI_CompHud_Frame(void)
         flag("ui_hud_kf_low", kills == 2);
         flag("ui_hud_cards_on", rounds && Comp_Int("cg_hud_alive") && !classic);
         // the kill feed under the cards where the screen has no room for both in a row (a 4:3 screen, a large
-        // cg_hud_scale): the cards' box ends 476 right of the middle, the feed's is the last 445
+        // cg_hud_scale): the cards' box ends 382 right of the middle, the feed's is the last 445
         flag(
             "ui_hud_feed_under",
-            rounds && Comp_Int("cg_hud_alive") && !Comp_AliveCount() && !classic
-                && uid.vidWidth / UI_DesignScale(1920.0f, 1080.0f) < 2 * (476.0f + 445.0f)
+            rounds && Comp_Int("cg_hud_alive") && !Comp_AliveCounted() && !classic
+                && uid.vidWidth / UI_DesignScale(1920.0f, 1080.0f) < 2 * (382.0f + 445.0f)
         );
         flag("ui_hud_health_on", strip && Comp_Int("cg_hud_health") && !CL_DemoHidesHealth());
         flag("ui_hud_badge_on", strip && Comp_Int("cg_hud_badge"));
@@ -1506,20 +1551,24 @@ void UI_CompHud_Frame(void)
     // bearing from the view (+ 180, tenths of a degree), LEFT and RIGHT that
     // bearing -+ 60 - atan(300 / distance) degrees (at least 7), so the gap
     // gives the distance; the game's own 52 units a metre (the battle
-    // language's; the gap's least, 7 degrees, is 4.3 m or nearer). Its
-    // bearing turned from the server's view to this frame's
-    if (Comp_Int("ui_hud_compass_on")) {
+    // language's; the gap's least, 7 degrees, is 4.3 m or nearer). Its place
+    // from the server's: the snapshot's place and view. The radar shows the
+    // teammate too (the server measures it to every one: the snapshot has
+    // only those in sight, roughly)
+    if (Comp_Int("ui_hud_compass_on") || Comp_Int("ui_hud_radar_on")) {
         const int center = ps->stats[STAT_OBJECTIVECENTER], left = ps->stats[STAT_OBJECTIVELEFT], right = ps->stats[STAT_OBJECTIVERIGHT];
 
         comp_mate.on = !(center == 1800 && left == 1730 && right == 1870);
         if (comp_mate.on) {
             const float half  = anglemod((right - left) / 10.0f) * 0.5f;
             const float units = half < 59.95f ? 300.0f / tanf(DEG2RAD(60.0f - half)) : 999.0f * 52.0f;
-            const float a     = DEG2RAD((center - 1800) / 10.0f + AngleSubtract(viewYaw, ps->viewangles[YAW]));
+            const float yaw   = DEG2RAD(ps->viewangles[YAW] - (center - 1800) / 10.0f);
             const int   obj   = (Comp_ConfigStrings(), cs.objCurrent);
 
-            comp_mate.right     = sinf(a) * units;
-            comp_mate.ahead     = cosf(a) * units;
+            comp_mate.at[0]     = ps->origin[0] + cosf(yaw) * units;
+            comp_mate.at[1]     = ps->origin[1] + sinf(yaw) * units;
+            comp_mate.units     = units;
+            comp_mate.close     = half < 7.05f;
             comp_mate.objective = com_target_game->integer >= TG_MOHTA
                                || (obj >= 0 && obj < MAX_OBJECTIVES && !VectorCompare(cs.objLoc[obj], vec3_origin));
         }
@@ -1531,25 +1580,26 @@ void UI_CompHud_Frame(void)
 
 THE TEAM TAG
 
-The player aimed at, over their head (the cgame's, in place of their head
-icon), CS2's way: their name, their health under it and an arrow down to
-their head, in their team's color (the health red under cg_hud_lowhealth),
-with the HUD's drop shadow, the same size whatever the distance
+The player aimed at, over them (the cgame's, in place of their head icon:
+over their feet at their box's height, eased, not their swaying head),
+CS2's way: their name, their health under it as large and an arrow down to
+them, in the HUD's accent (cg_hud_accent: the health's and the ammo's; the
+health red under cg_hud_lowhealth), with the HUD's drop shadow, the same
+size whatever the distance
 
 ====================================================================
 */
 
 #define TTAG_NAME    22.0f  // the name's size (bold)
-#define TTAG_HEALTH  18.0f  // the health's (bold)
+#define TTAG_HEALTH  22.0f  // the health's (bold)
 #define TTAG_ARROW_W 14.0f  // the arrow's width and height
 #define TTAG_ARROW_H 9.0f
 #define TTAG_GAP     4.0f   // between the arrow and the health, the health and the name (over their capitals)
 #define TTAG_MAXW    220.0f // a longer name cut with "…"
 
 static const char *const ttag_arrow = "poly 1 1 1 1 0 0 1 0 0.5 1";
-// the teams' colors (the HUD's names'), the health's under cg_hud_lowhealth
-static const rlColor_t ttag_allies = {0.533f, 0.569f, 0.8f, 1.0f}, ttag_axis = {0.8f, 0.533f, 0.533f, 1.0f};
-static const rlColor_t ttag_low    = {0.753f, 0.188f, 0.129f, 1.0f};
+// the health's under cg_hud_lowhealth
+static const rlColor_t ttag_low = {0.753f, 0.188f, 0.129f, 1.0f};
 
 // the HUD's units (cg_hud_scale)
 static rlView_t Comp_HudView(void)
@@ -1576,8 +1626,7 @@ static void TTag_ArrowBox(const rlView_t& v, float cx, float tip, int *x, int *y
 void UI_DrawTeamTag(int client, float x, float y, int health)
 {
     const rlView_t    v     = Comp_HudView();
-    const int         team  = Comp_Team(client);
-    const rlColor_t   c     = team == TEAM_AXIS ? ttag_axis : team == TEAM_ALLIES ? ttag_allies : rlColor_t{1, 1, 1, 1};
+    const rlColor_t   c     = {comp_accent[ACC_MAIN][0], comp_accent[ACC_MAIN][1], comp_accent[ACC_MAIN][2], 1.0f};
     const rlColor_t   hc    = health < Comp_Cvar("cg_hud_lowhealth")->value * 100.0f ? ttag_low : c;
     const std::string name  = RL_Ellipsize(v, Comp_Name(client), TTAG_NAME, true, TTAG_MAXW);
     const float       capN  = TTAG_NAME * 0.81f, capH = TTAG_HEALTH * 0.81f; // (Oswald's capitals)
@@ -1626,7 +1675,7 @@ static std::vector<builtinFile_t> comp_files;
 UI_CompHud_AddFile
 
 A file made while the game runs, given to the filesystem with the files
-compiled in (the head icons, the weapon menu's figures); its name and data
+compiled in (the head icons, the team and weapon pages' figures); its name and data
 are the caller's, kept until the client quits. The list has room made once,
 so it never moves, and an entry is written before the list's end moves past
 it: a file read on another thread meanwhile finds the list whole
@@ -1731,9 +1780,16 @@ void UI_CompHud_Init(void)
     Cvar_Get("cg_hud_font", "oswald", CVAR_ARCHIVE);
     // the radar's size alone, times its own (0.5 to 1.5; Comp_RadarSize)
     Cvar_CheckRange(Cvar_Get("cg_hud_radar_size", "1", CVAR_ARCHIVE), 0.5f, 1.5f, qfalse);
+    // how much of the map the radar shows: its reach RM_RANGE over this (RM_Range; CS2's Radar Map Zoom, 0.25 to 1)
+    Cvar_CheckRange(Cvar_Get("cg_hud_radar_zoom", "0.5", CVAR_ARCHIVE), 0.25f, 1.0f, qfalse);
+    // the radar's middle the player (CS2's Radar Centers The Player), else moved in from the map's edges
+    // (RM_View)
+    Cvar_Get("cg_hud_radar_centered", "1", CVAR_ARCHIVE);
     // the accent: "f6f67a", "#f6f67a" or "R G B" (0 to 1)
     Cvar_Get("cg_hud_accent", "f6f67a", CVAR_ARCHIVE);
-    // the top's teams, beside the score: 0 a card per player, 1 how many are alive (CS2's)
+    // the top's teams, beside the score: 0 a card per player, 1 how many are alive (CS:GO's and CS2's own count of
+    // the alive in place of the players' pictures); CS:GO's on by default, CS2's off (Comp_AliveCount)
+    Cvar_Get("cg_hud_csgo_alivecount", "1", CVAR_ARCHIVE);
     Cvar_Get("cg_hud_alivecount", "0", CVAR_ARCHIVE);
     // Classic's kills (cg_hudstyle 3): 0 lines in the chat as the stock HUD's, 1 the kill feed beside the top bar,
     // 2 under it
@@ -1766,29 +1822,40 @@ static qboolean Comp_Outline(const char *pic)
     return strcmp(pic, "glove_50") && strcmp(pic, "headshot_50") && strcmp(pic, "skull_50") ? qtrue : qfalse;
 }
 
-// a picture baked at pw x ph pixels
-static qhandle_t Comp_PictureShader(const char *pic, int pw, int ph, float s, qboolean mirror)
+// "in" a shape's layer, the shadow's margin (UI_ShadowMargin) in from the picture's edges
+static const char *Comp_ShadowIn(float s)
 {
-    char        layer[MAX_QPATH * 2];
-    const char *layers[1] = {layer};
+    const float u = UI_ShadowMargin(s) / s;
 
-    if (Comp_Outline(pic)) {
-        Com_sprintf(layer, sizeof(layer), "svg 1 1 1 1 " COMP_OUTLINES "%s.svg center%s", pic, mirror ? " mirror" : "");
-    } else {
-        Com_sprintf(layer, sizeof(layer), "picture 1 1 1 1 " COMP_PICTURES "%s.png center%s", pic, mirror ? " mirror" : "");
-    }
-    return UI_BakeShape("comp", layers, 1, pw, ph, s);
+    return va("in %gpx %gpx -%gpx -%gpx ", u, u, u, u);
 }
 
-// a picture baked at its size (w x h design pixels at x y), tinted
-static void Comp_Picture(const char *pic, float x, float y, float w, float h, float s, qboolean mirror, const UColor& c)
+// a picture baked at pw x ph pixels; shadow: with the faces' drop shadow
+// under it, the margin wider all round (UI_ShadowMargin)
+static qhandle_t Comp_PictureShader(const char *pic, int pw, int ph, float s, qboolean mirror, bool shadow = false)
 {
-    const int    pw = (int)(w * s + 0.5f), ph = (int)(h * s + 0.5f);
+    const int   m = shadow ? UI_ShadowMargin(s) : 0;
+    char        layer[MAX_QPATH * 2];
+    const char *layers[2] = {layer, "shadow"};
+
+    if (Comp_Outline(pic)) {
+        Com_sprintf(layer, sizeof(layer), "%ssvg 1 1 1 1 " COMP_OUTLINES "%s.svg center%s", m ? Comp_ShadowIn(s) : "", pic, mirror ? " mirror" : "");
+    } else {
+        Com_sprintf(layer, sizeof(layer), "%spicture 1 1 1 1 " COMP_PICTURES "%s.png center%s", m ? Comp_ShadowIn(s) : "", pic, mirror ? " mirror" : "");
+    }
+    return UI_BakeShape("comp", layers, m ? 2 : 1, pw + 2 * m, ph + 2 * m, s);
+}
+
+// a picture baked at its size (w x h design pixels at x y), tinted; shadow:
+// the faces' drop shadow under it (over the game, not in a box)
+static void Comp_Picture(const char *pic, float x, float y, float w, float h, float s, qboolean mirror, const UColor& c, bool shadow = false)
+{
+    const int    pw = (int)(w * s + 0.5f), ph = (int)(h * s + 0.5f), m = shadow ? UI_ShadowMargin(s) : 0;
     const vec4_t color = {c.r, c.g, c.b, c.a};
-    qhandle_t    shader = Comp_PictureShader(pic, pw, ph, s, mirror);
+    qhandle_t    shader = Comp_PictureShader(pic, pw, ph, s, mirror, shadow);
 
     uii.Rend_SetColor(color);
-    uii.Rend_DrawPicStretched(floorf(x * s + 0.5f), floorf(y * s + 0.5f), pw, ph, 0, 0, 1, 1, shader);
+    uii.Rend_DrawPicStretched(floorf(x * s + 0.5f) - m, floorf(y * s + 0.5f) - m, pw + 2 * m, ph + 2 * m, 0, 0, 1, 1, shader);
 }
 
 // a weapon's picture fitted in a box of design pixels: its size there
@@ -1805,13 +1872,17 @@ static void Comp_Fit(const char *pic, float boxW, float boxH, float s, float *w,
 }
 
 // the dot of a weapon list's row with nothing left in it (CS2's empty
-// grenade slots): d x d pixels, white (tinted when drawn)
+// grenade slots): d x d pixels, white (tinted when drawn), with the faces'
+// drop shadow in the margin round it (UI_ShadowMargin)
 static qhandle_t Comp_EmptyShader(float s, int *d)
 {
-    const char *layers[1] = {"circle 1 1 1 1 1"};
+    const int   m = UI_ShadowMargin(s);
+    char        dot[64];
+    const char *layers[2] = {dot, "shadow"};
 
+    Com_sprintf(dot, sizeof(dot), "%scircle 1 1 1 1 1", Comp_ShadowIn(s));
     *d = (int)(6.0f * s + 0.5f);
-    return UI_BakeShape("comp_empty", layers, 1, *d, *d, s);
+    return UI_BakeShape("comp_empty", layers, 2, *d + 2 * m, *d + 2 * m, s);
 }
 
 // a text's width, smaller to fit a width
@@ -2206,7 +2277,7 @@ in the clients' order), laid out from the widget's right edge leftward
 widgets whose shapes are the Allies' and the Axis' icons), as high as the
 score box beside them (COMP_CARD_H, from the widget's top), a white bar under
 it while alive on the player's own team, greyed out once dead. They narrow
-so the bigger team fits in about 400 px and in the widget, the rest a count
+so the bigger team fits in about 320 px and in the widget, the rest a count
 ================
 */
 class UIHudCards : public UIWidget
@@ -2249,7 +2320,7 @@ void UIHudCards::Draw(void)
 
     UI_DrawDep(allies);
     UI_DrawDep(axis);
-    int         size  = Q_max(20, Q_min(COMP_CARD_W, 400 / most - 4)), fit, i;
+    int         size  = Q_max(20, Q_min(COMP_CARD_W, 320 / most - 4)), fit, i;
 
     if (!n) {
         return;
@@ -2295,15 +2366,14 @@ UIHudFollow
 
 The player followed (ui_hud_follow, their team's color ui_hud_follow_col,
 their team ui_hud_follow_team: allies or axis), CS2's way: a plate at the
-bottom's middle, SPECTATING over their name, their team's icon at its left
-(CS:GO's corners, ui_hud_corners: CS2's strip has it in its badge under the
-plate), a line of their team's color under it; as wide as the name. Over
+bottom's middle, their name alone (no SPECTATING over it since 2026-11-22),
+their team's icon at its left (CS:GO's corners, ui_hud_corners: CS2's strip
+has it in its badge under the plate), a line of their team's color under
+it; as wide as the name. Over
 the strip, else the HUD's margin, from the widget's bottom (the screen's)
 ================
 */
 #define FP_NAME    26.0f  // the name's size (bold)
-#define FP_CAPTION 14.0f  // SPECTATING's
-#define FP_TRACK   1.0f   // SPECTATING's spacing
 #define FP_ICON    38.0f  // the team's icon
 #define FP_LINE    3.0f   // the line under it
 #define FP_PAD     18.0f  // the plate's padding left and right
@@ -2329,9 +2399,8 @@ void UIHudFollow::Draw(void)
     static cvar_t *const col     = Cvar_Get("ui_hud_follow_col", "", 0);
     static cvar_t *const team    = Cvar_Get("ui_hud_follow_team", "", 0);
     static cvar_t *const corners = Cvar_Get("ui_hud_corners", "", 0);
-    static const rlColor_t fill = {0.047f, 0.055f, 0.071f, 0.78f}, caption = {1.0f, 1.0f, 1.0f, 0.612f};
-    // Fixed in OPM: the HUD's view, its font and small text set (they were
-    // left as the stack had them: no face, no SPECTATING nor name drawn)
+    static const rlColor_t fill = {0.047f, 0.055f, 0.071f, 0.78f};
+    // (the HUD's: its faces those baked ahead, its small text in the HUD's font)
     rlView_t               v = Comp_HudView();
     rlColor_t              c = {1.0f, 1.0f, 1.0f, 1.0f};
 
@@ -2351,8 +2420,7 @@ void UIHudFollow::Draw(void)
         const bool        icon  = corners->integer && t >= 0;
         const std::string shown = RL_Ellipsize(v, name->string, FP_NAME, true, FP_MAXW);
         const float       nw    = RL_TextW(v, shown.c_str(), FP_NAME, true);
-        const float       tw    = Q_max(nw, RL_TextW(v, "SPECTATING", FP_CAPTION, false, FP_TRACK));
-        const float       w     = FP_PAD + (icon ? FP_ICON + FP_GAP : 0.0f) + tw + FP_PAD;
+        const float       w     = FP_PAD + (icon ? FP_ICON + FP_GAP : 0.0f) + nw + FP_PAD;
         const float       h     = COMP_FOLLOW_H - FP_LINE;
         const float       x     = floorf((v.dw - w) * 0.5f);
         const float       y     = v.dh - (corners->integer ? 24.0f : 88.0f) - COMP_FOLLOW_H;
@@ -2363,8 +2431,7 @@ void UIHudFollow::Draw(void)
         if (icon) {
             RL_TeamIcon(v, t, x + FP_PAD + FP_ICON * 0.5f, y + h * 0.5f, FP_ICON);
         }
-        RL_Text(v, tx, y + 9.0f, "SPECTATING", FP_CAPTION, caption, false, RL_LEFT, FP_TRACK, RL_TOP);
-        RL_Text(v, tx, y + h - 10.0f, shown.c_str(), FP_NAME, c, true, RL_LEFT, 0.0f, RL_BASE);
+        RL_Text(v, tx, y + h * 0.5f, shown.c_str(), FP_NAME, c, true, RL_LEFT, 0.0f, RL_MID);
     }
 }
 
@@ -2443,7 +2510,7 @@ void UIHudWeapons::Item(float right, float *bottom, const char **pics, const int
             x += 4.0f;
         }
         Comp_Picture(pics[i], x, top + floorf((ph - phi[i]) * 0.5f * s) / s, pw[i], phi[i], s, qfalse,
-                     UColor(comp_accent[ACC_WEAPON][0], comp_accent[ACC_WEAPON][1], comp_accent[ACC_WEAPON][2], alpha));
+                     UColor(comp_accent[ACC_WEAPON][0], comp_accent[ACC_WEAPON][1], comp_accent[ACC_WEAPON][2], alpha), true);
         x += pw[i] + (counts ? 8.0f : 0.0f) + 4.0f;
     }
     if (hand >= 0) {
@@ -2501,12 +2568,13 @@ void UIHudWeapons::Draw(void)
         float           pw, ph;
         int             d;
         const qhandle_t dot = Comp_EmptyShader(s, &d);
+        const int       m   = UI_ShadowMargin(s);
 
         Comp_Fit(Comp_Weapon(comp_issued[comp.nation][1])->pic, 200.0f, 38.0f, s, &pw, &ph);
         bottom -= ph + 2.0f + lineH;
         uii.Rend_SetColor(color);
-        uii.Rend_DrawPicStretched(floorf((right - pw * 0.5f) * s - d * 0.5f), floorf((bottom + ph * 0.5f) * s - d * 0.5f), d, d, 0, 0, 1,
-                                  1, dot);
+        uii.Rend_DrawPicStretched(floorf((right - pw * 0.5f) * s - d * 0.5f) - m, floorf((bottom + ph * 0.5f) * s - d * 0.5f) - m, d + 2 * m,
+                                  d + 2 * m, 0, 0, 1, 1, dot);
         bottom -= 8.0f;
     }
     if (comp.sidearm[0] && Comp_Weapon(comp.sidearm)) {
@@ -2529,8 +2597,10 @@ THE RADAR'S MAP
 The floors a player can reach, walked over a grid of 16 units (box traces
 down from a jump's height above each floor, on the world and the brush
 entities: crates, bridges) from the spawn points and the tops of the
-ladders at the map's load, and again from where a player stands that the
-walk didn't reach (every 250 ms, a few thousand cells a frame). Drawn top
+ladders it reaches at the map's load, and again from where a player
+stands that the walk didn't reach (every 250 ms, a few thousand cells a
+frame); not onto the sky box's floor nor up a gully only its probe fits
+(RM_Floor). Drawn top
 down into a picture: each cell's floor nearest the player's height filled,
 brighter the higher, its walls and ledges only the shade's edge (no
 outlines, as CS2's radar), that edge smoothed where it meets no floor (a
@@ -2546,10 +2616,11 @@ same list and uploaded, again at each change of storey
 */
 
 #define RM_CELL     16.0f
-#define RM_RANGE    1000.0f // units from the radar's middle to its edge
+#define RM_RANGE    1000.0f // units from the radar's middle to its edge at cg_hud_radar_zoom 1 (RM_Range)
 #define RM_STAIR    7.0f    // a floor this much higher beside: a stair (to a ledge's 40)
 #define RM_PER_STEP 2000    // cells walked a frame after the load
 #define RM_PAGE     16384   // the floors' memory in whole pages: the renderer reads it in place
+#define RM_MOST     600000  // floors at most (the largest stock map's walk, Omaha's: 418,674)
 
 typedef struct {
     float z;
@@ -2562,15 +2633,16 @@ typedef struct {
 } rmSolid_t;
 
 typedef struct {
-    float    top, bottom;
-    vec3_t   at;
-    qboolean ok;
+    float  top, bottom;
+    vec3_t at;
+    byte   ok, flat, undrawn; // a floor there; level (else a slope: the ground under a whole player asked); never drawn
 } rmDown_t;
 
 static struct {
     char                   map[MAX_QPATH];
     float                  x0, y0, zMin, zMax;
     int                    cw, ch;
+    int                    cxMin, cyMin, cxMax, cyMax; // the floors' cells' bounds (cxMax < cxMin: none)
     std::vector<int>       head; // a column's first floor, -1 none
     std::vector<rmNode_t>  nodes;
     std::vector<rmSolid_t> solids;          // the brush entities stood on
@@ -2599,12 +2671,21 @@ static struct {
 
 // the first floor straight down from top to bottom (the world's or a brush
 // entity's, the higher), not too steep, not one of column c's (within 24
-// units: found again it adds nothing), with room for a crouched player. A
+// units: found again it adds nothing), with room for a crouched player, on
+// a slope the ground under all of them walkable (the probe is 14 units
+// across, a player 30: up a gully between a wall and a steep bank the probe
+// found a floor a player slides off, and from its top mohdm4's walk fell out
+// of the town). Not a floor never drawn (the sky's, a caulked brush's) fallen
+// onto from more than a jump (72) below where the walk comes from (top - 72):
+// off a map's edges that fall led to the sky box's floor, under the whole
+// map (Gewitter, Castello, Berlin, Omaha, mohdm3); walked onto from beside
+// it one counts (terrain over a caulked brush: obj_team4's west yard). A
 // column's trace down asked again (its neighbours on a flat floor ask the
 // same) gives the answer it gave
 static qboolean RM_Floor(int c, float x, float y, float top, float bottom, float *z)
 {
     static const vec3_t mins = {-7, -7, 0}, maxs = {7, 7, 1}, cmins = {-15, -15, 18}, cmaxs = {15, 15, 50};
+    static const vec3_t pmins = {-15, -15, 0}, pmaxs = {15, 15, 32};
     const vec3_t        start = {x, y, top}, end = {x, y, bottom};
     trace_t             tr, t;
     rmDown_t            own, *d = c < (int)rm.down.size() ? &rm.down[c] : &own;
@@ -2615,14 +2696,26 @@ static qboolean RM_Floor(int c, float x, float y, float top, float bottom, float
             if (x < s.mins[0] - 8 || x > s.maxs[0] + 8 || y < s.mins[1] - 8 || y > s.maxs[1] + 8 || s.mins[2] > top || s.maxs[2] < bottom) {
                 continue;
             }
+            if (tr.fraction < 1.0f) {
+                // first only down to just under the floor found so far:
+                // nothing of it there, its whole trace can't come nearer
+                // (Kasserine's script_objects lie all over the map)
+                const vec3_t nearer = {x, y, tr.endpos[2] - 2.0f};
+
+                CM_TransformedBoxTrace(&t, start, nearer, mins, maxs, s.model, CONTENTS_SOLID | CONTENTS_PLAYERCLIP, s.origin, vec3_origin, qfalse);
+                if (!t.startsolid && !t.allsolid && t.fraction >= 1.0f) {
+                    continue;
+                }
+            }
             CM_TransformedBoxTrace(&t, start, end, mins, maxs, s.model, CONTENTS_SOLID | CONTENTS_PLAYERCLIP, s.origin, vec3_origin, qfalse);
             if (t.startsolid || t.fraction < tr.fraction) {
                 tr = t;
             }
         }
-        *d = {top, bottom, {tr.endpos[0], tr.endpos[1], tr.endpos[2]}, !(tr.startsolid || tr.allsolid || tr.fraction >= 1.0f || tr.plane.normal[2] < 0.7f)};
+        *d = {top, bottom, {tr.endpos[0], tr.endpos[1], tr.endpos[2]}, !(tr.startsolid || tr.allsolid || tr.fraction >= 1.0f || tr.plane.normal[2] < 0.7f),
+              tr.plane.normal[2] >= 0.99f, (tr.surfaceFlags & SURF_SKY) || ((tr.surfaceFlags & SURF_NODRAW) && (tr.contents & CONTENTS_SOLID))};
     }
-    if (!d->ok) {
+    if (!d->ok || (d->undrawn && top - d->at[2] > 144.0f)) {
         return qfalse;
     }
     *z = d->at[2];
@@ -2631,17 +2724,41 @@ static qboolean RM_Floor(int c, float x, float y, float top, float bottom, float
             return qfalse;
         }
     }
-    // a crouched player has room there
-    CM_BoxTrace(&t, d->at, d->at, cmins, cmaxs, 0, CONTENTS_SOLID | CONTENTS_PLAYERCLIP, qfalse);
-    for (const rmSolid_t& s : rm.solids) {
-        if (t.startsolid || t.allsolid) {
-            break;
+    if (d->flat) {
+        // a crouched player has room there
+        CM_BoxTrace(&t, d->at, d->at, cmins, cmaxs, 0, CONTENTS_SOLID | CONTENTS_PLAYERCLIP, qfalse);
+        for (const rmSolid_t& s : rm.solids) {
+            if (t.startsolid || t.allsolid) {
+                break;
+            }
+            if (x >= s.mins[0] - 16 && x <= s.maxs[0] + 16 && y >= s.mins[1] - 16 && y <= s.maxs[1] + 16) {
+                CM_TransformedBoxTrace(&t, d->at, d->at, cmins, cmaxs, s.model, CONTENTS_SOLID | CONTENTS_PLAYERCLIP, s.origin, vec3_origin, qfalse);
+            }
         }
-        if (x >= s.mins[0] - 16 && x <= s.maxs[0] + 16 && y >= s.mins[1] - 16 && y <= s.maxs[1] + 16) {
-            CM_TransformedBoxTrace(&t, d->at, d->at, cmins, cmaxs, s.model, CONTENTS_SOLID | CONTENTS_PLAYERCLIP, s.origin, vec3_origin, qfalse);
-        }
+        return !t.startsolid && !t.allsolid;
     }
-    return !t.startsolid && !t.allsolid;
+    // on a slope a crouched player let down from a step above (the same
+    // room where it starts): the first ground they land on walkable
+    {
+        const vec3_t from = {d->at[0], d->at[1], d->at[2] + 18.0f}, to = {d->at[0], d->at[1], d->at[2] - 2.0f};
+
+        CM_BoxTrace(&t, from, to, pmins, pmaxs, 0, CONTENTS_SOLID | CONTENTS_PLAYERCLIP, qfalse);
+        for (const rmSolid_t& s : rm.solids) {
+            trace_t u;
+
+            if (t.startsolid || t.allsolid) {
+                break;
+            }
+            if (x >= s.mins[0] - 16 && x <= s.maxs[0] + 16 && y >= s.mins[1] - 16 && y <= s.maxs[1] + 16 && s.mins[2] <= from[2] + 32.0f
+                && s.maxs[2] >= to[2]) {
+                CM_TransformedBoxTrace(&u, from, to, pmins, pmaxs, s.model, CONTENTS_SOLID | CONTENTS_PLAYERCLIP, s.origin, vec3_origin, qfalse);
+                if (u.startsolid || u.allsolid || u.fraction < t.fraction) {
+                    t = u;
+                }
+            }
+        }
+        return !t.startsolid && !t.allsolid && (t.fraction >= 1.0f || t.plane.normal[2] >= 0.7f);
+    }
 }
 
 // the column's floor within 24 units of z, else a new one; -1 when full
@@ -2653,12 +2770,16 @@ static int RM_Node(int c, float z, qboolean *added)
             return n;
         }
     }
-    if (rm.nodes.size() >= 400000) {
+    if (rm.nodes.size() >= RM_MOST) {
         return -1;
     }
     rm.nodes.push_back({z, rm.head[c]});
     rm.head[c] = (int)rm.nodes.size() - 1;
     *added     = qtrue;
+    rm.cxMin   = Q_min(rm.cxMin, c % rm.cw);
+    rm.cxMax   = Q_max(rm.cxMax, c % rm.cw);
+    rm.cyMin   = Q_min(rm.cyMin, c / rm.cw);
+    rm.cyMax   = Q_max(rm.cyMax, c / rm.cw);
     return rm.head[c];
 }
 
@@ -2713,11 +2834,33 @@ static void RM_Step(size_t most)
     }
 }
 
+// the walk has a floor beside ladder s (within 2 cells of it, from a jump
+// below its foot to its top)
+static qboolean RM_Reached(const rmSolid_t& s)
+{
+    const int cx0 = Q_max(0, (int)((s.mins[0] - rm.x0) / RM_CELL) - 2), cx1 = Q_min(rm.cw - 1, (int)((s.maxs[0] - rm.x0) / RM_CELL) + 2);
+    const int cy0 = Q_max(0, (int)((s.mins[1] - rm.y0) / RM_CELL) - 2), cy1 = Q_min(rm.ch - 1, (int)((s.maxs[1] - rm.y0) / RM_CELL) + 2);
+
+    for (int cy = cy0; cy <= cy1; cy++) {
+        for (int cx = cx0; cx <= cx1; cx++) {
+            for (int n = rm.head[cy * rm.cw + cx]; n >= 0; n = rm.nodes[n].next) {
+                if (rm.nodes[n].z >= s.mins[2] - 72.0f && rm.nodes[n].z <= s.maxs[2]) {
+                    return qtrue;
+                }
+            }
+        }
+    }
+    return qfalse;
+}
+
 static void RM_Walk(void)
 {
-    const char *p;
-    vec3_t      mins, maxs;
-    const int   start = Sys_Milliseconds();
+    const char            *p;
+    vec3_t                 mins, maxs;
+    const int              start = Sys_Milliseconds();
+    std::vector<rmSolid_t> ladders;
+    std::vector<float>     starts; // info_player_start's places, x y z each
+    int                    spawns = 0;
 
     CM_ModelBounds(CM_InlineModel(0), mins, maxs);
     rm.x0 = mins[0];
@@ -2726,7 +2869,7 @@ static void RM_Walk(void)
     rm.ch = Q_min(2048, (int)((maxs[1] - mins[1]) / RM_CELL) + 1);
     rm.head.assign(rm.cw * rm.ch, -1);
     // (up to a million columns: 24 MB)
-    rm.down.assign(rm.cw * rm.ch <= (1 << 20) ? rm.cw * rm.ch : 0, {NAN, NAN, {0, 0, 0}, qfalse});
+    rm.down.assign(rm.cw * rm.ch <= (1 << 20) ? rm.cw * rm.ch : 0, {NAN, NAN, {0, 0, 0}, 0, 0, 0});
     rm.nodes.clear();
     rm.solids.clear();
     rm.queue.clear();
@@ -2734,8 +2877,13 @@ static void RM_Walk(void)
     rm.queued = 0;
     rm.zMin   = 99999.0f;
     rm.zMax   = -99999.0f;
-    // the brush entities one stands on (not the triggers, ladders, doors or
-    // windows) first, then the spawn points and the tops of the ladders
+    rm.cxMin = rm.cyMin = INT_MAX;
+    rm.cxMax = rm.cyMax = -1;
+    // the brush entities one stands on (not the triggers, ladders, doors,
+    // windows or rain: func_rain is the game's SOLID_NOT, and mohdm5's two
+    // were the whole park) first, then the spawn points: multiplayer's (the
+    // single player's info_player_start, multiplayer's last resort, only on
+    // a map without them: on Flughafen it stood in a room above the sky)
     for (int pass = 0; pass < 2; pass++) {
         p = CM_EntityString();
         for (const char *tok = COM_Parse((char **)&p); p && tok[0] == '{'; tok = COM_Parse((char **)&p)) {
@@ -2766,23 +2914,45 @@ static void RM_Walk(void)
                 VectorAdd(s.mins, origin, s.mins);
                 VectorAdd(s.maxs, origin, s.maxs);
                 if (!pass && Q_stricmpn(classname, "trigger_", 8) && Q_stricmp(classname, "func_ladder") && !Q_stristr(classname, "door")
-                    && Q_stricmp(classname, "func_window") && Q_stricmp(classname, "func_areaportal")) {
+                    && Q_stricmp(classname, "func_window") && Q_stricmp(classname, "func_areaportal") && Q_stricmp(classname, "func_rain")) {
                     rm.solids.push_back(s);
                 } else if (pass && !Q_stricmp(classname, "func_ladder")) {
-                    // its top: the floors beside it
-                    for (float x = s.mins[0] - RM_CELL; x <= s.maxs[0] + RM_CELL; x += RM_CELL) {
-                        for (float y = s.mins[1] - RM_CELL; y <= s.maxs[1] + RM_CELL; y += RM_CELL) {
-                            RM_Seed(x, y, s.maxs[2] + 72.0f, s.maxs[2] - 64.0f);
-                        }
-                    }
+                    ladders.push_back(s);
                 }
             }
-            if (pass && !Q_stricmpn(classname, "info_player_", 12) && Q_stricmp(classname, "info_player_intermission")) {
+            if (pass && !Q_stricmp(classname, "info_player_start")) {
+                starts.insert(starts.end(), origin, origin + 3);
+            } else if (pass && !Q_stricmpn(classname, "info_player_", 12) && Q_stricmp(classname, "info_player_intermission")) {
                 RM_Seed(origin[0], origin[1], origin[2] + 40.0f, origin[2] - 200.0f);
+                spawns++;
             }
         }
     }
+    for (size_t i = 0; !spawns && i < starts.size(); i += 3) {
+        RM_Seed(starts[i], starts[i + 1], starts[i + 2] + 40.0f, starts[i + 2] - 200.0f);
+    }
+    // out from them, then from the tops of the ladders reached (the floors
+    // beside their tops; one seeded unreached led into Flughafen's room),
+    // again while a round reaches one more
     RM_Step((size_t)-1);
+    for (size_t left = (size_t)-1; left != ladders.size(); RM_Step((size_t)-1)) {
+        left = ladders.size();
+        for (size_t i = 0; i < ladders.size();) {
+            const rmSolid_t s = ladders[i];
+
+            if (!RM_Reached(s)) {
+                i++;
+                continue;
+            }
+            for (float x = s.mins[0] - RM_CELL; x <= s.maxs[0] + RM_CELL; x += RM_CELL) {
+                for (float y = s.mins[1] - RM_CELL; y <= s.maxs[1] + RM_CELL; y += RM_CELL) {
+                    RM_Seed(x, y, s.maxs[2] + 72.0f, s.maxs[2] - 64.0f);
+                }
+            }
+            ladders[i] = ladders.back();
+            ladders.pop_back();
+        }
+    }
     rm.walked = (int)rm.nodes.size();
     Com_DPrintf("Radar: %d floors (%d brush entities) in %d ms\n", (int)rm.nodes.size(), (int)rm.solids.size(), Sys_Milliseconds() - start);
 }
@@ -3122,11 +3292,18 @@ static void RM_PictureDone(void)
     rm.onGpu  = qfalse;
 }
 
+// units from the radar's middle to its edge: RM_RANGE over cg_hud_radar_zoom
+// (CS2's Radar Map Zoom: the lower, the more of the map)
+static float RM_Range(void)
+{
+    return RM_RANGE / Com_Clamp(0.25f, 1.0f, Comp_Cvar("cg_hud_radar_zoom")->value);
+}
+
 // a cell's texels across in the picture for a radar width pixels across (a
 // very large map's fewer, its picture at most 4096 across)
 static int RM_Texels(float width)
 {
-    const float upp = RM_RANGE / (width * 0.5f); // world units a pixel
+    const float upp = RM_Range() / (width * 0.5f); // world units a pixel
 
     return Q_min(Q_max(1, Q_min(6, (int)(RM_CELL / upp + 0.5f))), 4096 / Q_max(rm.cw, rm.ch));
 }
@@ -3168,26 +3345,30 @@ static qhandle_t Comp_ObjectiveShader(qboolean current, float k, float s, int *d
     return Comp_MarkKeep(&kept[current], k, s, *d, UI_BakeShape("comp_obj", layers, 2, *d, *d, s));
 }
 
-// a teammate's dot, its dark edge and (on the radar, not at its edge) its
-// pointer up, in a box of 2 x 2.6 radii, d pixels
-static qhandle_t Comp_DotShader(int axis, qboolean clamped, float k, float s, int *d)
-{
-    static compMark_t kept[2][2];
+// a teammate's dot, its dark edge and its pointer up, in a box of 2 x 2.6
+// radii, d pixels. DOT_RIM at the radar's edge: smaller, no pointer;
+// DOT_UNSEEN where the stock compass points (a teammate out of sight, where
+// they look not sent): no pointer
+enum { DOT_SEEN, DOT_RIM, DOT_UNSEEN };
 
-    if (Comp_MarkKept(&kept[axis][clamped], k, s, d)) {
-        return kept[axis][clamped].h;
+static qhandle_t Comp_DotShader(int axis, int kind, float k, float s, int *d)
+{
+    static compMark_t kept[2][3];
+
+    if (Comp_MarkKept(&kept[axis][kind], k, s, d)) {
+        return kept[axis][kind].h;
     }
     const char *color = axis ? "0.8 0.533 0.533 1" : "0.533 0.569 0.8 1";
-    const float rad = (clamped ? 3.9f : 5.5f) * k, rim = rad + 1.25f * k, half = Q_max(2.6f * rad, rim) + 1.0f;
+    const float rad = (kind == DOT_RIM ? 3.9f : 5.5f) * k, rim = rad + 1.25f * k, half = Q_max(2.6f * rad, rim) + 1.0f;
     char        lines[3][96];
     const char *layers[3] = {lines[0], lines[1], lines[2]};
 
-    Com_sprintf(lines[0], 96, clamped ? "fill 0 0 0 0" : "poly %s 0.5 %g %g %g %g %g", color, 0.5f - 2.6f * rad / half * 0.5f,
+    Com_sprintf(lines[0], 96, kind != DOT_SEEN ? "fill 0 0 0 0" : "poly %s 0.5 %g %g %g %g %g", color, 0.5f - 2.6f * rad / half * 0.5f,
                 0.5f + 0.85f * rim / half * 0.5f, 0.5f - 0.55f * rim / half * 0.5f, 0.5f - 0.85f * rim / half * 0.5f, 0.5f - 0.55f * rim / half * 0.5f);
     Com_sprintf(lines[1], 96, "circle 0.047 0.055 0.071 0.9 %g", rim / half);
     Com_sprintf(lines[2], 96, "circle %s %g", color, rad / half);
     *d = (int)(half * 2.0f * s + 0.5f);
-    return Comp_MarkKeep(&kept[axis][clamped], k, s, *d, UI_BakeShape("comp_dot", layers, 3, *d, *d, s));
+    return Comp_MarkKeep(&kept[axis][kind], k, s, *d, UI_BakeShape("comp_dot", layers, 3, *d, *d, s));
 }
 
 // the player, CS2's way: a dot in the HUD's accent with a white tip up (where
@@ -3271,7 +3452,7 @@ void UI_CompHud_PreBake(qboolean ahead)
 
         Comp_Fit(comp_weapons[i].pic, kind == WK_SIDEARM ? 110.0f : kind == WK_PRIMARY ? 160.0f : 200.0f,
                  kind == WK_SIDEARM ? 30.0f : kind == WK_PRIMARY ? 34.0f : 38.0f, s, &w, &h);
-        Comp_PictureShader(comp_weapons[i].pic, (int)(w * s + 0.5f), (int)(h * s + 0.5f), s, qfalse);
+        Comp_PictureShader(comp_weapons[i].pic, (int)(w * s + 0.5f), (int)(h * s + 0.5f), s, qfalse, true);
     }
     Comp_EmptyShader(s, &d);
     if (menuManager.FindMenu("hud_comp_score")) {
@@ -3283,8 +3464,9 @@ void UI_CompHud_PreBake(qboolean ahead)
     Comp_CardShaders(TEAM_ALLIES, icons[0], COMP_CARD_W, s, cards);
     Comp_CardShaders(TEAM_AXIS, icons[1], COMP_CARD_W, s, cards);
     for (int axis = 0; axis < 2; axis++) {
-        Comp_DotShader(axis, qfalse, k, s, &d);
-        Comp_DotShader(axis, qtrue, k, s, &d);
+        for (int kind = DOT_SEEN; kind <= DOT_UNSEEN; kind++) {
+            Comp_DotShader(axis, kind, k, s, &d);
+        }
     }
     Comp_PlayerShader(k, s, &d);
     Comp_ObjectiveShader(qtrue, k, s, &d);
@@ -3298,7 +3480,6 @@ void UI_CompHud_PreBake(qboolean ahead)
         RL_Face(v, TTAG_HEALTH, true, true);
         // (and the followed player's plate's, HudFollow)
         RL_Face(v, FP_NAME, true);
-        RL_Face(v, FP_CAPTION, false);
         TTag_ArrowBox(v, 0.0f, 0.0f, &ax, &ay, &aw, &ah);
         rl_bakeOnly = true;
         RL_Shape(ax, ay, aw, ah, ttag_arrow, {1.0f, 1.0f, 1.0f, 1.0f}, v.s);
@@ -3373,8 +3554,9 @@ UIHudRadar
 
 The radar: the map turned with the view (up is where the player looks),
 the objectives, the teammates the cgame tracks (the snapshot's and the
-server's radar's: never enemies), the player's dot (no N E S W: the
-user's choice, session 98). Its disc and ring are its URC shapes
+server's radar's: never enemies; on Allied Assault's servers the one the
+stock compass points at too), the player's dot (no N E S W: the user's
+choice, session 98). Its disc and ring are its URC shapes
 ================
 */
 class UIHudRadar : public UIWidget
@@ -3430,11 +3612,82 @@ static qboolean RM_StoreyZ(const vec3_t eye, float *z)
     return qfalse;
 }
 
+/*
+================
+RM_SnapClients
+
+The clients in the snapshot the cgame draws (the newest at or before the
+frame's time: cg.snap), a bit each. Their radar entries are that snapshot's
+places (CG_UpdateRadarClient, each frame); another's is the last seen or,
+on Spearhead's and Breakthrough's protocol, the server's radar's: its way
+only, put at com_radar_range (SV_PackNonPVSClient), which the stock radar's
+edge is, so drawn on the rim at any zoom
+================
+*/
+static uint64_t RM_SnapClients(void)
+{
+    static_assert(MAX_CLIENTS <= 64, "a client a bit");
+    uint64_t sent = 0;
+
+    for (int m = cl.snap.messageNum, n = 0; n < PACKET_BACKUP; m--, n++) {
+        const clSnapshot_t *sn = &cl.snapshots[m & PACKET_MASK];
+
+        if (!sn->valid || sn->messageNum != m || sn->serverTime > cl.serverTime) {
+            continue;
+        }
+        if (cl.parseEntitiesNum - sn->parseEntitiesNum > MAX_PARSE_ENTITIES - sn->numEntities) {
+            break; // (its entities written over)
+        }
+        for (int i = 0; i < sn->numEntities; i++) {
+            const int number = cl.parseEntities[(sn->parseEntitiesNum + i) & (MAX_PARSE_ENTITIES - 1)].number;
+
+            if (number >= 0 && number < MAX_CLIENTS) {
+                sent |= 1ull << number;
+            }
+        }
+        break;
+    }
+    return sent;
+}
+
+/*
+================
+RM_View
+
+The radar's middle in the world: the eye, or (cg_hud_radar_centered 0, CS2's
+Radar Centers The Player off) moved in from the floors' edges, so that the
+circle (range across) shows map, not what lies past it: on each axis the
+middle kept range inside the floors' bounds, at their middle where they are
+narrower than the circle; the player kept within 0.85 of the range
+================
+*/
+static void RM_View(const vec3_t eye, float range, vec3_t view)
+{
+    VectorCopy(eye, view);
+    if (Comp_Int("cg_hud_radar_centered") || rm.cxMax < rm.cxMin) {
+        return;
+    }
+    for (int a = 0; a < 2; a++) {
+        const float lo = a ? rm.y0 + rm.cyMin * RM_CELL : rm.x0 + rm.cxMin * RM_CELL;
+        const float hi = a ? rm.y0 + (rm.cyMax + 1) * RM_CELL : rm.x0 + (rm.cxMax + 1) * RM_CELL;
+
+        view[a] = hi - lo > 2.0f * range ? Com_Clamp(lo + range, hi - range, eye[a]) : (lo + hi) * 0.5f;
+    }
+    {
+        const float dx = eye[0] - view[0], dy = eye[1] - view[1], d = sqrtf(dx * dx + dy * dy);
+
+        if (d > 0.85f * range) {
+            view[0] = eye[0] - dx * 0.85f * range / d;
+            view[1] = eye[1] - dy * 0.85f * range / d;
+        }
+    }
+}
+
 void UIHudRadar::Draw(void)
 {
     const float s = m_vVirtualScale[0], r = m_frame.size.width * 0.5f, k = m_frame.size.width / s / 220.0f;
-    const float upp = RM_RANGE / r; // world units a pixel
-    vec3_t      angles, eye;
+    const float range = RM_Range(), upp = range / r; // world units a pixel
+    vec3_t      angles, eye, view;
     float       sn, cn;
     const char *map = (Comp_ConfigStrings(), cs.map);
 
@@ -3443,11 +3696,12 @@ void UIHudRadar::Draw(void)
     }
     cge->CG_EyeAngles(&angles);
     cge->CG_EyePosition(&eye);
+    RM_View(eye, range, view);
     sn = sinf(DEG2RAD(angles[YAW]));
     cn = cosf(DEG2RAD(angles[YAW]));
     // world offset to screen: up the view's forward, right its right
     auto place = [&](float wx, float wy, float *x, float *y) {
-        const float dx = wx - eye[0], dy = wy - eye[1];
+        const float dx = wx - view[0], dy = wy - view[1];
 
         *x = (dx * sn - dy * cn) / upp;
         *y = -(dx * cn + dy * sn) / upp;
@@ -3506,7 +3760,7 @@ void UIHudRadar::Draw(void)
             for (int i = 0; i < 48; i++) {
                 const float px = circle[i][0] * r, py = circle[i][1] * r;
                 // the screen offset back to the world
-                const float wx = eye[0] + (px * sn - py * cn) * upp, wy = eye[1] + (-px * cn - py * sn) * upp;
+                const float wx = view[0] + (px * sn - py * cn) * upp, wy = view[1] + (-px * cn - py * sn) * upp;
 
                 pts[i][0] = r + px;
                 pts[i][1] = r + py;
@@ -3541,10 +3795,21 @@ void UIHudRadar::Draw(void)
         }
     }
 
-    // the teammates: a dot with a dark edge and a point where they look
+    // the teammates: a dot with a dark edge and a point where they look; on
+    // the rim, its way, beyond the radar's reach or (zoomed out on Spearhead's
+    // and Breakthrough's protocol) known only by its way: RM_SnapClients, read
+    // once a frame at most, for the first one inside (at zoom 1 such a place,
+    // com_radar_range away, is beyond the reach). On Allied Assault's protocol
+    // (no radar: the snapshot's teammates alone, those in sight roughly) also
+    // the one the stock compass points at, the nearest living teammate
+    // wherever they are, where none of these is: its dot with no pointer
     if (g_radarClients && g_radarClientNum >= 0) {
         const int         axis  = cl.snap.ps.stats[STAT_TEAM] == TEAM_AXIS;
         const compMates_t mates = Comp_Mates();
+        const qboolean    ways  = com_target_game->integer >= TG_MOHTA && range > RM_RANGE;
+        uint64_t          sent  = 0;
+        qboolean          read  = qfalse;
+        qboolean          needle = Comp_NeedleMate();
 
         for (int i = 0; i < MAX_CLIENTS; i++) {
             const radarClient_t *c = &g_radarClients[i];
@@ -3554,16 +3819,24 @@ void UIHudRadar::Draw(void)
             if (!Comp_MateShown(mates, i)) {
                 continue;
             }
+            needle = needle && !Comp_AtNeedle(c->origin[0], c->origin[1]);
             place(c->origin[0], c->origin[1], &x, &y);
             dist    = sqrtf(x * x + y * y);
             clamped = dist > r - 7.0f * k * s;
+            if (!clamped && ways && dist > 0.0f) {
+                if (!read) {
+                    sent = RM_SnapClients();
+                    read = qtrue;
+                }
+                clamped = !(sent >> i & 1);
+            }
             if (clamped) {
                 x *= (r - 7.0f * k * s) / dist;
                 y *= (r - 7.0f * k * s) / dist;
             }
             {
                 int             d;
-                const qhandle_t sh  = Comp_DotShader(axis, clamped, k, s, &d);
+                const qhandle_t sh  = Comp_DotShader(axis, clamped ? DOT_RIM : DOT_SEEN, k, s, &d);
                 const float     a   = DEG2RAD(AngleSubtract(angles[YAW], RAD2DEG(atan2f(c->axis[1], c->axis[0]))));
                 const vec4_t    white = {1, 1, 1, 1};
 
@@ -3571,14 +3844,32 @@ void UIHudRadar::Draw(void)
                 uii.Rend_DrawPicStretched2(floorf(r + x - d * 0.5f), floorf(r + y - d * 0.5f), d, d, 0, 0, 1, 1, cosf(a), sinf(a), sh);
             }
         }
+        if (needle) {
+            const vec4_t white = {1, 1, 1, 1};
+            float        x, y, dist;
+            int          d;
+            qhandle_t    sh;
+
+            place(comp_mate.at[0], comp_mate.at[1], &x, &y);
+            dist = sqrtf(x * x + y * y);
+            sh   = Comp_DotShader(axis, dist > r - 7.0f * k * s ? DOT_RIM : DOT_UNSEEN, k, s, &d);
+            if (dist > r - 7.0f * k * s) {
+                x *= (r - 7.0f * k * s) / dist;
+                y *= (r - 7.0f * k * s) / dist;
+            }
+            uii.Rend_SetColor(white);
+            uii.Rend_DrawPicStretched(floorf(r + x - d * 0.5f), floorf(r + y - d * 0.5f), d, d, 0, 0, 1, 1, sh);
+        }
     }
 
-    // the player: a dot in the middle, its tip up
+    // the player: a dot in the middle (RM_View: or where they are), its tip up
     {
         int             d;
         const qhandle_t sh = Comp_PlayerShader(k, s, &d);
+        float           x, y;
 
-        uii.Rend_DrawPicStretched(floorf(r - d * 0.5f), floorf(r - d * 0.5f), d, d, 0, 0, 1, 1, sh);
+        place(eye[0], eye[1], &x, &y);
+        uii.Rend_DrawPicStretched(floorf(r + x - d * 0.5f), floorf(r + y - d * 0.5f), d, d, 0, 0, 1, 1, sh);
     }
 }
 
@@ -3645,12 +3936,10 @@ void UIHudMates::Draw(void)
         uii.Rend_DrawPicStretched(floorf(r + right * f - d * 0.5f), floorf(r - ahead * f - d * 0.5f), d, d, 0, 0, 1, 1, sh);
     };
     const qhandle_t dot = Comp_MateShader(s, &d);
+    const float     sn = sinf(DEG2RAD(angles[YAW])), cn = cosf(DEG2RAD(angles[YAW]));
 
     uii.Rend_SetColor(white);
     if (g_radarClients && g_radarClientNum >= 0) {
-        const float sn = sinf(DEG2RAD(angles[YAW])), cn = cosf(DEG2RAD(angles[YAW]));
-        // (the compass says 4.3 m for any nearer: its teammate within 5 m or 30% of its place)
-        const float       near2 = Square(Q_max(260.0f, 0.3f * sqrtf(Square(comp_mate.right) + Square(comp_mate.ahead))));
         const compMates_t mates = Comp_Mates();
 
         for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -3658,16 +3947,16 @@ void UIHudMates::Draw(void)
                 continue;
             }
             const float dx = g_radarClients[i].origin[0] - eye[0], dy = g_radarClients[i].origin[1] - eye[1];
-            const float right = dx * sn - dy * cn, ahead = dx * cn + dy * sn;
 
-            shown |= comp_mate.on && !comp_mate.objective && Square(right - comp_mate.right) + Square(ahead - comp_mate.ahead) < near2;
-            mark(right, ahead, dot);
+            shown |= Comp_AtNeedle(g_radarClients[i].origin[0], g_radarClients[i].origin[1]);
+            mark(dx * sn - dy * cn, dx * cn + dy * sn, dot);
         }
     }
-    if (comp_mate.on && !shown) {
+    if (comp_mate.on && !shown && (comp_mate.objective || Comp_NeedleMate())) {
         const qhandle_t sh = comp_mate.objective ? Comp_ObjectiveShader(qtrue, 0.85f, s, &d) : dot;
+        const float     dx = comp_mate.at[0] - eye[0], dy = comp_mate.at[1] - eye[1];
 
-        mark(comp_mate.right, comp_mate.ahead, sh);
+        mark(dx * sn - dy * cn, dx * cn + dy * sn, sh);
     }
 }
 

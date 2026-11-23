@@ -56,7 +56,7 @@ In round and objective matches, this is the maximum time at which a player can j
 
 ### `g_door_reopen_blocked`
 
-Automatically reopens the door from the opposite side when blocked. Defaults to `1`.
+Automatically reopens the door from the opposite side when blocked. Defaults to `0` (`1` in OpenMoHAA).
 
 ### `g_forceteamspectate`
 
@@ -100,7 +100,7 @@ This prevents some tricks such as `ghost walking` where a player rapidly switch 
 
 ### `g_playerStacking`
 
-If enabled, a player can stand on another player's head without being pushed off. Defaults to `0`.
+If enabled, a player can stand on another player's head without being pushed off. Defaults to `1` (`0` in OpenMoHAA).
 
 ### `g_spectatefollow_firstperson`
 
@@ -110,6 +110,8 @@ How spectators view the player they follow, until they pick a view themselves:
 - `1`: through the player's eyes, with their weapon, HUD and scope (first person)
 
 Each spectator can switch with the `spectatemode` console command: `spectatemode 1` for first person, `spectatemode 0` for third person, or `spectatemode` alone to toggle. It can be bound to a key, for example `bind v spectatemode`. This works with original game clients too, as it only changes what the server sends.
+
+MoHAA Reloaded clients have their own setting for this, Options > Gameplay > First-Person Spectating (`cg_spectatefirstperson`, switched with the Spectator View key, F by default). On any server they build the first-person view themselves from the view from behind; on a server with `g_spectatefollow_firstperson 1` they ask for their setting with `spectatemode` instead, which shows the followed player's ammo too.
 
 ### `g_spectatefollow_stockbob`
 

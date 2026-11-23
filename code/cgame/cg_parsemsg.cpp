@@ -796,6 +796,12 @@ static void CG_MakeBulletTracer(
     bullet_tracer_t *bullet_tracer;
     int              i;
 
+    // Added in Reloaded
+    //  where a hit on a player watched through their eyes came from (cg_followeyes.c)
+    for (i = 0; i < i_iNumBullets; i++) {
+        CG_FollowEyes_Shot(i_vStart, i_vEnd[i]);
+    }
+
     // Changed in OPM
     //  Developer messages, as demos fill them when many snapshots are read
     //  in one frame (seeking, high timescale)
@@ -1045,6 +1051,10 @@ void CG_MakeExplosionEffect(const vec3_t vPos, int iType)
     vEnd[1] = vPos[1];
     vEnd[2] = vPos[2] - 64.0;
     fRadius = 64.0;
+
+    // Added in Reloaded
+    //  where a hit on a player watched through their eyes came from (cg_followeyes.c)
+    CG_FollowEyes_Blast(vPos);
 
     if ((CG_PointContents(vPos, 0)) & MASK_WATER) {
         iBaseEffect = SFX_EXP_GREN_PUDDLE;
