@@ -847,7 +847,7 @@ CG_StockFollowCamera
 Added in OPM
   With cg_followcamera 1, puts the camera that follows a player where stock
   servers put it, behind them, when the server puts it in their head (2
-  shows them from their eyes: cg_followeyes.c)
+  shows them from their eyes: cg_demoeyes.c)
 ===============
 */
 static void CG_StockFollowCamera(void)
