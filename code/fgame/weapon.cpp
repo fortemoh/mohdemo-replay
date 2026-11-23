@@ -704,8 +704,9 @@ Weapon::Weapon()
     m_bCanPartialReload = qtrue;
     m_bShareClip        = qfalse;
 
-    // do better lighting on all weapons
-    edict->s.renderfx |= RF_EXTRALIGHT;
+    // Changed in OPM
+    //  No RF_EXTRALIGHT ("do better lighting on all weapons", from FAKK2):
+    //  stock's Weapon() leaves renderfx alone (SD-091).
 
     // Weapons do not auto aim automatically
     autoaim = false;
@@ -2496,8 +2497,12 @@ void Weapon::PickupWeapon(Event *ev)
         return;
     }
 
-    if ((g_gametype->integer || g_realismmode->integer) && other->IsSubclassOfPlayer()
-        && (weapon_class & WEAPON_CLASS_GRENADE) && !hasweapon && hasclass) {
+    // AA 1.11 does this only in single player (Linux fgamededmohaa.so
+    // 0x2de296-0x2de2c1), so in multiplayer the other side's grenade tops
+    // up the player's own instead of becoming a second grenade weapon
+    if ((g_protocol < protocol_e::PROTOCOL_MOHTA_MIN ? !g_gametype->integer
+                                                     : (g_gametype->integer || g_realismmode->integer))
+        && other->IsSubclassOfPlayer() && (weapon_class & WEAPON_CLASS_GRENADE) && !hasweapon && hasclass) {
         hasclass = false;
     }
 
@@ -3737,11 +3742,13 @@ void Weapon::FallingAngleAdjust(Event *ev)
             Vector vAng = Vector(0, angles[1], 0);
             Vector vCross;
 
-            /*vAng.AngleVectorsLeft( &vDir );
+            // as stock 1.11 (Linux fgamededmohaa.so 0x2e0af1-0x2e0be3): the
+            // gun's heading laid flat on the ground's plane
+            vAng.AngleVectorsLeft(&vDir);
 
-			CrossProduct( vAng, vDir, vCross );
-			CrossProduct( vDir, vCross, vAng );
-			vAng = vAng.toAngles();*/
+            CrossProduct(trace.plane.normal, vDir, vCross);
+            CrossProduct(vCross, trace.plane.normal, vDir);
+            vAng = vDir.toAngles();
 
             if (angles[2] <= 0.0f) {
                 vAng[2] = anglemod(vAng[2] - 90.0f);
@@ -3752,7 +3759,9 @@ void Weapon::FallingAngleAdjust(Event *ev)
             setAngles(vAng);
         }
 
-        if (weapon_class >= 0) {
+        // as stock 1.11 (Linux fgamededmohaa.so 0x2e09af-0x2e09b7, test al,al;
+        // js): no drop sound for an item
+        if (!(weapon_class & WEAPON_CLASS_ITEM)) {
             Sound(G_WeaponClassNumToName(weapon_class) + "_drop");
         }
 

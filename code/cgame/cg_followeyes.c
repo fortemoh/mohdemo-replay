@@ -58,6 +58,9 @@ cvar_t *cg_spectatefirstperson;
 #define FE_CAM_PITCH   2.0f
 #define FE_CAM_LEAN    0.65f
 
+// a lean worked back from the camera under this (degrees) is none: see CG_FollowEyes_Snapshot
+#define FE_LEAN_NONE 0.5f
+
 // the player's model's animation slots: the legs in 0 and 1, the upper body in 2 and 3
 #define FE_TORSO_SLOT 2
 
@@ -113,6 +116,8 @@ static struct {
     qboolean torsoKnown; // seen to start a first-person animation (the stock state machine's names)
     int      vmAnim; // the first-person animation made from them
     int      vmAnimChanged;
+    float    vmAnimStart[4]; // how far in each one made started, by its vmAnimChanged (see CG_FollowEyes_VMAnimStart)
+    qboolean vmAnimNew[4]; // and whether it is the first for someone newly watched
     // their hits: their health in the last snapshot read, the kick and the damage it decays with, the red
     // flash, the damage's direction for the HUD (see FE_HitFeedback)
     int      health;
@@ -229,6 +234,27 @@ const playerState_t *CG_FollowEyes_PlayerState(void)
     }
 
     return &cg.snap->ps;
+}
+
+/*
+===============
+CG_FollowEyes_VMAnimStart
+
+How far into it (seconds) to start the first-person animation of this iViewModelAnimChanged while a followed
+player is watched through their eyes here: one of theirs seen first part way through starts there (see
+FE_VMAnimStart). 0 otherwise. newView: whether it is the first for someone newly watched, whose arms take it
+at once, not blended from the last one's, and their gun where it sits for them.
+===============
+*/
+float CG_FollowEyes_VMAnimStart(int changed, qboolean *newView)
+{
+    *newView = qfalse;
+    if (fe.follow < 0 || !CG_FollowEyes_PlayerState()) {
+        return 0;
+    }
+
+    *newView = fe.vmAnimNew[changed & 3];
+    return fe.vmAnimStart[changed & 3];
 }
 
 /*
@@ -373,6 +399,21 @@ static qboolean FE_AnimChanged(feAnim_t *last, int index, float time)
     last->index = index;
     last->time  = time;
     return changed;
+}
+
+/*
+===============
+FE_VMAnimStart
+
+How far into it to start the first-person animation for one of theirs first seen this far in: from its start for
+one seen in the server frame it started in (as the player's own starts), and for one already under way (watched
+from part way through, or snapshots lost) as far in as it is less that frame, the arms in step with the gun and
+with what their upper body holds (the StG 44's magazine in the left hand)
+===============
+*/
+static float FE_VMAnimStart(float time)
+{
+    return Q_max(0, time - FE_SERVER_FRAME / 1000.0f);
 }
 
 /*
@@ -1483,9 +1524,9 @@ void CG_FollowEyes_Snapshot(snapshot_t *snap)
     const entityState_t *pl = NULL, *weapon;
     dtiki_t             *tiki;
     vec3_t               viewangles;
-    float                viewheight, lean, dt;
+    float                viewheight, lean, dt, vmStart;
     int                  follow, i, item, vmAnim, lastServerTime;
-    qboolean             dead, ok;
+    qboolean             dead, ok, newView;
 
     // A server of this code shows a follower the player's own view itself (g_spectatefollow_firstperson 1:
     // the snapshot under their number), with their ammo: one seen doing it is asked for the view set here
@@ -1567,7 +1608,8 @@ void CG_FollowEyes_Snapshot(snapshot_t *snap)
     }
 
     lastServerTime = fe.serverTime;
-    if (follow != fe.follow) {
+    newView        = follow != fe.follow;
+    if (newView) {
         // someone new: no speed or kick from the last one, and their animations as they are now
         lastServerTime      = 0;
         fe.serverTime       = 0;
@@ -1588,6 +1630,13 @@ void CG_FollowEyes_Snapshot(snapshot_t *snap)
         VectorClear(fe.kick);
         // their eye height at once (the first-person view eases changes of it in)
         cg.fCurrentViewHeight = 0;
+    }
+
+    // no lean: one worked back from the camera while they stand straight is a residue hundredths of a degree off 0,
+    // and the cgame's bob takes a quarter off for any lean (CG_OffsetFirstPersonView); a real one (to 45) passes this
+    // only for a moment as it starts and ends
+    if (fabs(lean) < FE_LEAN_NONE) {
+        lean = 0;
     }
 
     //
@@ -1668,9 +1717,10 @@ void CG_FollowEyes_Snapshot(snapshot_t *snap)
     ps->stats[STAT_CLIPAMMO]        = 0;
     ps->stats[STAT_INZOOM]          = ps->fov > 0 && ps->fov < 60 ? (int)ps->fov : 0;
 
-    tiki   = NULL;
-    weapon = FE_FindWeapon(snap, follow, &tiki);
-    vmAnim = -1;
+    tiki    = NULL;
+    weapon  = FE_FindWeapon(snap, follow, &tiki);
+    vmAnim  = -1;
+    vmStart = 0;
     if (weapon) {
         const frameInfo_t *fi = NULL;
 
@@ -1700,7 +1750,8 @@ void CG_FollowEyes_Snapshot(snapshot_t *snap)
         }
 
         if (fi && FE_AnimChanged(&fe.weaponAnim, fi->index, fi->time) && !fe.torsoKnown) {
-            vmAnim = FE_WeaponVMAnim(cgi.Anim_NameForNum(tiki, fi->index));
+            vmAnim  = FE_WeaponVMAnim(cgi.Anim_NameForNum(tiki, fi->index));
+            vmStart = FE_VMAnimStart(fi->time);
         }
     } else {
         fe.weaponEnt = -1;
@@ -1735,6 +1786,7 @@ void CG_FollowEyes_Snapshot(snapshot_t *snap)
 
                 if (torso != -1) {
                     vmAnim        = torso;
+                    vmStart       = FE_VMAnimStart(fi->time);
                     fe.torsoKnown = qtrue;
                 } else if (frame != -1) {
                     vmAnim = frame;
@@ -1756,9 +1808,16 @@ void CG_FollowEyes_Snapshot(snapshot_t *snap)
         }
     }
 
-    if (vmAnim != -1) {
-        fe.vmAnim        = vmAnim;
-        fe.vmAnimChanged = (fe.vmAnimChanged + 1) & 3;
+    // a first-person animation made from theirs, and for someone new one at once (idle, or theirs under way): the
+    // arms start it afresh instead of keeping the last one's, or replaying it on the new gun (CG_ViewModelAnimation
+    // goes by the change count alone)
+    if (vmAnim != -1 || newView) {
+        if (vmAnim != -1) {
+            fe.vmAnim = vmAnim;
+        }
+        fe.vmAnimChanged                 = (fe.vmAnimChanged + 1) & 3;
+        fe.vmAnimStart[fe.vmAnimChanged] = vmStart;
+        fe.vmAnimNew[fe.vmAnimChanged]   = newView;
     }
     ps->iViewModelAnim        = fe.vmAnim;
     ps->iViewModelAnimChanged = fe.vmAnimChanged;

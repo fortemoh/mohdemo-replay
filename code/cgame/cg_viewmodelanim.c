@@ -134,6 +134,11 @@ enum animPrefix_e {
     WPREFIX_PIAT
 };
 
+// Added in Reloaded
+//  the gun's offset (crouched, in the air, moving) put where it sits at once, not eased there: someone
+//  newly watched through their eyes (see CG_ViewModelAnimation)
+static qboolean vm_bSnapPosOffset;
+
 int CG_GetVMAnimPrefixIndex()
 {
     const char *szWeaponName;
@@ -341,11 +346,14 @@ void CG_ViewModelAnimation(refEntity_t *pModel)
     qboolean    bWeaponChanged;
     qboolean    bJumped;
     int         iAnimElapsed;
+    float       fAnimStart; // Added in Reloaded
+    qboolean    bNewView; // Added in Reloaded
 
     fCrossblendFrac = 0.0;
     bAnimChanged    = qfalse;
     bWeaponChanged  = qfalse; // Added in OPM
     bJumped         = qfalse; // Added in OPM
+    fAnimStart      = 0;
     pTiki           = pModel->tiki;
 
     if (cgi.anim->g_iLastEquippedWeaponStat == cg.snap->ps.stats[STAT_EQUIPPED_WEAPON]
@@ -392,6 +400,21 @@ void CG_ViewModelAnimation(refEntity_t *pModel)
         bAnimChanged                   = qtrue;
         cgi.anim->g_iLastVMAnim        = cg.snap->ps.iViewModelAnim;
         cgi.anim->g_iLastVMAnimChanged = cg.snap->ps.iViewModelAnimChanged;
+
+        // Added in Reloaded
+        //  a followed player watched through their eyes: one of their animations seen first part way
+        //  through (just started watching them) starts there, in step with their gun and what they hold;
+        //  someone newly watched takes theirs at once, as for a new weapon (no blend from the last one's
+        //  pose), and their gun where it sits for them (see CG_CalcViewModelMovement)
+        // Changed in OPM
+        //  not in a demo, whose cameras are its own (see CG_FollowEyes_Snapshot's call, cg_snapshot.c)
+        if (!cg.demoPlayback) {
+            fAnimStart = CG_FollowEyes_VMAnimStart(cg.snap->ps.iViewModelAnimChanged, &bNewView);
+            if (bNewView) {
+                bWeaponChanged    = qtrue;
+                vm_bSnapPosOffset = qtrue;
+            }
+        }
     }
 
     if (bAnimChanged) {
@@ -477,17 +500,23 @@ void CG_ViewModelAnimation(refEntity_t *pModel)
         }
 
         // Added in OPM
-        //  Where the animation is, from when it began, less this frame's time
-        //  that's added below: a frame in as before when it just began, and
-        //  where it is after a demo seek landed in the middle of it (whose
-        //  frame is a second long or more)
-        iAnimElapsed = Q_max(cg.time - cg.snap->vmAnimTime, 0);
-        if (!bJumped) {
-            iAnimElapsed = Q_max(iAnimElapsed, cg.frametime);
+        //  In a demo, where the animation is, from when it began, less this
+        //  frame's time that's added below: a frame in as before when it just
+        //  began, and where it is after a demo seek landed in the middle of it
+        //  (whose frame is a second long or more). Elsewhere from where
+        //  Reloaded starts it: the client's vmAnimTime goes by the snapshots
+        //  as sent, which cg_spectatefirstperson rewrites
+        iAnimElapsed = 0;
+        if (cg.demoPlayback) {
+            iAnimElapsed = Q_max(cg.time - cg.snap->vmAnimTime, 0);
+            if (!bJumped) {
+                iAnimElapsed = Q_max(iAnimElapsed, cg.frametime);
+            }
+            iAnimElapsed -= cg.frametime;
+            fAnimStart = iAnimElapsed / 1000.0;
         }
-        iAnimElapsed -= cg.frametime;
 
-        cgi.anim->g_VMFrameInfo[cgi.anim->g_iCurrentVMAnimSlot].time   = iAnimElapsed / 1000.0;
+        cgi.anim->g_VMFrameInfo[cgi.anim->g_iCurrentVMAnimSlot].time   = fAnimStart;
         cgi.anim->g_VMFrameInfo[cgi.anim->g_iCurrentVMAnimSlot].weight = 1.0;
         cgi.anim->g_iCurrentVMDuration                                 = iAnimElapsed;
 
@@ -588,8 +617,10 @@ void CG_CalcViewModelMovement(float fViewBobPhase, float fViewBobAmp, vec_t *vVe
     vMovement[0] = fPhase * vm_sway_front->value;
     vMovement[1] = fPhase;
 
-    fPhase       = sin(fViewBobPhase - 0.94 + fViewBobPhase - 0.94 + M_PI);
-    vMovement[2] = (sin((fViewBobPhase - 0.94) * 4.0 + M_PI / 2) * 0.125 + fPhase) * fViewBobAmp * vm_sway_up->value;
+    // stock 1.11's phase offset is 0.9424778f (cgamex86.dll 0x300775cc)
+    fPhase       = sin(fViewBobPhase - 0.9424778f + fViewBobPhase - 0.9424778f + M_PI);
+    vMovement[2] = (sin((fViewBobPhase - 0.9424778f) * 4.0 + M_PI / 2) * 0.125 + fPhase) * fViewBobAmp
+                 * vm_sway_up->value;
 
     if (cg.predicted_player_state.walking) {
         if (cg.predicted_player_state.viewheight == CROUCH_EYE_HEIGHT) {
@@ -631,6 +662,13 @@ void CG_CalcViewModelMovement(float fViewBobPhase, float fViewBobAmp, vec_t *vVe
         }
     } else if (vVelocity[2]) {
         vTargOfs[2] -= vVelocity[2] * vm_offset_upvel->value;
+    }
+
+    // Added in Reloaded
+    //  someone newly watched through their eyes: their gun where it sits for them at once
+    if (vm_bSnapPosOffset) {
+        VectorCopy(vTargOfs, cgi.anim->g_vCurrentVMPosOffset);
+        vm_bSnapPosOffset = qfalse;
     }
 
     for (i = 0; i < 3; i++) {

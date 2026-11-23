@@ -38,6 +38,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "trigger.h"
 #include "debuglines.h"
 #include "smokegrenade.h"
+#include "g_bulletaa.h"
+#include "g_bounceaa.h"
 
 constexpr unsigned long MAX_TRAVEL_DIST = 16216;
 
@@ -957,7 +959,18 @@ void Projectile::SmashThroughGlassThink()
 
         vEnd = velocity * level.frametime + velocity * level.frametime + origin;
 
-        trace = G_Trace(origin, vec_zero, vec_zero, vEnd, ent, MASK_BEAM, false, "SmashThroughGlassThink");
+        // AA 1.11 looks ahead with MASK_SHOT (0x42042b01, Linux
+        // fgamededmohaa.so 0x2eeb18)
+        trace = G_Trace(
+            origin,
+            vec_zero,
+            vec_zero,
+            vEnd,
+            ent,
+            g_protocol < protocol_e::PROTOCOL_MOHTA_MIN ? MASK_SHOT : MASK_BEAM,
+            false,
+            "SmashThroughGlassThink"
+        );
 
         if ((trace.ent) && (trace.ent->entity != world)) {
             Entity *obj = trace.ent->entity;
@@ -1174,6 +1187,41 @@ void Projectile::Touch(Event *ev)
         int flags;
 
         if (level.time - fLastBounceTime < 0.1f) {
+            fLastBounceTime = level.time;
+            return;
+        }
+
+        if (g_protocol < protocol_e::PROTOCOL_MOHTA_MIN) {
+            // AA 1.11 (Linux fgamededmohaa.so 0x2f37a1-0x2f3b33,
+            // g_bounceaa.h); a splash refreshes the timer too
+            const int inWater = bouncesound.length()
+                             && ((level.impact_trace.surfaceFlags & SURF_PUDDLE)
+                                 || (gi.pointcontents(level.impact_trace.endpos, 0)
+                                     & (CONTENTS_WATER | CONTENTS_SLIME | CONTENTS_LAVA)));
+
+            switch (G_BounceSoundAA(
+                bouncesound.length(),
+                bouncesound_hard.length(),
+                bouncesound_metal.length(),
+                inWater,
+                other->edict->solid == SOLID_BSP,
+                level.impact_trace.surfaceFlags
+            )) {
+            case BOUNCE_SOUND_SOFT:
+                Sound(bouncesound, CHAN_BODY);
+                break;
+            case BOUNCE_SOUND_HARD:
+                Sound(bouncesound_hard, CHAN_BODY);
+                break;
+            case BOUNCE_SOUND_METAL:
+                Sound(bouncesound_metal, CHAN_BODY);
+                break;
+            case BOUNCE_SOUND_WATER:
+                Sound(bouncesound_water, CHAN_BODY);
+                break;
+            }
+
+            BroadcastAIEvent(AI_EVENT_WEAPON_IMPACT);
             fLastBounceTime = level.time;
             return;
         }
@@ -2186,6 +2234,9 @@ float BulletAttack(
     lastSurfaceFlags = 0;
     iNumHit          = 0;
 
+    // Allied Assault bullets follow stock 1.11's BulletAttack (g_bulletaa.h)
+    const bool bStockAA = g_protocol < protocol_e::PROTOCOL_MOHTA_MIN;
+
     if (g_protocol >= protocol_e::PROTOCOL_MOHTA_MIN) {
         bulletbits = 2;
     } else {
@@ -2336,6 +2387,13 @@ float BulletAttack(
                 }
 
                 if (ent && ent != world && ent != owner) {
+                    // The impact goes by how solid the target was when the
+                    // bullet reached it. A fatal hit makes a player SOLID_NOT
+                    // inside Damage(), and AA 1.11 still sends that hit's
+                    // flesh impact (snd_bh_flesh and the hit puff).
+                    const solid_t  solidAtHit      = ent->edict->solid;
+                    const qboolean takedamageAtHit = ent->takedamage != DAMAGE_NO;
+
                     if (ent->takedamage) {
                         if (g_gametype->integer == GT_SINGLE_PLAYER && !iNumHit) {
                             BulletAttack_Stat(owner, ent, &trace, weap);
@@ -2365,7 +2423,40 @@ float BulletAttack(
                         damage_total += original_value - ent->health;
                     }
 
-                    if (ent->edict->solid == SOLID_BBOX && !(trace.contents & CONTENTS_CLAYPIDGEON)) {
+                    if (bStockAA) {
+                        // AA 1.11 (0x2f50f9-0x2f5137, 0x2f5a27): see g_bulletaa.h.
+                        // The flesh impact carries the bullet's direction, which
+                        // the client negates (0x2f58f1).
+                        switch (G_BulletImpactAA(
+                            takedamageAtHit,
+                            trace.surfaceFlags,
+                            trace.contents,
+                            ent->IsSubclassOfSentient(),
+                            trace.location,
+                            solidAtHit == SOLID_BSP
+                        )) {
+                        case BULLET_AA_IMPACT_SURFACE:
+                            gi.SetBroadcastVisible(vTmpEnd, NULL);
+                            gi.MSG_StartCGM(BULLET_AA_IMPACT_SURFACE);
+                            gi.MSG_WriteCoord(vTmpEnd[0]);
+                            gi.MSG_WriteCoord(vTmpEnd[1]);
+                            gi.MSG_WriteCoord(vTmpEnd[2]);
+                            gi.MSG_WriteDir(trace.plane.normal);
+                            gi.MSG_WriteBits(bulletlarge, bulletbits);
+                            gi.MSG_EndCGM();
+                            break;
+                        case BULLET_AA_IMPACT_FLESH:
+                            gi.SetBroadcastVisible(vTmpEnd, NULL);
+                            gi.MSG_StartCGM(BULLET_AA_IMPACT_FLESH);
+                            gi.MSG_WriteCoord(vTmpEnd[0]);
+                            gi.MSG_WriteCoord(vTmpEnd[1]);
+                            gi.MSG_WriteCoord(vTmpEnd[2]);
+                            gi.MSG_WriteDir(vDir);
+                            gi.MSG_WriteBits(bulletlarge, bulletbits);
+                            gi.MSG_EndCGM();
+                            break;
+                        }
+                    } else if (solidAtHit == SOLID_BBOX && !(trace.contents & CONTENTS_CLAYPIDGEON)) {
                         if (trace.surfaceFlags & MASK_SURF_TYPE) {
                             gi.SetBroadcastVisible(vTmpEnd, NULL);
                             gi.MSG_StartCGM(BG_MapCGMToProtocol(g_protocol, CGM_BULLET_6));
@@ -2394,7 +2485,7 @@ float BulletAttack(
                             gi.MSG_WriteBits(bulletlarge, bulletbits);
                             gi.MSG_EndCGM();
                         }
-                    } else if (ent->edict->solid == SOLID_BSP && !(trace.contents & CONTENTS_CLAYPIDGEON)) {
+                    } else if (solidAtHit == SOLID_BSP && !(trace.contents & CONTENTS_CLAYPIDGEON)) {
                         gi.SetBroadcastVisible(vTmpEnd, NULL);
                         gi.MSG_StartCGM(BG_MapCGMToProtocol(g_protocol, CGM_BULLET_6));
                         gi.MSG_WriteCoord(vTmpEnd[0]);
@@ -2406,7 +2497,38 @@ float BulletAttack(
                     }
                 }
 
-                if (trace.fraction < 1.0f) {
+                if (trace.fraction < 1.0f && bStockAA) {
+                    // AA 1.11 (0x2f5140-0x2f5256): see g_bulletaa.h. Snow
+                    // passes, every pass counts toward the cap, and the next
+                    // trace starts 1 unit on. AA has no wood or metal rule.
+                    if (G_BulletPassesAA(
+                            trace.surfaceFlags,
+                            trace.contents,
+                            trace.startsolid,
+                            bulletlarge,
+                            trace.ent && !trace.ent->r.bmodel && trace.ent->entity->takedamage
+                        )
+                        && iContinueCount < BULLET_AA_MAX_PASSES) {
+                        vTraceStart = vTmpEnd + vDir * BULLET_AA_PASS_STEP;
+
+                        if (trace.ent) {
+                            newowner = trace.ent->entity;
+                        } else {
+                            newowner = NULL;
+                        }
+
+                        if (g_showbullettrace->integer) {
+                            G_DebugLine(vTmpEnd + Vector(8, 0, 0), vTmpEnd - Vector(8, 0, 0), 1, 0.5f, 0.5f, 1.f);
+                            G_DebugLine(vTmpEnd + Vector(0, 8, 0), vTmpEnd - Vector(0, 8, 0), 1, 0.5f, 0.5f, 1.f);
+                            G_DebugLine(vTmpEnd + Vector(0, 0, 8), vTmpEnd - Vector(0, 0, 8), 1, 0.5f, 0.5f, 1.f);
+                        }
+
+                        iContinueCount++;
+                    } else {
+                        trace.fraction = 1;
+                        bBulletDone    = qtrue;
+                    }
+                } else if (trace.fraction < 1.0f) {
                     if (trace.surfaceFlags & (SURF_FOLIAGE | SURF_GLASS | SURF_PUDDLE | SURF_PAPER)
                         || trace.contents & (CONTENTS_CLAYPIDGEON | CONTENTS_WATER)
                         || (g_protocol < protocol_e::PROTOCOL_MOHTA && trace.startsolid)
@@ -2475,6 +2597,11 @@ float BulletAttack(
                         trace.fraction = 1;
                         bBulletDone    = qtrue;
                     }
+                }
+
+                if (bStockAA) {
+                    // stock has neither guard below; its pass cap ends every chain
+                    continue;
                 }
 
                 if (oldfrac != trace.fraction) {

@@ -1390,14 +1390,15 @@ its end; Draw2DList draws it again as one command (a list drawn while
 another is made is copied into it). A list made again or freed keeps its
 old commands until no queued frame can still run them.
 
-A handle is its list's slot and a serial no other list ever had, the
-renderer's restarts too: a widget keeps its handle across a vid_restart,
-which frees every list, and one freed is taken by the next new list. A
-handle that no longer names its list (Begin2DList makes a new one, with a
-new handle) can't name another's: before, a widget given a new list after
-a vid_restart could take a slot another still held, both then drew from
-it, and one drew what the other had made (the Esc menu over the game after
-it closed, until the next vid_restart)
+A handle is its list's slot and a serial no other list of this load of the
+renderer had: one freed is taken by the next new list, and a handle that no
+longer names its list (Begin2DList makes a new one, with a new handle) can't
+name another's. A vid_restart frees every list and, the renderer a library
+loaded again, starts the serials over: the UI gives a handle only to the
+renderer that gave it (uiwidget.cpp, m_drawRef). Before, a widget given a new
+list after a vid_restart could take a slot another still held, both then drew
+from it, and one drew what the other had made (the Esc menu over the game, old
+game messages and kill rows under the new ones)
 
 ====================================================================
 */
@@ -1421,7 +1422,7 @@ static struct {
 	int			frame;
 } r2dl;
 
-static int r2dlSerial;	// the last list's serial (kept by the shutdown: none is used twice)
+static int r2dlSerial;	// the last list's serial (kept by the shutdown; a vid_restart loads the library again: 0)
 
 // the slot of the list a handle names, -1 none (0, a list freed, one from before a restart)
 static int R_2DListSlot( int handle ) {

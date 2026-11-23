@@ -177,8 +177,10 @@ int Ammo::getMaxAmount(void)
 
 void Ammo::setName(str n)
 {
-    name       = n;
-    name_index = gi.itemindex(name) + CS_WEAPONS;
+    name = n;
+    // The item's slot from CS_WEAPONS, as all three stock games store it
+    // (AA Linux 0x1d5a10): clients read the name at CS_WEAPONS + index
+    name_index = gi.itemindex(name);
 }
 
 str Ammo::getName(void)

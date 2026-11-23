@@ -437,6 +437,10 @@ void BG_EvaluateTrajectory(const trajectory_t *tr, int atTime, const vec3_t base
     }
 
     deltaTime = (float)(atTime - tr->trTime) / 1000.0;
+    if (deltaTime < 0) {
+        // as stock 1.11 (cgamex86.dll 0x300212a6-0x300212b3)
+        deltaTime = 0;
+    }
 
     result[0] = tr->trDelta[0] * deltaTime + base[0];
     result[1] = tr->trDelta[1] * deltaTime + base[1];

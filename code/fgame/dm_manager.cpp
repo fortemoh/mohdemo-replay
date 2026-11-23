@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "dm_manager.h"
 #include "playerstart.h"
 #include "scriptexception.h"
+#include "g_spawnpick.h"
 
 cvar_t *g_tempaxisscore;
 cvar_t *g_tempaxiswinsinrow;
@@ -69,10 +70,9 @@ static int compare_spawnsort(const void *pe1, const void *pe2)
 
 static PlayerStart *GetRandomSpawnpointFromList(spawnsort_t *pSpots, int nSpots)
 {
-    int   i = nSpots;
-    float fTotalMetric;
-    float fMinPosMetric;
-    float fChosen;
+    float metrics[5];
+    int   n;
+    int   i;
 
     if (nSpots <= 0) {
         return NULL;
@@ -85,46 +85,18 @@ static PlayerStart *GetRandomSpawnpointFromList(spawnsort_t *pSpots, int nSpots)
         return pSpots[0].spawnpoint;
     }
 
-    if (nSpots > 5) {
-        nSpots = 5;
+    //
+    // Fixed in OPM
+    //  The decompiled loop stepped i twice per spot, so it weighed only
+    //  spots 0, 2 and 4 and the best spot won nearly every time. This is
+    //  stock 1.11's pick (see g_spawnpick.h), with its one rand() call.
+    //
+    n = nSpots > 5 ? 5 : nSpots;
+    for (i = 0; i < n; i++) {
+        metrics[i] = pSpots[i].fMetric;
     }
 
-    fMinPosMetric = pSpots[0].fMetric * nSpots;
-    fTotalMetric  = fMinPosMetric;
-
-    if (nSpots > 1) {
-        i            = 0;
-        fTotalMetric = 0.0f;
-
-        for (i = 0; i < nSpots; i++) {
-            if (pSpots[i].fMetric <= 0.0f) {
-                break;
-            }
-
-            fChosen = pSpots[i].fMetric * (nSpots - i);
-            fTotalMetric += fChosen;
-
-            i++;
-        }
-
-        if (i < nSpots) {
-            fChosen = fMinPosMetric;
-        }
-
-        fMinPosMetric = fTotalMetric;
-    } else {
-        fChosen = fMinPosMetric;
-    }
-
-    fTotalMetric = (fMinPosMetric - i * fChosen * 0.9) * random();
-    for (i = 0; i < nSpots - 1; i++) {
-        fTotalMetric -= (nSpots - i) * pSpots[i].fMetric - (fChosen * 0.9);
-        if (fTotalMetric <= 0) {
-            break;
-        }
-    }
-
-    return pSpots[i].spawnpoint;
+    return pSpots[G_PickSpawnIndex(metrics, n, rand() & 0x7fff)].spawnpoint;
 }
 
 float SpawnpointMetric_Ffa(const vec3_t origin, DM_Team *dmTeam, const Player *player)
@@ -152,7 +124,7 @@ float SpawnpointMetric_Ffa(const vec3_t origin, DM_Team *dmTeam, const Player *p
 
 float SpawnpointMetric_Team(const vec3_t origin, DM_Team *dmTeam, const Player *player)
 {
-    float fMinEnemyDistSquared  = Square(23170.f);
+    float fMinEnemyDistSquared  = SPAWN_METRIC_FAR;
     float fSumFriendDistSquared = 0.0f;
     float fDistSquared;
     float fMetric;
@@ -176,11 +148,8 @@ float SpawnpointMetric_Team(const vec3_t origin, DM_Team *dmTeam, const Player *
         }
     }
 
-    fMetric = fMinEnemyDistSquared - (random() * 0.25 + 1.0) * Square(1024);
-
-    if (nFriends) {
-        fMetric += (Square(23170) - fSumFriendDistSquared / nFriends) * 0.25;
-    }
+    // stock adds the teammates' term only when no enemy is near (g_spawnpick.h)
+    fMetric = G_TeamSpawnMetric(fMinEnemyDistSquared, fSumFriendDistSquared, nFriends, random());
 
     return fMetric;
 }
@@ -1109,8 +1078,10 @@ void DM_Manager::InitGame(void)
                 m_team_axis.m_spawnpoints.AddObject(spawnpoint);
             }
         } else if (!Q_stricmp(classname, "info_player_intermission")) {
+            // the spectators' list, as stock 1.11 (Linux fgamededmohaa.so
+            // 0x20bcf8, the list info_player_deathmatch adds to first)
             PlayerStart *const spawnpoint = static_cast<PlayerStart *>(ent);
-            m_team_freeforall.m_spawnpoints.AddObject(spawnpoint);
+            m_team_spectator.m_spawnpoints.AddObject(spawnpoint);
         }
     }
 

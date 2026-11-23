@@ -536,7 +536,7 @@ Viewthing::Viewthing(void)
     edict->s.eType              = ET_MODELANIM;
     edict->s.renderfx |= RF_SHADOW;
     edict->s.renderfx |= RF_SHADOW_PRECISE;
-    edict->s.renderfx |= RF_EXTRALIGHT;
+    // Changed in OPM: no RF_EXTRALIGHT, as stock's Viewthing() (SD-091).
 
     // save off surfaces once the model is spawned
     PostEvent(EV_ViewThing_SaveOffSurfaces, FRAMETIME);

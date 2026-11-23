@@ -53,13 +53,28 @@ static size_t CPT_DenormalizeConfigstring_ver_15(size_t num)
     return num;
 }
 
+//
+// AA 1.11's pm_flags bits 0 (ducked) and 1 (view prone, which with ducked is
+// the 54-high crouch) mean the same as Spearhead's. AA has two more flags at
+// bits 2 and 3 that Spearhead removed, so AA bits 4-14 are Spearhead bits
+// 2-12. Stock's ClientMove sets 0x3 for the 54-high crouch, 0x2 at height 20,
+// 0x40, 0x800 and 0x1000, and its PM_CheckDuck tests (flags & 3) == 3, & 1
+// and & 2 (Linux fgamededmohaa.so 0x288988, 0x2889a9, 0x1e3b5d).
+//
+// OpenMoHAA used to shift bit 1 as well, sending view prone on AA bit 3, so
+// stock clients predicted a crouch with the 60-high box. Bits 0 and 1 now
+// pass through unchanged and AA's bits 2 and 3 carry nothing, as in stock.
+//
+#define CPT_PMF_DUCKED     (1 << 0) // PMF_DUCKED in bg_public.h
+#define CPT_PMF_VIEW_PRONE (1 << 1) // PMF_VIEW_PRONE in bg_public.h
+
 static uint32_t CPT_NormalizePlayerStateFlags_ver_6(uint32_t flags)
 {
     uint32_t normalizedFlags = 0;
 
     // Convert AA PlayerMove flags to SH/BT flags
-    normalizedFlags |= flags & (1 << 0);
-    for (size_t i = 1; i < 13; i++) {
+    normalizedFlags |= flags & (CPT_PMF_DUCKED | CPT_PMF_VIEW_PRONE);
+    for (size_t i = 2; i < 13; i++) {
         if (flags & (1 << (i + 2))) {
             normalizedFlags |= (1 << i);
         }
@@ -79,9 +94,9 @@ static uint32_t CPT_DenormalizePlayerStateFlags_ver_6(uint32_t flags)
 {
     uint32_t normalizedFlags = 0;
 
-    // Convert AA PlayerMove flags to SH/BT flags
-    normalizedFlags |= flags & (1 << 0);
-    for (size_t i = 1; i < 13; i++) {
+    // Convert SH/BT PlayerMove flags to AA flags
+    normalizedFlags |= flags & (CPT_PMF_DUCKED | CPT_PMF_VIEW_PRONE);
+    for (size_t i = 2; i < 13; i++) {
         if (flags & (1 << i)) {
             normalizedFlags |= (1 << (i + 2));
         }

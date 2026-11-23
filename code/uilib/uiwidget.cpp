@@ -685,6 +685,7 @@ UIWidget::UIWidget()
     m_numEnabled               = -1;
     m_drawCache                = false;
     m_drawList                 = 0;
+    m_drawRef                  = 0;
     m_drawValid                = false;
     m_drawLive                 = false;
     m_drawStamp                = 0;
@@ -714,7 +715,8 @@ UIWidget::~UIWidget()
     // Added: not the widget whose list is being made any more (an error in mid-draw left it there)
     UI_DrawForget(this);
 
-    if (m_drawList && uii.Rend_Free2DList && uii.IsRendererLoaded()) {
+    // (a handle of an earlier renderer may name another widget's list now)
+    if (m_drawList && m_drawRef == uii.GetRefSequence() && uii.Rend_Free2DList && uii.IsRendererLoaded()) {
         uii.Rend_Free2DList(m_drawList);
     }
 
@@ -1960,7 +1962,11 @@ gives, DrawKey, the baked images and the screen. A class drawing from
 anything else isn't kept (CacheDraw), nor what moves or fades by itself;
 their parents draw as before, their other children each from its list. One
 list is made at once: the children of one being made are drawn into it (or
-their own lists copied in)
+their own lists copied in). A handle is used only with the renderer that
+gave it (m_drawRef): a vid_restart loads the renderer again, which hands out
+the same handles anew: before, a widget that still held one replayed
+whatever list had that handle now, another widget's, frozen (the old game
+messages, kill rows and chat under the new ones)
 
 ====================================================================
 */
@@ -2102,7 +2108,8 @@ void UIWidget::Display(const UIRect2D& drawframe, float parent_alpha)
     if (ui_drawMaking && DrawKeyed()) {
         ui_drawMaking->m_drawKeys.push_back({this, state});
     }
-    if (m_drawValid && m_drawStamp == stamp && m_drawAlpha == parent_alpha && UI_SameRect(m_drawRects[0], drawframe)
+    if (m_drawValid && m_drawRef == uii.GetRefSequence() && m_drawStamp == stamp && m_drawAlpha == parent_alpha
+        && UI_SameRect(m_drawRects[0], drawframe)
         && UI_SameRect(m_drawRects[1], m_screenframe) && UI_SameRect(m_drawRects[2], m_clippedframe) && m_drawKey == state
         && CacheDraw()) {
         size_t i, k;
@@ -2128,7 +2135,9 @@ void UIWidget::Display(const UIRect2D& drawframe, float parent_alpha)
     // a list made unless one is being made or it drew live last time
     make = !ui_drawMaking && !m_drawLive;
     if (make) {
-        m_drawList = uii.Rend_Begin2DList(m_drawList);
+        // (a handle of an earlier renderer: none, a new one)
+        m_drawList = uii.Rend_Begin2DList(m_drawRef == uii.GetRefSequence() ? m_drawList : 0);
+        m_drawRef  = uii.GetRefSequence();
         make       = m_drawList != 0;
     }
     if (make) {

@@ -921,6 +921,7 @@ public:
     //====
     // Added in 2.0
     void  TickSprint();
+    float GetWalkSpeed() const;
     float GetRunSpeed() const;
     void  FireWeapon(int number, firemode_t mode) override;
     void  SetInvulnerable();

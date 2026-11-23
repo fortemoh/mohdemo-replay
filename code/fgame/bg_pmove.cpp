@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "bg_public.h"
 #include "bg_local.h"
+#include "bg_lean.h"
 
 pmove_t *pm;
 pml_t    pml;
@@ -444,7 +445,9 @@ qboolean PM_FeetOnGround(vec3_t pos)
 
     VectorCopy(pos, start);
     VectorCopy(pos, end);
-    end[2] -= 16.01f;
+    // 16.1 in stock AA 1.11 (Linux fgamededmohaa.so 0x1e564d and both
+    // copies in PM_CheckFeet), from pos itself
+    end[2] -= 16.1f;
 
     pm->trace(&trace, start, min3x3, max3x3, end, pm->ps->clientNum, pm->tracemask, true, false);
 
@@ -754,6 +757,12 @@ static void PM_CrashLand(void)
     float acc;
     float t;
     float a, b, c, den;
+
+    if (pm->waterlevel == 3) {
+        // no landing under water, as stock 1.11 (Linux fgamededmohaa.so
+        // 0x1e3c3c, cgamex86.dll 0x30003b45)
+        return;
+    }
 
     // calculate the exact velocity on landing
     dist = pm->ps->origin[2] - pml.previous_origin[2];
@@ -1353,35 +1362,14 @@ void PmoveSingle(pmove_t *pmove)
          && (pm->cmd.buttons & (BUTTON_LEAN_LEFT | BUTTON_LEAN_RIGHT)) != (BUTTON_LEAN_LEFT | BUTTON_LEAN_RIGHT))
         && (!pm->cmd.forwardmove || pm->alwaysAllowLean) && (!pm->cmd.rightmove || pm->alwaysAllowLean)
         && (!pm->cmd.upmove || pm->alwaysAllowLean)) {
+        // as stock: the minimum step applies on both sides, and the lean is
+        // clamped after the step (bg_lean.h)
         if (pm->cmd.buttons & BUTTON_LEAN_LEFT) {
-            if (pm->ps->fLeanAngle <= -pm->leanMax) {
-                pm->ps->fLeanAngle = -pm->leanMax;
-            } else {
-                float fAngle     = pml.frametime * (-pm->leanMax - pm->ps->fLeanAngle) * pm->leanAdd;
-                float fLeanAngle = pml.frametime * -pm->leanSpeed;
-
-                if (fAngle <= fLeanAngle) {
-                    fLeanAngle = fAngle;
-                }
-
-                pm->ps->fLeanAngle += fLeanAngle;
-            }
+            pm->ps->fLeanAngle =
+                PM_LeanLeft(pm->ps->fLeanAngle, pml.frametime, pm->leanMax, pm->leanAdd, pm->leanSpeed);
         } else {
-            if (pm->ps->fLeanAngle >= pm->leanMax) {
-                pm->ps->fLeanAngle = pm->leanMax;
-            } else {
-                float fAngle     = pm->leanMax - pm->ps->fLeanAngle;
-                float fLeanAngle = pml.frametime * pm->leanSpeed;
-                float fMult      = pml.frametime * fAngle * pm->leanAdd;
-
-                if (fLeanAngle <= fMult) {
-                    fLeanAngle = fMult;
-                } else {
-                    fLeanAngle = fMult;
-                }
-
-                pm->ps->fLeanAngle += fLeanAngle;
-            }
+            pm->ps->fLeanAngle =
+                PM_LeanRight(pm->ps->fLeanAngle, pml.frametime, pm->leanMax, pm->leanAdd, pm->leanSpeed);
         }
     } else if (pm->ps->fLeanAngle) {
         float fAngle = pm->ps->fLeanAngle * pml.frametime * pm->leanRecoverSpeed;
@@ -1437,7 +1425,11 @@ void PmoveSingle(pmove_t *pmove)
     }
 
     if ((pm->ps->pm_flags & PMF_NO_MOVE) || (pm->ps->pm_flags & PMF_FROZEN)) {
-        PM_CheckDuck();
+        if (pm->protocol >= protocol_e::PROTOCOL_MOHTA_MIN) {
+            // AA 1.11 returns at once (Linux fgamededmohaa.so 0x1e40b1,
+            // cgamex86.dll 0x3000449f-0x300044bd)
+            PM_CheckDuck();
+        }
         return;
     }
 
@@ -1591,7 +1583,9 @@ static void PmoveAdjustViewAngleSettings_OnLadder(
     }
 }
 
-void PmoveAdjustAngleSettings(vec_t *vViewAngles, vec_t *vAngles, playerState_t *pPlayerState, entityState_t *pEntState)
+void PmoveAdjustAngleSettings(
+    vec_t *vViewAngles, vec_t *vAngles, playerState_t *pPlayerState, entityState_t *pEntState, int protocol
+)
 {
     vec3_t temp, temp2;
     vec3_t armsAngles, torsoAngles, headAngles;
@@ -1621,7 +1615,14 @@ void PmoveAdjustAngleSettings(vec_t *vViewAngles, vec_t *vAngles, playerState_t 
 
         EulerToQuat(headAngles, pEntState->bone_quat[HEAD_TAG]);
     } else {
-        if (pPlayerState->pm_flags & PMF_TURRET) {
+        //
+        // AA 1.11 (Linux fgamededmohaa.so 0x1e47b5-0x1e47d4) always faces the
+        // body along the view's yaw, on a turret too, and never touches
+        // eFlags; on a turret the head gets the whole difference (below)
+        //
+        const bool bStockAA = protocol < protocol_e::PROTOCOL_MOHTA_MIN;
+
+        if ((pPlayerState->pm_flags & PMF_TURRET) && !bStockAA) {
             vAngles[2] = 0;
             // Added in 2.0
             //  Clients checking this flag will draw an icon
@@ -1630,7 +1631,9 @@ void PmoveAdjustAngleSettings(vec_t *vViewAngles, vec_t *vAngles, playerState_t 
         } else {
             fTmp = AngleMod(vViewAngles[1]);
             VectorSet(vAngles, 0, fTmp, 0);
-            pEntState->eFlags &= ~EF_PLAYER_ARTILLERY;
+            if (!bStockAA) {
+                pEntState->eFlags &= ~EF_PLAYER_ARTILLERY;
+            }
         }
 
         if (pPlayerState->pm_flags & PMF_TURRET) {
@@ -1645,10 +1648,11 @@ void PmoveAdjustAngleSettings(vec_t *vViewAngles, vec_t *vAngles, playerState_t 
             AnglesSubtract(vViewAngles, vAngles, headAngles);
             // Added in 2.0
             //  Prevent rotating the player head like a monster
-            if (headAngles[1] > 90) {
+            //  (AA 1.11 doesn't clamp, 0x1e487d)
+            if (!bStockAA && headAngles[1] > 90) {
                 headAngles[1] = 90;
             }
-            if (headAngles[1] < -90) {
+            if (!bStockAA && headAngles[1] < -90) {
                 headAngles[1] = -90;
             }
 
@@ -1721,7 +1725,8 @@ void PmoveAdjustAngleSettings_Client(
         VectorSet(torsoAngles, AngleMod(vViewAngles[0]), 0.0, pPlayerState->fLeanAngle * 0.7);
 
         if (torsoAngles[0] > 180.0) {
-            torsoAngles[0] -= 180.0;
+            // 360 as off the ladder, as stock 1.11 (cgamex86.dll 0x30005180)
+            torsoAngles[0] -= 360.0;
         }
 
         torsoAngles[0] += 8.0;
@@ -1736,7 +1741,8 @@ void PmoveAdjustAngleSettings_Client(
 
         // head angles
         AnglesSubtract(vViewAngles, vAngles, headAngles);
-        headAngles[0] *= 0.5;
+        // all three halved, as stock 1.11 (cgamex86.dll 0x300052aa-0x300052cb)
+        VectorScale(headAngles, 0.5f, headAngles);
         AnglesSubtract(headAngles, torsoAngles, headAngles);
         VectorCopy(headAngles, pEntState->bone_angles[HEAD_TAG]);
         EulerToQuat(pEntState->bone_angles[HEAD_TAG], pEntState->bone_quat[HEAD_TAG]);

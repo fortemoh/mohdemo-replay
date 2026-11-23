@@ -148,6 +148,10 @@ struct rlInfo_t {
     int                     dmflags, fraglimit, maxClients;
     char                    map[MAX_QPATH];
     std::vector<rlPlayer_t> allies, axis, spectators; // in client order
+    // free-for-all's players whose side isn't sent (AA servers' configstrings carry the name only, as
+    // stock 1.11, and FFA's "scores" rows no team), in client order
+    std::vector<rlPlayer_t> freeForAll;
+    bool                    teamKeys; // the configstrings carry the players' teams (all but AA servers of stock's form)
     int                     connected;
     int                     self;
     int                     teamScore[2]; // -1 unknown
@@ -190,6 +194,7 @@ static void RL_Info(rlInfo_t *in)
     in->maxClients = atoi(Info_ValueForKey(info, "sv_maxclients"));
     RL_MapFile(in->map, Info_ValueForKey(info, "mapname"));
     in->connected = 0;
+    in->teamKeys  = false;
     in->self      = cl.snap.valid ? cl.snap.ps.clientNum : clc.clientNum;
     for (int i = 0; i < MAX_CLIENTS; i++) {
         const char *cs = CL_ConfigString(CS_PLAYERS + i);
@@ -205,6 +210,7 @@ static void RL_Info(rlInfo_t *in)
         }
         p.client = i;
         team     = RL_Team(i, cs);
+        in->teamKeys |= Info_ValueForKey(cs, "team")[0] != 0;
         in->connected++;
         if (team == TEAM_ALLIES) {
             in->allies.push_back(p);
@@ -212,6 +218,8 @@ static void RL_Info(rlInfo_t *in)
             in->axis.push_back(p);
         } else if (team == TEAM_SPECTATOR) {
             in->spectators.push_back(p);
+        } else if (team == TEAM_FREEFORALL) {
+            in->freeForAll.push_back(p);
         }
     }
     // the teams' scores: the server's (CS_TEAMSCORES), else the scoreboard's
@@ -2655,7 +2663,10 @@ void UIReloadedMenu::DrawTeam(const rlView_t& v, const rlInfo_t& in)
         return;
     }
 
-    // each side: its name in its colour over its medallion, its players and bots under it
+    // each side: its name in its colour over its medallion, its players and bots under it (not in a free-for-all
+    // whose server sends no one's team, AA's as stock: who wears which uniform isn't known there, so no count)
+    const bool sides = !ffa || in.teamKeys;
+
     for (int t = 0; t < 2; t++) {
         const rlTeam_t&                T    = rl_teams[t];
         const std::vector<rlPlayer_t>& list = t ? in.axis : in.allies;
@@ -2672,7 +2683,9 @@ void UIReloadedMenu::DrawTeam(const rlView_t& v, const rlInfo_t& in)
             caption += va("  \xb7  %d bot%s", bots, bots == 1 ? "" : "s");
         }
         RL_Text(v, cx[t], 239 * ky, T.name, RL_H3, RL_T(hot ? T.pale : T.light), true, RL_CENTER, 2.4f, RL_MID);
-        RL_Text(v, cx[t], 274 * ky, caption.c_str(), RL_S1, RL_Rgb(200, 196, 186), false, RL_CENTER, 0.6f, RL_MID);
+        if (sides) {
+            RL_Text(v, cx[t], 274 * ky, caption.c_str(), RL_S1, RL_Rgb(200, 196, 186), false, RL_CENTER, 0.6f, RL_MID);
+        }
         // (its whole half over the foot's line, the divider between)
         Hit(v, t ? mid : 0, 0, t ? v.dw - mid : mid, lineY, ID_TJOIN + t);
     }
@@ -3747,6 +3760,12 @@ void UIReloadedMenu::DrawScoreboard(const rlView_t& v, const rlInfo_t& in)
     for (int t = 0; t < 2; t++) {
         for (const rlPlayer_t& p : t ? in.axis : in.allies) {
             lists[ffa ? 0 : t].push_back({&p, RL_Score(p.client), t, 0});
+        }
+    }
+    // (FFA's players of no known side with the others: its table shows no sides)
+    if (ffa) {
+        for (const rlPlayer_t& p : in.freeForAll) {
+            lists[0].push_back({&p, RL_Score(p.client), 0, 0});
         }
     }
     {

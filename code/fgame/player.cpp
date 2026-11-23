@@ -2757,6 +2757,11 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
     s2            = "x";
     bDispLocation = qfalse;
 
+    // AA 1.11's texts and formats where Spearhead's differ (Linux
+    // fgamededmohaa.so Player::Obituary 0x285fa0, jump tables 0x38aa5c,
+    // 0x38aacc and 0x38ab08)
+    const bool bStockAA = g_protocol < protocol_e::PROTOCOL_MOHTA_MIN;
+
     if (attacker == this) {
         //
         // Player killed themselves
@@ -2769,7 +2774,7 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
             s1 = "was burned to a crisp";
             break;
         case MOD_SLIME:
-            s1 = "was melted to nothing";
+            s1 = bStockAA ? "was burned to a crisp" : "was melted to nothing";
             break;
         case MOD_FALLING:
             s1 = "cratered";
@@ -2788,7 +2793,8 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
             s1 = "rocketed himself";
             break;
         case MOD_BULLET:
-            if (iLocation > -1) {
+            // AA shows the location when there is one, as for MOD_FAST_BULLET
+            if (bStockAA ? (iLocation == HITLOC_GENERAL || iLocation == HITLOC_MISS) : iLocation > -1) {
                 s1 = "shot himself";
             } else {
                 s1            = "shot himself in the";
@@ -2811,7 +2817,14 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
             break;
         }
 
-        if (bDispLocation && g_obituarylocation->integer) {
+        if (bDispLocation && g_obituarylocation->integer && bStockAA) {
+            // AA prints s1, a space and the location, localized whole (0x286c0e)
+            str szConv1 = s1 + " " + G_LocationNumToDispString(iLocation);
+
+            G_PrintfClient(edict, "%s\n", szConv1.c_str());
+
+            G_PrintDeathMessage(szConv1.c_str(), s2.c_str(), "x", client->pers.netname, this, "s");
+        } else if (bDispLocation && g_obituarylocation->integer) {
             str szConv2 = s2 + " in the " + G_LocationNumToDispString(iLocation);
 
             G_PrintfClient(edict, "%s\n", szConv2.c_str());
@@ -2846,7 +2859,7 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
             s1 = "was burned up by";
             break;
         case MOD_SLIME:
-            s1 = "was melted by";
+            s1 = bStockAA ? "was burned up by" : "was melted by";
             break;
         case MOD_FALLING:
             s1 = "was pushed over the edge by";
@@ -2889,7 +2902,7 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
                     }
                 } else if (pAttackerWeap->GetWeaponClass() & WEAPON_CLASS_SMG) {
                     s1 = "was perforated by";
-                    s2 = "'s' SMG";
+                    s2 = "'s SMG";
                 } else if (pAttackerWeap->GetWeaponClass() & WEAPON_CLASS_MG) {
                     s1 = "was machine-gunned by";
                 }
@@ -2972,7 +2985,7 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
             s1 = "was burned to a crisp";
             break;
         case MOD_SLIME:
-            s1 = "was melted to nothing";
+            s1 = bStockAA ? "was burned to a crisp" : "was melted to nothing";
             break;
         case MOD_FALLING:
             s1 = "cratered";
@@ -2981,7 +2994,7 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
             s1 = "blew up";
             break;
         case MOD_GRENADE:
-            s1 = "caught some shrapnel";
+            s1 = bStockAA ? "blew up" : "caught some shrapnel";
             break;
         case MOD_ROCKET:
             s1 = "caught a rocket";
@@ -3003,7 +3016,12 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
             break;
         }
 
-        if (bDispLocation && g_obituarylocation->integer) {
+        if (bDispLocation && g_obituarylocation->integer && bStockAA) {
+            // AA prints s1, a space and the location, localized whole (0x2868d8)
+            str szConv1 = s1 + " " + G_LocationNumToDispString(iLocation);
+
+            G_PrintDeathMessage(szConv1.c_str(), s2.c_str(), "x", client->pers.netname, this, "w");
+        } else if (bDispLocation && g_obituarylocation->integer) {
             str szConv2 = s2 + " in the " + G_LocationNumToDispString(iLocation);
 
             G_PrintDeathMessage(s1.c_str(), szConv2.c_str(), "x", client->pers.netname, this, "w");
@@ -3607,13 +3625,22 @@ void Player::GetMoveInfo(pmove_t *pm)
         //
         // Fixed in OPM
         //  Disable predictions when the groundentity is moving up/down, looks like shaky otherwise
-        if (groundentity->entity && groundentity->entity != this && groundentity->entity->velocity[2] != 0) {
+        // AA 1.11 keeps predicting on a lift (Linux fgamededmohaa.so
+        // GetMoveInfo 0x287040, no such flag), so AA clients predict as on
+        // a stock server
+        if (g_protocol >= protocol_e::PROTOCOL_MOHTA_MIN && groundentity->entity && groundentity->entity != this
+            && groundentity->entity->velocity[2] != 0) {
             pm->ps->pm_flags |= PMF_NO_PREDICTION;
         }
-    } else if (m_pGlueMaster) {
-        // Added in OPM
-        //  Use the glue master for the ground entity to make the viewmodel will stay still
-        pm->ps->groundEntityNum = m_pGlueMaster->entnum;
+    } else {
+        // stock 1.11 drops the push in the air too (0x28716c-0x2871b1)
+        m_vPushVelocity = vec_zero;
+
+        if (m_pGlueMaster) {
+            // Added in OPM
+            //  Use the glue master for the ground entity to make the viewmodel will stay still
+            pm->ps->groundEntityNum = m_pGlueMaster->entnum;
+        }
     }
 
     velocity = Vector(pm->ps->velocity[0], pm->ps->velocity[1], pm->ps->velocity[2]);
@@ -4039,7 +4066,7 @@ void Player::ClientMove(usercmd_t *ucmd)
 
     if (movetype == MOVETYPE_NOCLIP) {
         if (!(last_ucmd.buttons & BUTTON_RUN)) {
-            client->ps.speed = sv_runspeed->value * sv_walkspeedmult->value;
+            client->ps.speed = GetWalkSpeed();
         } else {
             client->ps.speed = sv_runspeed->value;
         }
@@ -4048,10 +4075,13 @@ void Player::ClientMove(usercmd_t *ucmd)
     } else {
         Weapon *pWeap;
 
-        if (last_ucmd.buttons & BUTTON_RUN) {
+        if ((last_ucmd.buttons & BUTTON_RUN)
+            // AA 1.11 also runs in the prone posture (0x28887f), which no
+            // stock state file sets
+            || (g_protocol < PROTOCOL_MOHTA_MIN && (m_iMovePosFlags & MPF_POSITION_PRONE))) {
             client->ps.speed = GetRunSpeed();
         } else {
-            client->ps.speed = sv_runspeed->value * sv_walkspeedmult->value;
+            client->ps.speed = GetWalkSpeed();
         }
 
         if (m_iMovePosFlags & MPF_POSITION_CROUCHING) {
@@ -4092,7 +4122,10 @@ void Player::ClientMove(usercmd_t *ucmd)
         Pmove(&pm);
         GetMoveInfo(&pm);
 
-        if (!g_playerStacking->integer // Changed in OPM: determine if standing on another player's head is allowed
+        // AA 1.11 goes straight from GetMoveInfo to ProcessPmoveEvents
+        // (Linux fgamededmohaa.so 0x2884a9-0x2884b8)
+        if (g_protocol >= protocol_e::PROTOCOL_MOHTA_MIN
+            && !g_playerStacking->integer // Changed in OPM: determine if standing on another player's head is allowed
             && g_gametype->integer != GT_SINGLE_PLAYER && groundentity && groundentity->entity
             && groundentity->entity->IsSubclassOfSentient()) {
             //
@@ -5560,7 +5593,11 @@ void Player::EvaluateState(State *forceTorso, State *forceLegs)
                 } else if (legsAnim != "") {
                     float oldTime;
 
-                    if (g_playeranim_legs_continous->integer && currentState_Legs == laststate_Legs) {
+                    // AA 1.11 restarts the legs at 0 (EvaluateState 0x276570 calls
+                    // only SetPartAnim, which ends in SetTime(slot, 0) at 0x294b4b),
+                    // so this is kept for Spearhead and Breakthrough only
+                    if (g_protocol >= protocol_e::PROTOCOL_MOHTA_MIN && g_playeranim_legs_continous->integer
+                        && currentState_Legs == laststate_Legs) {
                         //
                         // Added in OPM
                         //  This allows different animations in the same state
@@ -7105,7 +7142,7 @@ void Player::PlayerAngles(void)
         angles[1]                      = portableTurret->GetStartYaw();
     }
 
-    PmoveAdjustAngleSettings(v_angle, angles, &client->ps, &edict->s);
+    PmoveAdjustAngleSettings(v_angle, angles, &client->ps, &edict->s, g_protocol);
 
     SetViewAngles(v_angle);
     setAngles(angles);
@@ -7426,7 +7463,11 @@ void Player::UpdateStats(void)
 
                 Vector vEnd = m_vViewPos + vForward * 2048.0f;
 
-                trace = G_Trace(m_vViewPos, vec_zero, vec_zero, vEnd, this, MASK_BEAM, qfalse, "infoclientcheck");
+                // stock 1.11 traces with MASK_PLAYERSOLID (0x42012b01, Linux
+                // fgamededmohaa.so 0x28febd), so bounding-box props block it
+                trace = G_Trace(
+                    m_vViewPos, vec_zero, vec_zero, vEnd, this, MASK_PLAYERSOLID, qfalse, "infoclientcheck"
+                );
 
                 if (trace.ent && trace.ent->entity->IsSubclassOfPlayer() && !(trace.ent->r.svFlags & SVF_NOCLIENT)) {
                     Player *p = static_cast<Player *>(trace.ent->entity);
@@ -7943,9 +7984,9 @@ void Player::addOrigin(Vector org)
 {
     setLocalOrigin(localorigin + org);
 
-    animspeed         = org.x * (1.f / level.frametime);
-    airspeed          = org.y * (1.f / level.frametime);
-    m_vPushVelocity.x = org.z * (1.f / level.frametime);
+    // the whole push, as stock 1.11 (Linux fgamededmohaa.so 0x2904d5-0x290515);
+    // the decompile had it in animspeed, airspeed and m_vPushVelocity.x
+    m_vPushVelocity = org * (1.f / level.frametime);
 }
 
 void Player::Jump(Event *ev)
@@ -7957,9 +7998,10 @@ void Player::Jump(Event *ev)
         return;
     }
 
-    if (g_gametype->integer != GT_SINGLE_PLAYER) {
+    if (g_protocol >= protocol_e::PROTOCOL_MOHTA_MIN && g_gametype->integer != GT_SINGLE_PLAYER) {
         // Added in 2.0
         //  Don't jump when on top of another sentient
+        //  (AA 1.11 has no such check: Linux fgamededmohaa.so 0x278480)
         if (groundentity && groundentity->entity && groundentity->entity->IsSubclassOfSentient()) {
             return;
         }
@@ -7968,11 +8010,17 @@ void Player::Jump(Event *ev)
     maxheight = ev->GetFloat(1);
 
     if (maxheight > 16) {
+        if (sv_gravity->integer <= 0) {
+            // as stock 1.11 (0x278544)
+            return;
+        }
+
         // v^2 = 2ad
         velocity[2] += sqrt(2 * sv_gravity->integer * maxheight);
 
         if (client->ps.groundEntityNum != ENTITYNUM_NONE) {
-            velocity += m_vPushVelocity;
+            // AA 1.11 carries 0.9 of the push (0.9f at 0x3061b8, 0x27857e)
+            velocity += m_vPushVelocity * (g_protocol < protocol_e::PROTOCOL_MOHTA_MIN ? 0.9f : 1.0f);
         }
 
         // make sure the player leaves the ground
@@ -8797,12 +8845,18 @@ void Player::InitDeathmatch(void)
         }
     }
 
-    edict->s.eFlags &= ~(TEAM_ALLIES | TEAM_AXIS);
+    //
+    // Fixed in OPM
+    //  This used the team numbers (3 and 4) as flags, putting bits 0-2 in
+    //  eFlags, 2 being EF_TELEPORT_BIT. Stock sets the team flags here
+    //  (Linux 0x2915f3, 0x292903, 0x292913; SD-090).
+    //
+    edict->s.eFlags &= ~EF_ANY_TEAM;
 
     if (GetTeam() == TEAM_ALLIES) {
-        edict->s.eFlags |= TEAM_ALLIES;
+        edict->s.eFlags |= EF_ALLIES;
     } else if (GetTeam() == TEAM_AXIS) {
-        edict->s.eFlags |= TEAM_AXIS;
+        edict->s.eFlags |= EF_AXIS;
     }
 
     G_SetClientConfigString(edict);
@@ -12056,6 +12110,18 @@ void Player::TickSprint()
     if (last_ucmd.rightmove || last_ucmd.upmove) {
         m_fLastSprintTime = 0;
     }
+}
+
+float Player::GetWalkSpeed() const
+{
+    if (g_protocol < PROTOCOL_MOHTA_MIN) {
+        // AA 1.11 walks at sv_walkspeed (registered "150", Linux 0x240029;
+        // ClientMove 0x288928 and, in noclip, 0x288954) and has no
+        // sv_walkspeedmult
+        return sv_walkspeed->value;
+    }
+
+    return sv_runspeed->value * sv_walkspeedmult->value;
 }
 
 float Player::GetRunSpeed() const

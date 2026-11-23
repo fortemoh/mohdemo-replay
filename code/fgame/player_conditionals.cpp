@@ -1475,6 +1475,8 @@ qboolean Player::CondOnLadder(Conditional& condition)
     return m_pLadder != NULL;
 }
 
+// The ladder checks trace with MASK_PLAYERSOLID, as stock 1.11 (0x42012b01,
+// Linux fgamededmohaa.so 0x29c8b2, 0x29c93d, 0x29cc4e, 0x29cd3d, 0x29ce34)
 qboolean Player::CondCanClimbUpLadder(Conditional& condition)
 {
     trace_t trace;
@@ -1498,14 +1500,14 @@ qboolean Player::CondCanClimbUpLadder(Conditional& condition)
 
     Vector vEnd = (origin + Vector(0, 0, 16));
 
-    return G_SightTrace(origin, mins, maxs, vEnd, this, NULL, MASK_BEAM, qtrue, "Player::CondCanClimbUpLadder");
+    return G_SightTrace(origin, mins, maxs, vEnd, this, NULL, MASK_PLAYERSOLID, qtrue, "Player::CondCanClimbUpLadder");
 }
 
 qboolean Player::CondCanClimbDownLadder(Conditional& condition)
 {
     Vector vEnd = origin - Vector(0, 0, 16);
 
-    return G_SightTrace(origin, mins, maxs, vEnd, this, NULL, MASK_BEAM, qtrue, "Player::CondCanClimbDownLadder");
+    return G_SightTrace(origin, mins, maxs, vEnd, this, NULL, MASK_PLAYERSOLID, qtrue, "Player::CondCanClimbDownLadder");
 }
 
 qboolean Player::CondCanGetOffLadderTop(Conditional& condition)
@@ -1528,12 +1530,12 @@ qboolean Player::CondCanGetOffLadderTop(Conditional& condition)
         vEnd = origin;
         vEnd[2] += 98.0f;
 
-        if (G_SightTrace(vStart, mins, maxs, vEnd, this, NULL, MASK_BEAM, true, "Player::CondCanGetOffLadderTop 2")) {
+        if (G_SightTrace(vStart, mins, maxs, vEnd, this, NULL, MASK_PLAYERSOLID, true, "Player::CondCanGetOffLadderTop 2")) {
             vStart = vEnd;
             vEnd   = vStart + yaw_forward * 16.0f;
 
             return G_SightTrace(
-                vStart, mins, maxs, vEnd, this, NULL, MASK_BEAM, true, "Player::CondCanGetOffLadderTop 3"
+                vStart, mins, maxs, vEnd, this, NULL, MASK_PLAYERSOLID, true, "Player::CondCanGetOffLadderTop 3"
             );
         }
     }
@@ -1551,7 +1553,7 @@ qboolean Player::CondCanGetOffLadderBottom(Conditional& condition)
     vEnd = origin;
     vEnd[2] -= 40.0f;
 
-    trace = G_Trace(vStart, mins, maxs, vEnd, edict, MASK_BEAM, true, "Player::CondCangetoffladerbottom");
+    trace = G_Trace(vStart, mins, maxs, vEnd, edict, MASK_PLAYERSOLID, true, "Player::CondCangetoffladerbottom");
 
     if (trace.fraction != 1.0f) {
         return (trace.entityNum == ENTITYNUM_WORLD);
@@ -1592,7 +1594,10 @@ qboolean Player::CondSolidForward(Conditional& condition)
     Vector vMins(mins.x, mins.y, -8);
     Vector vMaxs(maxs.x, maxs.y, 8);
 
-    trace_t trace = G_Trace(centroid, vMins, vMaxs, end, this, MASK_SOLID, true, "Player::CondSolidforward");
+    // AA 1.11 traces with MASK_PLAYERSOLID here (0x42012b01, Linux 0x29d0dd)
+    const int mask = g_protocol >= PROTOCOL_MOHTA_MIN ? MASK_SOLID : MASK_PLAYERSOLID;
+
+    trace_t trace = G_Trace(centroid, vMins, vMaxs, end, this, mask, true, "Player::CondSolidforward");
 
     return (trace.fraction < 0.7f);
 }

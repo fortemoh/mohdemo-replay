@@ -752,8 +752,9 @@ Sentient::Sentient()
     charge_start_time = 0;
     poweruptype       = 0;
     poweruptimer      = 0;
-    // do better lighting on all sentients
-    edict->s.renderfx |= RF_EXTRALIGHT;
+    // Changed in OPM
+    //  No RF_EXTRALIGHT ("do better lighting on all sentients", from FAKK2):
+    //  stock never sets it (Linux 0x2b2d29, 0x2b2d38; SD-091).
     edict->s.renderfx |= RF_SHADOW;
     // sentients have precise shadows
     edict->s.renderfx |= RF_SHADOW_PRECISE;

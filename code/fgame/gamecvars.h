@@ -90,6 +90,7 @@ extern cvar_t *sv_maplist;
 extern cvar_t *sv_nextmap;
 extern cvar_t *sv_runspeed;
 extern cvar_t *sv_walkspeedmult;
+extern cvar_t *sv_walkspeed;
 extern cvar_t *sv_dmspeedmult;
 extern cvar_t *sv_crouchspeedmult;
 

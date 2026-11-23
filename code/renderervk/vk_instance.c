@@ -548,7 +548,7 @@ static void VK_CreateLogicalDevice( void ) {
 	VkPhysicalDevicePresentIdFeaturesKHR presentIdFeatures;
 	VkPhysicalDevicePresentWaitFeaturesKHR presentWaitFeatures;
 	qboolean portability;
-	const char *lineExtension, *swapchainExtension;
+	const char *lineExtension, *swapchainExtension, *calibrationExtension;
 	VkDeviceQueueCreateInfo queueInfos[2];
 	VkDeviceCreateInfo createInfo;
 	VkExtensionProperties *available;
@@ -750,9 +750,17 @@ static void VK_CreateLogicalDevice( void ) {
 	// (r_vkLatency): the device's and the clock SDL's performance counter
 	// reads (CLOCK_MONOTONIC_RAW on Linux, QueryPerformanceCounter on Windows)
 	vk.calibrationDomain = VK_TIME_DOMAIN_MAX_ENUM_KHR;
-	if ( qvkGetPhysicalDeviceCalibrateableTimeDomainsKHR && vk.timestampValidBits ) {
+	calibrationExtension = NULL;
+	if ( vk.timestampValidBits ) {
+		// each extension's own entry point, the one its driver has. The
+		// loader hands out the KHR one whatever the driver has, and on a driver
+		// with only the EXT extension (Intel's for its 6th to 10th generation
+		// graphics, 31.0.101.2140 on Windows) calling it ends the program in
+		// the loader ("ICD associated with VkPhysicalDevice does not support
+		// GetPhysicalDeviceCalibrateableTimeDomainsKHR"), at start-up
 		const char *name = VK_HasExtension( available, numAvailable, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME ) ? VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME
 			: VK_HasExtension( available, numAvailable, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME ) ? VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME : NULL;
+		PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR getDomains = NULL;
 		VkTimeDomainKHR domains[8];
 		uint32_t numDomains = ARRAY_LEN( domains ), d;
 		qboolean device = qfalse;
@@ -761,7 +769,12 @@ static void VK_CreateLogicalDevice( void ) {
 #else
 		VkTimeDomainKHR wanted = VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR;
 #endif
-		if ( name && qvkGetPhysicalDeviceCalibrateableTimeDomainsKHR( vk.physicalDevice, &numDomains, domains ) >= VK_SUCCESS ) {
+		if ( name && !strcmp( name, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME ) ) {
+			getDomains = qvkGetPhysicalDeviceCalibrateableTimeDomainsKHR;
+		} else if ( name ) {
+			getDomains = (PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR)qvkGetInstanceProcAddr( vk.instance, "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT" );
+		}
+		if ( getDomains && getDomains( vk.physicalDevice, &numDomains, domains ) >= VK_SUCCESS ) {
 			for ( d = 0; d < numDomains; d++ ) {
 				if ( domains[d] == VK_TIME_DOMAIN_DEVICE_KHR ) {
 					device = qtrue;
@@ -771,6 +784,7 @@ static void VK_CreateLogicalDevice( void ) {
 				if ( domains[d] == wanted ) {
 					VK_AddExtension( extensions, &numExtensions, name );
 					vk.calibrationDomain = wanted;
+					calibrationExtension = name;
 				}
 			}
 		}
@@ -859,10 +873,9 @@ static void VK_CreateLogicalDevice( void ) {
 
 	qvkGetCalibratedTimestampsKHR = NULL;
 	if ( vk.calibrationDomain != VK_TIME_DOMAIN_MAX_ENUM_KHR ) {
-		qvkGetCalibratedTimestampsKHR = (PFN_vkGetCalibratedTimestampsKHR)qvkGetDeviceProcAddr( vk.device, "vkGetCalibratedTimestampsKHR" );
-		if ( !qvkGetCalibratedTimestampsKHR ) {
-			qvkGetCalibratedTimestampsKHR = (PFN_vkGetCalibratedTimestampsKHR)qvkGetDeviceProcAddr( vk.device, "vkGetCalibratedTimestampsEXT" );
-		}
+		// the enabled extension's own (above)
+		qvkGetCalibratedTimestampsKHR = (PFN_vkGetCalibratedTimestampsKHR)qvkGetDeviceProcAddr( vk.device,
+			!strcmp( calibrationExtension, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME ) ? "vkGetCalibratedTimestampsKHR" : "vkGetCalibratedTimestampsEXT" );
 		if ( !qvkGetCalibratedTimestampsKHR ) {
 			vk.calibrationDomain = VK_TIME_DOMAIN_MAX_ENUM_KHR;
 		}

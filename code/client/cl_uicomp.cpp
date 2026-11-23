@@ -134,7 +134,7 @@ typedef struct {
 typedef struct {
     int         time;
     char        killer[MAX_NAME_LENGTH], victim[MAX_NAME_LENGTH];
-    int         killerTeam, victimTeam;
+    int         killerTeam, victimTeam; // sides (Comp_Side), 0 unknown
     const char *pic;
     float       picW, picH; // design pixels
     qboolean    suicide, headshot;
@@ -151,6 +151,7 @@ static struct {
     // the kills' deaths
     int      team[MAX_CLIENTS];
     qboolean dead[MAX_CLIENTS];
+    int      side[MAX_CLIENTS]; // the uniform last seen on each player: TEAM_ALLIES, TEAM_AXIS, 0 not seen
     char     roundStart[64];
     int      sbCount;           // ui_hud_sb's modificationCount read
     int      sbScore[2];        // the scoreboard's teams' scores, -1 unknown
@@ -398,8 +399,13 @@ static void Comp_ConfigStrings(void)
     Q_strncpyz(cs.map, Info_ValueForKey(info, "mapname"), sizeof(cs.map));
     for (int i = 0; i < MAX_CLIENTS; i++) {
         const char *team = Info_ValueForKey(CL_ConfigString(CS_PLAYERS + i), "team");
+        const char *name = Info_ValueForKey(CL_ConfigString(CS_PLAYERS + i), "name");
 
-        Q_strncpyz(cs.name[i], Info_ValueForKey(CL_ConfigString(CS_PLAYERS + i), "name"), sizeof(cs.name[i]));
+        // (another player in the slot, or none: the uniform seen there forgotten)
+        if (strcmp(cs.name[i], name)) {
+            comp.side[i] = 0;
+        }
+        Q_strncpyz(cs.name[i], name, sizeof(cs.name[i]));
         cs.team[i] = team[0] ? atoi(team) : -1;
     }
     for (int i = 0; i < MAX_OBJECTIVES; i++) {
@@ -435,6 +441,18 @@ static int Comp_Team(int client)
         return 0;
     }
     return cs.team[client] >= 0 ? cs.team[client] : UI_Menus_ScoreTeam(client);
+}
+
+// a player's side, TEAM_ALLIES or TEAM_AXIS, 0 unknown: their team (Comp_Team), else the
+// uniform last seen on them (free-for-all on an AA server: the side is sent nowhere else)
+static int Comp_Side(int client)
+{
+    const int team = Comp_Team(client);
+
+    if (team == TEAM_ALLIES || team == TEAM_AXIS) {
+        return team;
+    }
+    return client >= 0 && client < MAX_CLIENTS ? comp.side[client] : 0;
 }
 
 // the one client called name, -1 none or more
@@ -538,14 +556,16 @@ static qboolean Comp_AddKill(const char *text, qboolean ourVictim)
             pic = &comp_killPics[i];
         }
     }
+    // the names' sides (their colours) by Comp_Side: the server's team, else the uniform last seen on them (all an
+    // AA server's free-for-all tells)
     client        = Comp_FindName(k->victim);
-    k->victimTeam = client >= 0 ? Comp_Team(client) : 0;
+    k->victimTeam = Comp_Side(client);
     if (!k->victimTeam && Comp_Gametype() >= GT_TEAM) {
         const int mine = cl.snap.ps.stats[STAT_TEAM];
 
         k->victimTeam = ourVictim == (mine != TEAM_AXIS) ? TEAM_ALLIES : TEAM_AXIS;
     }
-    k->killerTeam = Comp_Team(Comp_FindName(k->killer));
+    k->killerTeam = Comp_Side(Comp_FindName(k->killer));
     // the killer's weapon: of the victim's side without one
     axis    = (k->killer[0] ? k->killerTeam : k->victimTeam) == TEAM_AXIS;
     k->pic  = axis ? pic->axis : pic->allies;
@@ -831,12 +851,16 @@ static void Comp_Roster(int gametype)
         }
     }
     // the players the snapshot shows (not our own entity: a dead player's
-    // spectator is sent, not dead), and the player watched
+    // spectator is sent, not dead), and the player watched; the uniform
+    // each wears
     for (i = 0; i < cl.snap.numEntities; i++) {
         const entityState_t *es = &cl.parseEntities[(cl.snap.parseEntitiesNum + i) & (MAX_PARSE_ENTITIES - 1)];
 
         if (es->eType == ET_PLAYER && es->number >= 0 && es->number < MAX_CLIENTS && es->number != ps->clientNum) {
             comp.dead[es->number] = (es->eFlags & EF_DEAD) != 0;
+            if (es->eFlags & (EF_ALLIES | EF_AXIS)) {
+                comp.side[es->number] = es->eFlags & EF_ALLIES ? TEAM_ALLIES : TEAM_AXIS;
+            }
         }
     }
     if (!(ps->pm_flags & PMF_SPECTATING)) {
@@ -850,6 +874,10 @@ static void Comp_Roster(int gametype)
                 comp.dead[i] = qtrue;
             }
         }
+    }
+    // (the snapshot's own player's uniform: ours, or the followed player's through their eyes)
+    if (ps->stats[STAT_TEAM] == TEAM_ALLIES || ps->stats[STAT_TEAM] == TEAM_AXIS) {
+        comp.side[ps->clientNum] = ps->stats[STAT_TEAM];
     }
     if (comp.wasPlaying && !playing) {
         comp.wantScores = qtrue;
@@ -1279,11 +1307,12 @@ void UI_CompHud_Frame(void)
     Comp_Weapons(weapon);
 
     // the strip: health, badge, ammo, weapons (not while free spectating); the
-    // badge the followed player's team (from behind the snapshot's is ours)
+    // badge the followed player's team (from behind the snapshot's is ours),
+    // in free-for-all the side played (the uniform)
     {
-        const qboolean icon =
-            teams && (!spectating || following || demoShown >= 0) && Comp_Int("cg_hud_badge") && Comp_Int("cg_hud_teamicon");
-        const int shown = demoShown >= 0 ? Comp_Team(demoShown) : following ? Comp_Team(ps->stats[STAT_INFOCLIENT]) : team;
+        const qboolean icon = (teams || gametype == GT_FFA) && (!spectating || following || demoShown >= 0)
+                           && Comp_Int("cg_hud_badge") && Comp_Int("cg_hud_teamicon");
+        const int shown = demoShown >= 0 ? Comp_Side(demoShown) : following ? Comp_Side(ps->stats[STAT_INFOCLIENT]) : team;
 
         Comp_Set("ui_hud_allies", icon && shown == TEAM_ALLIES ? "1" : "0");
         Comp_Set("ui_hud_axis", icon && shown == TEAM_AXIS ? "1" : "0");
@@ -1413,14 +1442,15 @@ void UI_CompHud_Frame(void)
     if (full) {
         const int      info   = demoShown >= 0 ? demoShown : ps->stats[STAT_INFOCLIENT];
         const qboolean named  = following || demoShown >= 0;
-        const int      fteam  = named ? Comp_Team(info) : 0;
+        // (the plate's icon and colour their side, as the CS2 strip's badge: Comp_Side)
+        const int      fteam  = named ? Comp_Side(info) : 0;
         const qboolean hurtOk = !clc.demoplaying || (!spectating && demoShown < 0);
 
         Comp_Set("ui_hud_follow", named ? Comp_Name(info) : "");
-        Comp_Set("ui_hud_follow_col", named ? Comp_TeamColor(Comp_Team(info)) : "1 1 1 1");
+        Comp_Set("ui_hud_follow_col", named ? Comp_TeamColor(fteam) : "1 1 1 1");
         Comp_Set("ui_hud_follow_team", fteam == TEAM_AXIS ? "axis" : fteam == TEAM_ALLIES ? "allies" : "");
         Comp_Set("ui_hud_hurt", hurtOk && attacker >= 0 && attacker < MAX_CLIENTS ? Comp_Name(attacker) : "");
-        Comp_Set("ui_hud_hurt_col", Comp_TeamColor(Comp_Team(attacker)));
+        Comp_Set("ui_hud_hurt_col", Comp_TeamColor(Comp_Side(attacker)));
     }
 
     // a vote

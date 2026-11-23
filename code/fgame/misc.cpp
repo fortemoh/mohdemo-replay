@@ -38,6 +38,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "weaputils.h"
 #include "g_spawn.h"
 #include "g_phys.h"
+#include "g_ladder.h"
 #include "../script/scriptexception.h"
 
 /*****************************************************************************/
@@ -2947,37 +2948,40 @@ qboolean FuncLadder::CanUseLadder(Entity *pUser)
 
 void FuncLadder::PositionOnLadder(Entity *pUser)
 {
-    Vector  vPos;
     Vector  vStart;
     Vector  vEnd;
     trace_t trace;
 
-    if (pUser->origin[2] + pUser->maxs[2] > absmax[2]) {
+    // As stock 1.11 (Linux fgamededmohaa.so 0x26b410, g_ladder.h): the spot
+    // at the top, the bottom or on a rung, which the user drops onto from
+    // 16 units above. Users without a client trace as monsters.
+    const int mask = pUser->client ? MASK_PLAYERSOLID : MASK_MONSTERSOLID;
+
+    switch (G_LadderMount(pUser->origin[2], pUser->maxs[2], absmin[2], absmax[2])) {
+    case LADDER_MOUNT_TOP:
         vEnd    = origin + m_vFacingDir * 26.0f;
         vEnd[2] = absmax[2] + 2.0f;
-    } else if (absmin[2] + 32.0f > pUser->origin[2]) {
+        break;
+    case LADDER_MOUNT_BOTTOM:
         vEnd    = origin - m_vFacingDir * 29.0f;
         vEnd[2] = absmin[2] + 2.0f;
-    } else {
+        break;
+    default:
         vEnd    = origin - m_vFacingDir * 16.0f;
-        vEnd[2] = pUser->origin[2] + 8.0f;
+        vEnd[2] = G_LadderRungHeight(pUser->origin[2]);
+        break;
     }
 
-    vStart = vEnd;
+    vStart = vEnd + Vector(0, 0, 16);
 
-    trace =
-        G_Trace(vStart, pUser->mins, pUser->maxs, vEnd, pUser, MASK_PLAYERSOLID, qtrue, "FuncLadder::PositionOnLadder");
+    trace = G_Trace(vStart, pUser->mins, pUser->maxs, vEnd, pUser, mask, qtrue, "FuncLadder::PositionOnLadder");
 
     if (trace.allsolid) {
-        vStart    = pUser->origin;
-        vStart[2] = pUser->origin[2] + 4.0f;
+        // from where the user is to the spot, both 4 units up
+        vStart = pUser->origin + Vector(0, 0, 4);
+        vEnd   = vEnd + Vector(0, 0, 4);
 
-        vEnd    = origin - m_vFacingDir * 16.0f;
-        vEnd[2] = pUser->origin[2] + 4.0f;
-
-        trace = G_Trace(
-            vStart, pUser->mins, pUser->maxs, vEnd, pUser, MASK_PLAYERSOLID, qtrue, "FuncLadder::PositionOnLadder2"
-        );
+        trace = G_Trace(vStart, pUser->mins, pUser->maxs, vEnd, pUser, mask, qtrue, "FuncLadder::PositionOnLadder2");
     }
 
     pUser->setOrigin(trace.endpos);
@@ -3055,31 +3059,52 @@ void FuncLadder::EnsureOverLadder(Entity *pUser)
     pUser->setOrigin(trace.endpos);
 }
 
+//
+// As stock 1.11 (Linux fgamededmohaa.so 0x26bf10; Spearhead and Breakthrough
+// have the same two traces): at the end of getting off the top, a user who is
+// near the top but not yet 24 units in front of the ladder is pushed forward
+// onto it. One who has cleared it is left where they are.
+//
 void FuncLadder::EnsureForwardOffLadder(Entity *pUser)
 {
     int     iMask;
+    double  fForward;
     Vector  vStart;
-    Vector  vPos;
-    Vector  vDelta;
+    Vector  vEnd;
     trace_t trace;
 
-    if (pUser->origin[2] - absmax[2] >= 8.0f) {
+    if (pUser->origin[2] <= absmax[2] - 4.0f) {
         return;
     }
 
-    iMask = pUser->client ? MASK_PLAYERSOLID : MASK_MONSTERSOLID;
-
-    vPos    = pUser->origin;
-    vPos[2] = absmax[2] + 16.0f;
-
-    vStart = vPos + m_vFacingDir * -16.0f;
-
-    trace = G_Trace(vStart, pUser->mins, pUser->maxs, vPos, pUser, iMask, qtrue, "FuncLadder::EnsureOverLadder");
-
-    if (trace.allsolid || trace.startsolid) {
-        trace =
-            G_Trace(pUser->origin, pUser->mins, pUser->maxs, vPos, pUser, iMask, qtrue, "FuncLadder::EnsureOverLadder");
+    // how far in front of the ladder, flat, in the x87's precision
+    fForward = ((double)pUser->origin[0] - (double)origin[0]) * m_vFacingDir[0]
+             + ((double)pUser->origin[1] - (double)origin[1]) * m_vFacingDir[1];
+    if (fForward >= 24.0) {
+        return;
     }
+
+    // stock's 0x42022901 for a user without a client
+    iMask = pUser->client ? MASK_PLAYERSOLID : (MASK_MONSTERSOLID | CONTENTS_FENCE);
+
+    vEnd[0] = (double)origin[0] + (double)m_vFacingDir[0] * 24.0;
+    vEnd[1] = (double)origin[1] + (double)m_vFacingDir[1] * 24.0;
+    vEnd[2] = (float)(absmax[2] + 16.0f) + (double)m_vFacingDir[2] * 24.0;
+
+    vStart[0] = (double)origin[0] + (double)m_vFacingDir[0] * 24.0 + (double)m_vFacingDir[0] * -40.0;
+    vStart[1] = (double)origin[1] + (double)m_vFacingDir[1] * 24.0 + (double)m_vFacingDir[1] * -40.0;
+    vStart[2] = (double)vEnd[2] + (double)m_vFacingDir[2] * -40.0;
+
+    trace = G_Trace(
+        vStart, pUser->mins, pUser->maxs, vEnd, pUser, iMask, qtrue, "FuncLadder::EnsureForwardOffLadder1"
+    );
+
+    vEnd    = trace.endpos;
+    vEnd[2] = trace.endpos[2] - 16.0f;
+
+    trace = G_Trace(
+        pUser->origin, pUser->mins, pUser->maxs, vEnd, pUser, iMask, qtrue, "FuncLadder::EnsureForwardOffLadder2"
+    );
 
     pUser->setOrigin(trace.endpos);
 }

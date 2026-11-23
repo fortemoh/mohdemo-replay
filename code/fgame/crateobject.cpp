@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "crateobject.h"
 #include "player.h"
 #include "g_phys.h"
+#include "g_crate.h"
 
 /*****************************************************************************
 /*QUAKED func_crate (0 0.25 0.5) ? INDESTRUCTABLE NOTSTACKEDON
@@ -182,22 +183,10 @@ void CrateObject::TellNeighborsToJitter(Vector vJitterAdd)
             continue;
         }
 
-        crate->m_vJitterAngles[0] += vJitterAdd[0];
-
-        if (crate->m_vJitterAngles[0] > m_fJitterScale * 1.25f
-            || -(m_fJitterScale * 1.25f) <= crate->m_vJitterAngles[0]) {
-            crate->m_vJitterAngles[0] = m_fJitterScale * 1.25f;
-        }
-
-        crate->m_vJitterAngles[2] += vJitterAdd[2];
-
-        if (crate->m_vJitterAngles[2] > m_fJitterScale * 1.25f) {
-            break;
-        }
-
-        if (-(m_fJitterScale * 1.25f) <= crate->m_vJitterAngles[2]) {
-            m_vJitterAngles[2] = -(m_fJitterScale * 1.25f);
-        }
+        // the neighbour's pitch and roll, clamped with this crate's scale
+        // (g_crate.h)
+        crate->m_vJitterAngles[0] = G_CrateClampJitter(crate->m_vJitterAngles[0] + vJitterAdd[0], m_fJitterScale);
+        crate->m_vJitterAngles[2] = G_CrateClampJitter(crate->m_vJitterAngles[2] + vJitterAdd[2], m_fJitterScale);
 
         if (!crate->EventPending(EV_Crate_Think)) {
             crate->ProcessEvent(EV_Crate_Think);
@@ -317,17 +306,9 @@ void CrateObject::CrateDamaged(Event *ev)
     vJitterAdd[0] = DotProduct(vDir, vForward) * m_fJitterScale * 0.025f * (float)iDamage;
     vJitterAdd[2] = DotProduct(vDir, vRight) * m_fJitterScale * 0.025f * (float)iDamage;
 
-    m_vJitterAngles += Vector(vJitterAdd[0], 0, vJitterAdd[2]);
-
-    if (m_vJitterAngles[0] > m_fJitterScale * 1.25f || -(m_fJitterScale * 1.25f) > m_vJitterAngles[0]) {
-        m_vJitterAngles[0] = m_fJitterScale * 1.25f;
-    }
-
-    if (m_vJitterAngles[2] > m_fJitterScale * 1.25f) {
-        m_vJitterAngles[2] = m_fJitterScale * 1.25f;
-    } else if (m_vJitterAngles[2] >= -(m_fJitterScale * 1.25f)) {
-        m_vJitterAngles[2] = -(m_fJitterScale * 1.25f);
-    }
+    // clamped either way (g_crate.h)
+    m_vJitterAngles[0] = G_CrateClampJitter(m_vJitterAngles[0] + vJitterAdd[0], m_fJitterScale);
+    m_vJitterAngles[2] = G_CrateClampJitter(m_vJitterAngles[2] + vJitterAdd[2], m_fJitterScale);
 
     vJitterAdd[1] = 0.0f;
     vJitterAdd *= -0.5f;
@@ -342,13 +323,8 @@ void CrateObject::CrateDamaged(Event *ev)
         return;
     }
 
-    if (iMeansOfDeath >= MOD_VEHICLE) {
-        if (iMeansOfDeath == MOD_BASH) {
-            iDamage *= 2;
-        }
-    } else {
-        iDamage /= 2;
-    }
+    // only bullets are halved (g_crate.h)
+    iDamage = G_CrateDamage(iDamage, iMeansOfDeath, MOD_BULLET, MOD_FAST_BULLET, MOD_BASH);
 
     health -= iDamage;
 
@@ -356,7 +332,7 @@ void CrateObject::CrateDamaged(Event *ev)
         Event *event = new Event(EV_Killed);
         event->AddEntity(ev->GetEntity(1));
         event->AddInteger(iDamage);
-        ev->AddEntity(ev->GetEntity(3));
+        event->AddEntity(ev->GetEntity(3));
 
         ProcessEvent(event);
     }
@@ -406,39 +382,14 @@ void CrateObject::CrateThink(Event *ev)
     // Shake the create if it's on fire
 
     if (m_vJitterAngles[0] || m_vJitterAngles[2]) {
-        setAngles(Vector(m_vStartAngles[0] * 2.0f, m_vStartAngles[1], m_vStartAngles[2] * 2.0f));
+        // the start angles plus the jitter, which then decays and flips
+        // (g_crate.h)
+        setAngles(Vector(
+            m_vStartAngles[0] + m_vJitterAngles[0], m_vStartAngles[1], m_vStartAngles[2] + m_vJitterAngles[2]
+        ));
 
-        if (m_vJitterAngles[0] > 0) {
-            m_vJitterAngles[0] -= 1.0 / 3.0 * m_fJitterScale;
-
-            if (m_vJitterAngles[0] < 0) {
-                m_vJitterAngles[0] = 0;
-            }
-        } else if (m_vJitterAngles[0] < 0) {
-            m_vJitterAngles[0] += 1.0 / 3.0 * m_fJitterScale;
-
-            if (m_vJitterAngles[0] > 0) {
-                m_vJitterAngles[0] = 0;
-            }
-        }
-
-        m_vJitterAngles[0] = -m_vJitterAngles[0];
-
-        if (m_vJitterAngles[2] > 0) {
-            m_vJitterAngles[2] -= 1 / 3 * m_fJitterScale;
-
-            if (m_vJitterAngles[2] < 0) {
-                m_vJitterAngles[2] = 0;
-            }
-        } else if (m_vJitterAngles[2] < 0) {
-            m_vJitterAngles[2] += 1.0 / 3.0 * m_fJitterScale;
-
-            if (m_vJitterAngles[2] > 0) {
-                m_vJitterAngles[2] = 0;
-            }
-        }
-
-        m_vJitterAngles[2] = -m_vJitterAngles[2];
+        m_vJitterAngles[0] = G_CrateJitterStep(m_vJitterAngles[0], m_fJitterScale);
+        m_vJitterAngles[2] = G_CrateJitterStep(m_vJitterAngles[2], m_fJitterScale);
     } else if (!VectorCompare(angles, m_vStartAngles)) {
         setAngles(m_vStartAngles);
     }

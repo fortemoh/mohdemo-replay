@@ -347,7 +347,7 @@ movement on the server game.
     void Pmove_GroundTrace(pmove_t *pmove);
     void Pmove(pmove_t *pmove);
     void
-    PmoveAdjustAngleSettings(vec_t *vViewAngles, vec_t *vAngles, playerState_t *pPlayerState, entityState_t *pEntState);
+    PmoveAdjustAngleSettings(vec_t *vViewAngles, vec_t *vAngles, playerState_t *pPlayerState, entityState_t *pEntState, int protocol);
     void PmoveAdjustAngleSettings_Client(
         vec_t *vViewAngles, vec_t *vAngles, playerState_t *pPlayerState, entityState_t *pEntState
     );
@@ -614,14 +614,32 @@ movement on the server game.
     //
 
 #define MASK_ALL (-1)
-#define MASK_SOLID \
+
+//
+// Allied Assault 1.11's game uses MASK_SOLID, MASK_CANSEE, MASK_AI_CANSEE /
+// MASK_TRANSITION, MASK_CLICKITEM and MASK_GUNTARGET without CONTENTS_FENCE
+// (0x2000b01 44 times and 0x2002b01 never in the Linux fgamededmohaa.so,
+// 0x2040b19, 0x40919, 0x2001b01, 0x46001b9b); Spearhead and Breakthrough
+// added it. The game module picks by protocol; cgame and botlib keep the
+// _TA values. Masks with the fence bit in AA too (MASK_SHOT,
+// MASK_PLAYERSOLID, MASK_MELEE, MASK_PROJECTILE and the rest) stay.
+//
+#if defined(GAME_DLL)
+#    define MASK_GAME_AA(mask) (g_protocol >= PROTOCOL_MOHTA_MIN ? (mask) : ((mask) & ~CONTENTS_FENCE))
+#else
+#    define MASK_GAME_AA(mask) (mask)
+#endif
+
+#define MASK_SOLID_TA \
     (CONTENTS_SOLID | CONTENTS_BODY | CONTENTS_UNKNOWN2 | CONTENTS_NOBOTCLIP | CONTENTS_BBOX | CONTENTS_FENCE)
+#define MASK_SOLID MASK_GAME_AA(MASK_SOLID_TA)
 #define MASK_SAFESOLID (CONTENTS_BODY | CONTENTS_UNKNOWN2 | CONTENTS_NOBOTCLIP | CONTENTS_BBOX)
 #define MASK_USABLE    (CONTENTS_SOLID | CONTENTS_BBOX | CONTENTS_NOBOTCLIP | CONTENTS_UNKNOWN2 | CONTENTS_BODY)
 #define MASK_PLAYERSOLID                                                                                              \
     (CONTENTS_TRIGGER | CONTENTS_BODY | CONTENTS_PLAYERCLIP | CONTENTS_FENCE | CONTENTS_UNKNOWN2 | CONTENTS_NOBOTCLIP \
      | CONTENTS_BBOX | CONTENTS_SOLID)
-#define MASK_GUNTARGET                                                                                               \
+#define MASK_GUNTARGET MASK_GAME_AA(MASK_GUNTARGET_TA)
+#define MASK_GUNTARGET_TA                                                                                            \
     (CONTENTS_SOLID | CONTENTS_LADDER | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_CLAYPIDGEON | CONTENTS_BBOX        \
      | CONTENTS_NOBOTCLIP | CONTENTS_UNKNOWN2 | CONTENTS_UNKNOWN3 | CONTENTS_FENCE | CONTENTS_BODY | CONTENTS_CORPSE \
      | CONTENTS_TRIGGER)
@@ -666,16 +684,19 @@ movement on the server game.
 #define MASK_VEHICLE_TIRES (CONTENTS_SOLID | CONTENTS_BBOX | CONTENTS_FENCE | CONTENTS_VEHICLECLIP | CONTENTS_TRIGGER)
 #define MASK_CLICK \
     (CONTENTS_VEHICLECLIP | CONTENTS_WEAPONCLIP | CONTENTS_MONSTERCLIP | CONTENTS_PLAYERCLIP | CONTENTS_SOLID)
-#define MASK_CANSEE                                                                                           \
+#define MASK_CANSEE MASK_GAME_AA(MASK_CANSEE_TA)
+#define MASK_CANSEE_TA                                                                                        \
     (CONTENTS_SOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_BBOX | CONTENTS_NOBOTCLIP | CONTENTS_UNKNOWN2 \
      | CONTENTS_FENCE | CONTENTS_WEAPONCLIP | CONTENTS_BODY)
 #define MASK_CANSEE_NOENTS (CONTENTS_SOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_FENCE | CONTENTS_WEAPONCLIP)
 #define MASK_USE                                                                                                    \
     (CONTENTS_SOLID | CONTENTS_BBOX | CONTENTS_NOBOTCLIP | CONTENTS_UNKNOWN2 | CONTENTS_FENCE | CONTENTS_WEAPONCLIP \
      | CONTENTS_BODY | CONTENTS_TRIGGER)
-#define MASK_CLICKITEM (MASK_SOLID | CONTENTS_UNKNOWN3)
+#define MASK_CLICKITEM MASK_GAME_AA(MASK_CLICKITEM_TA)
+#define MASK_CLICKITEM_TA (MASK_SOLID_TA | CONTENTS_UNKNOWN3)
 #define MASK_ITEM      (CONTENTS_SOLID | CONTENTS_TRIGGER | CONTENTS_PLAYERCLIP | CONTENTS_FENCE)
-#define MASK_TRANSITION                                                                                         \
+#define MASK_TRANSITION MASK_GAME_AA(MASK_TRANSITION_TA)
+#define MASK_TRANSITION_TA                                                                                      \
     (CONTENTS_SOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_FENCE | CONTENTS_WEAPONCLIP | CONTENTS_UNKNOWN2 \
      | CONTENTS_BBOX)
 #define MASK_TARGETPATH \
@@ -713,7 +734,8 @@ movement on the server game.
     (CONTENTS_LADDER | CONTENTS_CLAYPIDGEON | CONTENTS_BBOX | CONTENTS_NOBOTCLIP | CONTENTS_UNKNOWN3 | CONTENTS_BODY \
      | CONTENTS_CORPSE)
 #define MASK_MOVEINFO (CONTENTS_SOLID | CONTENTS_FENCE)
-#define MASK_AI_CANSEE                                                                                    \
+#define MASK_AI_CANSEE MASK_GAME_AA(MASK_AI_CANSEE_TA)
+#define MASK_AI_CANSEE_TA                                                                                 \
     (CONTENTS_SOLID | CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_BBOX | CONTENTS_UNKNOWN2 | CONTENTS_FENCE \
      | CONTENTS_WEAPONCLIP)
 #define MASK_CORNER_NODE \

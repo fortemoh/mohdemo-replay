@@ -196,15 +196,25 @@ CM_GetHitLocationInfoSecondary
 */
 const char *CM_GetHitLocationInfoSecondary(int i_iLocation, float *o_fRadius, vec3_t o_vOffset)
 {
-    if (i_iLocation < MAX_HITLOCATIONS) {
-        *o_fRadius = fLocRadius_Secondary[i_iLocation];
-        VectorCopy(vLocOffset_Secondary[i_iLocation], o_vOffset);
-        return szLocArray[i_iLocation];
-    } else {
+    //
+    // As stock 1.11 (MOHAA.exe 0x44b0d0, mohaa_lnxded 0x8063734,
+    // MOHAA_server.exe 0x413382): outside 0-19, 8 and no offset; a location
+    // whose secondary radius is 0 (0, 15, 16 and stock's 19th, which this
+    // table doesn't hold) has no secondary sphere, and nothing is written.
+    //
+    if (i_iLocation < 0 || i_iLocation > 19) {
         *o_fRadius = 8.0f;
         VectorClear(o_vOffset);
         return NULL;
     }
+
+    if (i_iLocation >= MAX_HITLOCATIONS || fLocRadius_Secondary[i_iLocation] == 0.0f) {
+        return NULL;
+    }
+
+    *o_fRadius = fLocRadius_Secondary[i_iLocation];
+    VectorCopy(vLocOffset_Secondary[i_iLocation], o_vOffset);
+    return szLocArray[i_iLocation];
 }
 
 /*

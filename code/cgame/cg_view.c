@@ -273,7 +273,8 @@ static void CG_ApplyViewBob(vec3_t origin, const vec3_t vVelocity, const vec3_t 
 
         VectorMA(origin, fPhase, vLeft, origin);
 
-        fPhase = sin(cg.fCurrentViewBobPhase - 0.94);
+        // stock 1.11's phase offset (cgamex86.dll 0x300775cc)
+        fPhase = sin(cg.fCurrentViewBobPhase - 0.9424778f);
         fPhase = (fabs(fPhase) - 0.5) * cg.fCurrentViewBobAmp * 0.06;
 
         if (fPhase > 16.0) {
@@ -646,7 +647,8 @@ Fixed fov at intermissions, otherwise account for fov variable and zooms.
 // the field of view of the first-person weapon (cg_fov's default)
 #define CG_VIEWMODEL_FOV 80.0f
 
-#define WAVE_AMPLITUDE 1
+// 1.25 in stock 1.11 (cgamex86.dll 0x3004944d, the double at 0x30077608)
+#define WAVE_AMPLITUDE 1.25
 #define WAVE_FREQUENCY 0.4
 
 static int CG_CalcFov(void)

@@ -273,6 +273,12 @@ static void CG_MakeBulletHole(
         return;
     }
 
+    if (cg_protocol < protocol_e::PROTOCOL_MOHTA_MIN && !CG_CheckMakeMarkOnEntity(trace.entityNum)) {
+        // AA 1.11 makes no puff or sound either on an entity that takes no
+        // marks (cgamex86.dll 0x3002de06-0x3002de31)
+        return;
+    }
+
     VectorAdd(trace.endpos, trace.plane.normal, vFrom);
     fRadius     = 2.0f;
     sBulletHole = "bhole_";
@@ -345,6 +351,13 @@ static void CG_MakeBulletHole(
         break;
     }
 
+    if (iLarge && cg_protocol < protocol_e::PROTOCOL_MOHTA_MIN) {
+        // AA 1.11's large bullet makes a hole 1.5 times bigger
+        // (cgamex86.dll 0x3002e0fe-0x3002e116); the effect's step up is in
+        // CG_MakeBulletHoleType
+        fRadius *= 1.5f;
+    }
+
     if (fRadius && CG_CheckMakeMarkOnEntity(trace.entityNum)) {
         fRadius *= 1.f + crandom() * 0.2f;
 
@@ -365,7 +378,15 @@ static void CG_MakeBulletHole(
         );
     }
 
-    CG_MakeBulletHoleType(vFrom, i_vNorm, iLarge, iEffect, fRadius, bMakeSound);
+    if (cg_protocol < protocol_e::PROTOCOL_MOHTA_MIN) {
+        // AA 1.11 aims the hit effect along the surface the trace found
+        // (cgamex86.dll 0x3002e1bf), not the normal passed in, which for a
+        // server's wall impact is rounded to one of 162 directions;
+        // Spearhead and Breakthrough use the one passed in
+        CG_MakeBulletHoleType(vFrom, trace.plane.normal, iLarge, iEffect, fRadius, bMakeSound);
+    } else {
+        CG_MakeBulletHoleType(vFrom, i_vNorm, iLarge, iEffect, fRadius, bMakeSound);
+    }
 }
 
 static void CG_MakeBubbleTrail(const vec3_t i_vStart, const vec3_t i_vEnd, int iLarge, float alpha = 1.0f)
@@ -755,8 +776,9 @@ static void CG_MakeBulletTracerInternal(
         }
     } else {
         for (iBullet = 0; iBullet < iNumImpacts; iBullet++) {
+            // the shot's own large flag, as stock (cgamex86.dll 0x3002eee7)
             CG_MakeBulletHole(
-                tImpacts[iBullet].endpos, tImpacts[iBullet].plane.normal, iNumImpacts, &tImpacts[iBullet], qtrue, -1
+                tImpacts[iBullet].endpos, tImpacts[iBullet].plane.normal, iLarge, &tImpacts[iBullet], qtrue, -1
             );
         }
     }
@@ -1115,9 +1137,13 @@ void CG_MakeExplosionEffect(const vec3_t vPos, int iType)
             iSurfEffect = SFX_EXP_TANK_SNOW;
             break;
         case SFX_EXP_BAZOOKA_BASE:
-            iSurfEffect = SFX_EXP_BAZOOKA_SNOW;
             if (cg_protocol >= protocol_e::PROTOCOL_MOHTA_MIN) {
+                iSurfEffect = SFX_EXP_BAZOOKA_SNOW;
                 iBaseEffect = -1;
+            } else {
+                // AA 1.11 has only the grenade's ground effects
+                // (cgamex86.dll 0x30030146)
+                iSurfEffect = SFX_EXP_GREN_SNOW;
             }
             break;
         case SFX_EXP_HEAVYSHELL_BASE:
@@ -1160,9 +1186,12 @@ void CG_MakeExplosionEffect(const vec3_t vPos, int iType)
             iSurfEffect = SFX_EXP_TANK_DIRT;
             break;
         case SFX_EXP_BAZOOKA_BASE:
-            iSurfEffect = SFX_EXP_BAZOOKA_DIRT;
             if (cg_protocol >= protocol_e::PROTOCOL_MOHTA_MIN) {
+                iSurfEffect = SFX_EXP_BAZOOKA_DIRT;
                 iBaseEffect = -1;
+            } else {
+                // AA 1.11 (cgamex86.dll 0x300300be)
+                iSurfEffect = SFX_EXP_GREN_DIRT;
             }
             break;
         case SFX_EXP_HEAVYSHELL_BASE:
@@ -1175,7 +1204,8 @@ void CG_MakeExplosionEffect(const vec3_t vPos, int iType)
             }
             break;
         }
-        fRadius = 0;
+        // dirt keeps the blast mark, in 1.11, Spearhead and Breakthrough
+        // (cgamex86.dll 0x300300be)
         break;
     case SURF_GRILL:
         iSurfEffect = SFX_EXP_GREN_GRILL;
@@ -1187,7 +1217,8 @@ void CG_MakeExplosionEffect(const vec3_t vPos, int iType)
             iSurfEffect = SFX_EXP_TANK_DIRT;
             break;
         case SFX_EXP_BAZOOKA_BASE:
-            iSurfEffect = SFX_EXP_BAZOOKA_DIRT;
+            // AA 1.11 (cgamex86.dll 0x300300dd)
+            iSurfEffect = cg_protocol >= protocol_e::PROTOCOL_MOHTA_MIN ? SFX_EXP_BAZOOKA_DIRT : SFX_EXP_GREN_GRASS;
             break;
         case SFX_EXP_HEAVYSHELL_BASE:
             iSurfEffect = SFX_EXP_HEAVYSHELL_DIRT;
@@ -1207,9 +1238,12 @@ void CG_MakeExplosionEffect(const vec3_t vPos, int iType)
             iSurfEffect = SFX_EXP_TANK_STONE;
             break;
         case SFX_EXP_BAZOOKA_BASE:
-            iSurfEffect = SFX_EXP_BAZOOKA_STONE;
             if (cg_protocol >= protocol_e::PROTOCOL_MOHTA_MIN) {
+                iSurfEffect = SFX_EXP_BAZOOKA_STONE;
                 iBaseEffect = -1;
+            } else {
+                // AA 1.11 (cgamex86.dll 0x300300b2)
+                iSurfEffect = SFX_EXP_GREN_STONE;
             }
             break;
         case SFX_EXP_HEAVYSHELL_BASE:

@@ -271,6 +271,12 @@ void CG_DrawZoomOverlay()
         }
     }
 
+    if (zoomType == 2) {
+        // stock 1.11 draws nothing for the spy camera (cgamex86.dll
+        // 0x3001f2c4: no case for it)
+        return;
+    }
+
     // Changed: drawn by the client (the Competitive HUD's mask and lines)
     cgi.UI_DrawZoomOverlay(zoomType, fAlpha);
 }

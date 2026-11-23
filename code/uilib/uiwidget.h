@@ -201,8 +201,11 @@ protected:
     qhandle_t      m_shapeHandle;
     // the draw cache (drawcache): what it and its children drew, a 2D list,
     // drawn again while what it was drawn from stays: the cvars read
-    // (UI_DrawDep), its frames, the alpha given, DrawKey
+    // (UI_DrawDep), its frames, the alpha given, DrawKey. m_drawRef: the
+    // renderer the handle is of (uii.GetRefSequence); a vid_restart loads the
+    // renderer again, which hands out the same handles anew
     int                                  m_drawList;
+    int                                  m_drawRef;
     bool                                 m_drawValid, m_drawLive;
     int                                  m_drawStamp, m_drawKey;
     float                                m_drawAlpha;

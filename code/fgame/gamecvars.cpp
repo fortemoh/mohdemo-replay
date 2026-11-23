@@ -85,6 +85,7 @@ cvar_t *sv_maplist;
 cvar_t *sv_nextmap;
 cvar_t *sv_runspeed;
 cvar_t *sv_walkspeedmult;
+cvar_t *sv_walkspeed;
 cvar_t *sv_dmspeedmult;
 cvar_t *sv_crouchspeedmult;
 
@@ -401,6 +402,8 @@ void CVAR_Init(void)
     //  Runspeed is 250 in 1.11 and below
     sv_runspeed        = gi.Cvar_Get("sv_runspeed", "287", 0);
     sv_walkspeedmult   = gi.Cvar_Get("sv_walkspeedmult", "0.6", 0);
+    // AA 1.11's walk speed (Linux fgamededmohaa.so 0x240029)
+    sv_walkspeed       = gi.Cvar_Get("sv_walkspeed", "150", 0);
     sv_dmspeedmult     = gi.Cvar_Get("sv_dmspeedmult", "1.1", 0);
     sv_crouchspeedmult = gi.Cvar_Get("sv_crouchspeedmult", "0.6", 0);
 
